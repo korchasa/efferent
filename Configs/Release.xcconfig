@@ -1,0 +1,2 @@
+OTHER_LDFLAGS = $(inherited) -dead_strip
+SWIFT_OPTIMIZATION_LEVEL = -O

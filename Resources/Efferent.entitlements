@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Read access to Health. The types themselves are requested at runtime. -->
+	<key>com.apple.developer.healthkit</key>
+	<true/>
+	<!-- Lets HealthKit wake the app when new records land. Without it the app
+	     only ever sees new data when the person opens it by hand. -->
+	<key>com.apple.developer.healthkit.background-delivery</key>
+	<true/>
+</dict>
+</plist>
