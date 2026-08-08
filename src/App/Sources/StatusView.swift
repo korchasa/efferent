@@ -31,10 +31,27 @@ struct StatusView: View {
                     LabeledContent("Confirmed through", value: services.stats.map { String($0.acknowledgedSeq) } ?? "—")
                 }
 
-                Section {
-                    Button("Send now") {
-                        Task { await services.sendNow() }
+                Section("Health") {
+                    Button("Allow access to Health") {
+                        Task { await services.requestHealthAccess() }
                     }
+                    Button("Collect and send now") {
+                        Task {
+                            await services.collectNow()
+                            await services.sendNow()
+                        }
+                    }
+                }
+
+                Section {
+                    Button("Export the full history") {
+                        Task { await services.runFirstExport() }
+                    }
+                    if let backfill = services.backfill {
+                        Text(backfill).font(.footnote).foregroundStyle(.secondary)
+                    }
+                } footer: {
+                    Text("Walks back a month at a time. Leave this screen open; it continues where it stopped.")
                 }
 
                 if let error = services.lastError {

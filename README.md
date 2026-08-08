@@ -38,6 +38,31 @@ Events and the anchor are written in a single transaction. If the anchor could
 move without them, HealthKit would consider that data delivered and never offer
 it again — data loss with no error anywhere.
 
+## What it collects
+
+Two streams, because one would be wrong.
+
+**Totals**, bucketed by hour and by day: steps, walking and running distance,
+active and basal energy, flights climbed, exercise and stand minutes. These come
+from `HKStatisticsCollectionQuery`, never from adding samples up — iPhone, Watch
+and other apps all write steps for the same minutes, and summing them
+double-counts against what the Health app shows.
+
+**Records**, kept as they are: sleep, workouts, heart rate, heart rate
+variability, resting heart rate, respiratory rate, blood oxygen. A total of any
+of these would say nothing. Sleep in particular arrives as overlapping stretches
+with stages rather than one interval per night; stitching them into "a night" is
+a judgement call and is left to whoever reads the data.
+
+The last seven days of daily totals are recomputed on every refresh, because the
+Watch syncs late and yesterday can still grow tomorrow. Re-reading them is
+almost free: a bucket whose value did not change never leaves the device.
+
+The first export walks history backwards a month at a time, on screen, saving
+its place as it goes. It covers daily totals only — hourly buckets for five
+years would be several hundred thousand events for a resolution nobody asks of
+last decade, so hourly history starts when the app was installed.
+
 ## The wire format
 
 NDJSON. One self-contained JSON object per line:
@@ -73,6 +98,7 @@ with whatever does.
 
 ## Layout
 
+- `src/Core/Sources/Health` — the metric catalogue, the readers, the coordinator.
 - `src/Core/Sources/Wire` — the event type and NDJSON assembly.
 - `src/Core/Sources/Store` — schema, outbox, anchors, counters.
 - `src/Core/Sources/Upload` — Keychain token, background upload.

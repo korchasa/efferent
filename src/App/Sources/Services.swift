@@ -10,11 +10,13 @@ final class Services: ObservableObject {
     static let shared = Services()
 
     let store: Store
+    let health: HealthCoordinator
     let tokens = TokenStore()
     private let log = Logger(subsystem: "dev.korchasa.efferent", category: "services")
 
     @Published private(set) var stats: Stats?
     @Published private(set) var lastError: String?
+    @Published private(set) var backfill: String?
 
     private var uploader: Uploader?
 
@@ -26,6 +28,10 @@ final class Services: ObservableObject {
             // would silently drop every reading. Better to stop where the cause
             // is still visible.
             fatalError("could not open the outbox: \(error)")
+        }
+        health = HealthCoordinator(store: store)
+        health.onNewData = { [weak self] in
+            Task { @MainActor in await self?.sendNow() }
         }
     }
 
@@ -78,6 +84,44 @@ final class Services: ObservableObject {
             log.info("send outcome: \(String(describing: outcome), privacy: .public)")
             lastError = nil
         } catch {
+            lastError = String(describing: error)
+        }
+        refreshStats()
+    }
+
+    func requestHealthAccess() async {
+        do {
+            try await health.requestAuthorization()
+            lastError = nil
+        } catch {
+            lastError = String(describing: error)
+        }
+    }
+
+    func collectNow() async {
+        do {
+            _ = try await health.collectEverythingRecent()
+            lastError = nil
+        } catch {
+            lastError = String(describing: error)
+        }
+        refreshStats()
+    }
+
+    /// The first export. Runs on screen because Health can hold years and a
+    /// background wake-up gets about thirty seconds.
+    func runFirstExport() async {
+        backfill = "starting…"
+        do {
+            try await health.backfill { step in
+                Task { @MainActor [weak self] in
+                    self?.backfill = "\(step.metric) — back to \(step.reached.formatted(date: .abbreviated, time: .omitted))"
+                }
+            }
+            backfill = "done"
+            lastError = nil
+        } catch {
+            backfill = nil
             lastError = String(describing: error)
         }
         refreshStats()

@@ -32,6 +32,12 @@ shaped the way it is. This file is the rulebook.
 - **Confirmed rows are pruned late, not immediately.** They are what the
   comparison above compares against. Retention must comfortably exceed the
   re-scan window — a month against a week.
+- **A metric belongs to exactly one catalogue.** Cumulative quantities are
+  totals via `AggregateMetric`; everything else travels record by record via
+  `SampleMetric`. Putting one in both sends the total *and* the samples behind
+  it, which is the double count wearing a different hat. A test enforces this.
+- **A deletion reuses the id of the sample it removes.** Same id, different
+  kind, so the receiver drops the record without keeping a lookup table.
 
 ## HealthKit facts that shape the code
 
