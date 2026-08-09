@@ -1,13 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <!-- The app in one mark: something leaves a body and travels outward, never
-       back. Flat colours only, and no gradient anywhere — a gradient renders
-       slightly differently on every machine, and an icon that shifts per
-       developer is an icon nobody can review. -->
+  <!-- The app in one mark: a phone hands what it has to an agent, one way only.
+       Solid shapes and flat colours — thin outlines mush at 40 px, and a
+       gradient renders slightly differently on every machine, which makes an
+       icon nobody can review. -->
   <rect width="1024" height="1024" fill="#0F2233"/>
-  <circle cx="300" cy="512" r="82" fill="#FFFFFF"/>
-  <g fill="none" stroke="#FFFFFF" stroke-linecap="round">
-    <path d="M 420.4 340.0 A 210 210 0 0 1 420.4 684.0" stroke-width="60"/>
-    <path d="M 489.3 241.7 A 330 330 0 0 1 489.3 782.3" stroke-width="52"/>
-    <path d="M 558.1 143.4 A 450 450 0 0 1 558.1 880.6" stroke-width="44"/>
+  <g fill="#FFFFFF">
+    <rect x="106" y="272" width="250" height="480" rx="56"/>
+    <path d="M 412 512 L 516 512" stroke="#FFFFFF" stroke-width="46" stroke-linecap="round"/>
+    <path d="M 480 466 L 534 512 L 480 558" fill="none" stroke="#FFFFFF" stroke-width="46"
+          stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M 758 352 Q 790 480 918 512 Q 790 544 758 672 Q 726 544 598 512 Q 726 480 758 352 Z"/>
   </g>
+  <!-- The speaker slot is the one detail that turns a rounded rectangle into a
+       phone. Cut in the background colour so the shape stays a single solid. -->
+  <rect x="186" y="318" width="90" height="22" rx="11" fill="#0F2233"/>
 </svg>
