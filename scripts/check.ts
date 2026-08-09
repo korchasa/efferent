@@ -5,6 +5,9 @@ import { SCHEME, systemToolPath, WORKSPACE } from "./config.ts";
 import { generate } from "./generate.ts";
 
 await checkTooling();
+
+section("Testing the protocol");
+await run("deno", { args: ["test", "-A", "protocol/"] });
 await generate();
 
 section("Building for the simulator");

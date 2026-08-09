@@ -10,3 +10,7 @@ build/
 # Local only.
 *.xcuserdatad
 xcuserdata/
+
+# Local reading key and wrangler state — never committed.
+.efferent/
+.wrangler/
