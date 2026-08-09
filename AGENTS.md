@@ -90,7 +90,9 @@ is the only thing that catches drift before a phone does.
   single-size "universal" icon compiles without one and the App Store listing icon comes out blank.
 - `xcodebuild` needs `/usr/bin` first on PATH. A Homebrew rsync earlier in the path breaks copy
   phases, and the error blames the copy rather than the tool.
-- **Never point `deno task interop --post` at a service that keeps its data.** The harness signs
-  with a throwaway key, and the first writer owns a bucket forever, so the second run into the same
-  real service is refused with 403 — and the fixture bucket is spoiled for good. Post only to
-  `server:dev`, whose storage is thrown away with the process.
+- **Never test-write into a bucket a real phone will use.** The first writer owns a bucket for
+  good, so a smoke test claims it and the phone is refused with 403 afterwards — a failure that
+  surfaces on the device, long after the test looked like it passed. This bites twice: `deno task
+  interop --post` signs with a throwaway key, and `efferent send` signs with the machine's own.
+  Post to `server:dev`, whose storage dies with the process. A real bucket that is already claimed
+  is released by deleting `<bucket>/key` from R2.
