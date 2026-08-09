@@ -28,7 +28,7 @@ public enum NDJSON {
         // trailing comma and produce a line no parser accepts.
         if payload.count > 2 {
             line.append(UInt8(ascii: ","))
-            line.append(payload.dropFirst())     // drops the payload's own `{`
+            line.append(payload.dropFirst()) // drops the payload's own `{`
         } else {
             line.append(UInt8(ascii: "}"))
         }
@@ -40,7 +40,7 @@ public enum NDJSON {
     public static func body(_ events: [PendingEvent]) throws -> Data {
         var body = Data()
         for event in events {
-            body.append(try line(id: event.id, seq: event.seq, kind: event.kind, payload: event.payload))
+            try body.append(line(id: event.id, seq: event.seq, kind: event.kind, payload: event.payload))
         }
         return body
     }

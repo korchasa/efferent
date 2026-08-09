@@ -41,13 +41,19 @@ public struct HealthReader {
         self.calendar = calendar
     }
 
-    public static var isAvailable: Bool { HKHealthStore.isHealthDataAvailable() }
+    public static var isAvailable: Bool {
+        HKHealthStore.isHealthDataAvailable()
+    }
 
     /// Every type the app asks to read.
     public static var readTypes: Set<HKObjectType> {
         var types = Set<HKObjectType>()
-        for metric in AggregateMetric.all { types.insert(metric.type) }
-        for metric in SampleMetric.all { types.insert(metric.type) }
+        for metric in AggregateMetric.all {
+            types.insert(metric.type)
+        }
+        for metric in SampleMetric.all {
+            types.insert(metric.type)
+        }
         return types
     }
 
@@ -92,7 +98,7 @@ public struct HealthReader {
                 value: sum.doubleValue(for: metric.unit),
                 unit: metric.unit.unitString
             ))
-            events.append(try Event(
+            try events.append(Event(
                 id: Self.aggregateID(metric: metric.name, start: statistics.startDate, bucket: bucket),
                 kind: .aggregate,
                 payload: payload
@@ -132,17 +138,17 @@ public struct HealthReader {
 
         var events: [Event] = []
         for sample in result.addedSamples {
-            events.append(try Event(
+            try events.append(Event(
                 id: Self.sampleID(metric: metric.name, uuid: sample.uuid),
                 kind: .sample,
-                payload: try metric.encode(sample)
+                payload: metric.encode(sample)
             ))
         }
         for deleted in result.deletedObjects {
-            events.append(try Event(
+            try events.append(Event(
                 id: Self.sampleID(metric: metric.name, uuid: deleted.uuid),
                 kind: .deletion,
-                payload: try Event.payload(DeletionPayload(metric: metric.name))
+                payload: Event.payload(DeletionPayload(metric: metric.name))
             ))
         }
         return SampleBatch(events: events, anchor: result.newAnchor)

@@ -1,6 +1,5 @@
-import XCTest
-
 @testable import Efferent
+import XCTest
 
 final class NDJSONTests: XCTestCase {
     private func decode(_ line: Data) throws -> [String: Any] {
@@ -48,8 +47,8 @@ final class NDJSONTests: XCTestCase {
     func testBodyIsOneLinePerEvent() throws {
         let store = try Store.inMemory()
         try store.commit(events: [
-            Event(id: "a", kind: .sample, payload: try Event.payload(["v": "1"])),
-            Event(id: "b", kind: .sample, payload: try Event.payload(["v": "2"])),
+            Event(id: "a", kind: .sample, payload: Event.payload(["v": "1"])),
+            Event(id: "b", kind: .sample, payload: Event.payload(["v": "2"])),
         ])
 
         let body = try NDJSON.body(store.pending(limit: 10))

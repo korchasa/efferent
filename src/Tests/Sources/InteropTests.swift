@@ -1,7 +1,6 @@
 import CryptoKit
-import XCTest
-
 @testable import Efferent
+import XCTest
 
 /// Half of the cross-language check.
 ///
@@ -22,7 +21,7 @@ final class InteropTests: XCTestCase {
             Event(
                 id: "agg:steps:2026-08-07T09:00:00Z:h",
                 kind: .aggregate,
-                payload: try Event.payload(AggregatePayload(
+                payload: Event.payload(AggregatePayload(
                     metric: "steps",
                     bucket: "hour",
                     start: Date(timeIntervalSince1970: 1_754_557_200),
@@ -34,7 +33,7 @@ final class InteropTests: XCTestCase {
             Event(
                 id: "hk:sleep:9A2C",
                 kind: .deletion,
-                payload: try Event.payload(DeletionPayload(metric: "sleep"))
+                payload: Event.payload(DeletionPayload(metric: "sleep"))
             ),
         ])
 
@@ -44,7 +43,7 @@ final class InteropTests: XCTestCase {
         )
         let blob = try SealedBox.seal(
             readingPublicKey: WireTests.readingPublicKey,
-            plaintext: try Deflate.compress(lines),
+            plaintext: Deflate.compress(lines),
             associatedData: associatedData
         )
 

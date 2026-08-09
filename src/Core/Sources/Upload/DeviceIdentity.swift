@@ -59,7 +59,9 @@ public struct KeychainItem {
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecItemNotFound { return nil }
+        if status == errSecItemNotFound {
+            return nil
+        }
         guard status == errSecSuccess else { throw KeychainError.unexpectedStatus(status) }
         guard let data = item as? Data else { throw KeychainError.malformedItem }
         return data
@@ -68,7 +70,9 @@ public struct KeychainItem {
     public func save(_ data: Data) throws {
         let update: [String: Any] = [kSecValueData as String: data]
         let status = SecItemUpdate(baseQuery() as CFDictionary, update as CFDictionary)
-        if status == errSecSuccess { return }
+        if status == errSecSuccess {
+            return
+        }
         guard status == errSecItemNotFound else { throw KeychainError.unexpectedStatus(status) }
 
         var insert = baseQuery()

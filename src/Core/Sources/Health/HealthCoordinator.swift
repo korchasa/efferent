@@ -105,7 +105,9 @@ public final class HealthCoordinator {
     }
 
     public func stopObserving() {
-        for query in observers { healthStore.stop(query) }
+        for query in observers {
+            healthStore.stop(query)
+        }
         observers.removeAll()
     }
 
@@ -124,7 +126,7 @@ public final class HealthCoordinator {
         let batch = try await reader.samples(metric: metric, anchor: previous)
         let result = try store.commit(
             events: batch.events,
-            anchor: Anchor(typeIdentifier: metric.type.identifier, value: try batch.anchor.encoded())
+            anchor: Anchor(typeIdentifier: metric.type.identifier, value: batch.anchor.encoded())
         )
         if result.enqueued > 0 {
             log.info("\(metric.name, privacy: .public): queued \(result.enqueued) events")
@@ -165,7 +167,9 @@ public final class HealthCoordinator {
         for metric in SampleMetric.all {
             queued += try await drain(metric: metric)
         }
-        if queued > 0 { onNewData?() }
+        if queued > 0 {
+            onNewData?()
+        }
         return queued
     }
 

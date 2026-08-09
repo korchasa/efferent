@@ -9,13 +9,15 @@ import SwiftUI
 struct ScannerView: UIViewControllerRepresentable {
     let onScan: (String) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(onScan: onScan) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onScan: onScan)
+    }
 
     func makeUIViewController(context: Context) -> ScannerController {
         ScannerController(coordinator: context.coordinator)
     }
 
-    func updateUIViewController(_ controller: ScannerController, context: Context) {}
+    func updateUIViewController(_: ScannerController, context _: Context) {}
 
     final class Coordinator: NSObject, AVCaptureMetadataOutputObjectsDelegate {
         private let onScan: (String) -> Void
@@ -26,9 +28,9 @@ struct ScannerView: UIViewControllerRepresentable {
         }
 
         func metadataOutput(
-            _ output: AVCaptureMetadataOutput,
+            _: AVCaptureMetadataOutput,
             didOutput objects: [AVMetadataObject],
-            from connection: AVCaptureConnection
+            from _: AVCaptureConnection
         ) {
             // The camera fires many times a second over the same code. Without
             // this latch the pairing screen would try to pair dozens of times.
@@ -54,7 +56,7 @@ final class ScannerController: UIViewController {
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) {
+    required init?(coder _: NSCoder) {
         fatalError("ScannerController is created in code only")
     }
 
@@ -96,6 +98,8 @@ final class ScannerController: UIViewController {
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        if session.isRunning { session.stopRunning() }
+        if session.isRunning {
+            session.stopRunning()
+        }
     }
 }
