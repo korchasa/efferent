@@ -22,7 +22,9 @@ public enum Base32 {
                 bits -= 5
             }
         }
-        if bits > 0 { out.append(alphabet[(value << (5 - bits)) & 31]) }
+        if bits > 0 {
+            out.append(alphabet[(value << (5 - bits)) & 31])
+        }
         return out
     }
 }
@@ -40,7 +42,9 @@ public enum Base64URL {
         var padded = value
             .replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
-        while padded.count % 4 != 0 { padded.append("=") }
+        while padded.count % 4 != 0 {
+            padded.append("=")
+        }
         return Data(base64Encoded: padded) ?? Data()
     }
 }

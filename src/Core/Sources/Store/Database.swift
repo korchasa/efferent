@@ -74,5 +74,7 @@ enum MetaKey: String {
     case acknowledgedSeq = "outbox.acknowledgedSeq"
 
     /// How far back the first full export has walked for one metric.
-    static func backfillProgress(metric: String) -> String { "backfill.\(metric)" }
+    static func backfillProgress(metric: String) -> String {
+        "backfill.\(metric)"
+    }
 }

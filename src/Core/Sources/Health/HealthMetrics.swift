@@ -18,7 +18,7 @@ public struct AggregateMetric: Sendable {
 
     init(name: String, _ identifier: HKQuantityTypeIdentifier, _ unit: HKUnit) {
         self.name = name
-        self.type = HKQuantityType(identifier)
+        type = HKQuantityType(identifier)
         self.unit = unit
     }
 

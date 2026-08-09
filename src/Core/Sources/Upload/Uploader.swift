@@ -125,7 +125,7 @@ public final class Uploader: NSObject {
 
         return try SealedBox.seal(
             readingPublicKey: destination.readingPublicKey,
-            plaintext: try Deflate.compress(lines),
+            plaintext: Deflate.compress(lines),
             associatedData: CanonicalRequest.associatedData(
                 bucket: destination.bucket, seqFrom: seqFrom, seqTo: seqTo
             )
@@ -175,11 +175,11 @@ public final class Uploader: NSObject {
 // MARK: - Delegate
 
 extension Uploader: URLSessionDataDelegate {
-    public func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+    public func urlSession(_: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         responseBodies[dataTask.taskIdentifier, default: Data()].append(data)
     }
 
-    public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+    public func urlSession(_: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         let body = responseBodies.removeValue(forKey: task.taskIdentifier) ?? Data()
         if let staged = stagedFiles.removeValue(forKey: task.taskIdentifier) {
             try? FileManager.default.removeItem(at: staged)
@@ -209,7 +209,7 @@ extension Uploader: URLSessionDataDelegate {
         }
     }
 
-    public func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+    public func urlSessionDidFinishEvents(forBackgroundURLSession _: URLSession) {
         let finished = backgroundEventsFinished
         DispatchQueue.main.async { finished?() }
     }

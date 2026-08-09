@@ -1,7 +1,6 @@
+@testable import Efferent
 import HealthKit
 import XCTest
-
-@testable import Efferent
 
 final class HealthTests: XCTestCase {
     private func utcCalendar() throws -> Calendar {
@@ -13,7 +12,7 @@ final class HealthTests: XCTestCase {
     /// The id is what makes recomputing a bucket free, so its shape is a
     /// contract with the receiver, not an implementation detail.
     func testAggregateIdentityIsDerivedFromTheBucket() {
-        let start = Date(timeIntervalSince1970: 1_754_557_200)   // 2025-08-07T09:00:00Z
+        let start = Date(timeIntervalSince1970: 1_754_557_200) // 2025-08-07T09:00:00Z
 
         XCTAssertEqual(
             HealthReader.aggregateID(metric: "steps", start: start, bucket: .hour),
@@ -38,7 +37,7 @@ final class HealthTests: XCTestCase {
 
     func testDayBucketsAlignToTheStartOfTheLocalDay() throws {
         let calendar = try utcCalendar()
-        let afternoon = Date(timeIntervalSince1970: 1_754_580_000)   // 15:20 UTC
+        let afternoon = Date(timeIntervalSince1970: 1_754_580_000) // 15:20 UTC
 
         let anchor = Bucket.day.anchor(before: afternoon, calendar: calendar)
 

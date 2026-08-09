@@ -97,14 +97,14 @@ public final class Store {
 
                 try db.execute(
                     sql: """
-                        INSERT INTO outbox (id, seq, kind, payload, updatedAt)
-                        VALUES (?, ?, ?, ?, ?)
-                        ON CONFLICT(id) DO UPDATE SET
-                            seq = excluded.seq,
-                            kind = excluded.kind,
-                            payload = excluded.payload,
-                            updatedAt = excluded.updatedAt
-                        """,
+                    INSERT INTO outbox (id, seq, kind, payload, updatedAt)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        seq = excluded.seq,
+                        kind = excluded.kind,
+                        payload = excluded.payload,
+                        updatedAt = excluded.updatedAt
+                    """,
                     arguments: [event.id, nextSeq, event.kind.rawValue, event.payload, now]
                 )
                 highestSeq = nextSeq
@@ -117,12 +117,12 @@ public final class Store {
             if let anchor {
                 try db.execute(
                     sql: """
-                        INSERT INTO anchor (typeIdentifier, value, updatedAt)
-                        VALUES (?, ?, ?)
-                        ON CONFLICT(typeIdentifier) DO UPDATE SET
-                            value = excluded.value,
-                            updatedAt = excluded.updatedAt
-                        """,
+                    INSERT INTO anchor (typeIdentifier, value, updatedAt)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(typeIdentifier) DO UPDATE SET
+                        value = excluded.value,
+                        updatedAt = excluded.updatedAt
+                    """,
                     arguments: [anchor.typeIdentifier, anchor.value, now]
                 )
             }
@@ -140,9 +140,9 @@ public final class Store {
             let rows = try Row.fetchAll(
                 db,
                 sql: """
-                    SELECT id, seq, kind, payload FROM outbox
-                    WHERE seq > ? ORDER BY seq LIMIT ?
-                    """,
+                SELECT id, seq, kind, payload FROM outbox
+                WHERE seq > ? ORDER BY seq LIMIT ?
+                """,
                 arguments: [acknowledged, limit]
             )
             return try rows.map { row in
@@ -213,9 +213,9 @@ public final class Store {
         try dbQueue.write { db in
             try db.execute(
                 sql: """
-                    INSERT INTO meta (key, value) VALUES (?, ?)
-                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
-                    """,
+                INSERT INTO meta (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
                 arguments: [MetaKey.backfillProgress(metric: metric), date.timeIntervalSince1970]
             )
         }
@@ -245,9 +245,9 @@ public final class Store {
     private static func setInt(_ db: GRDB.Database, _ key: String, _ value: Int64) throws {
         try db.execute(
             sql: """
-                INSERT INTO meta (key, value) VALUES (?, ?)
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value
-                """,
+            INSERT INTO meta (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
             arguments: [key, value]
         )
     }

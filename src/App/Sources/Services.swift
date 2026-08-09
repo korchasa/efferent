@@ -48,7 +48,7 @@ final class Services: ObservableObject {
     func pair(withScannedCode code: String) {
         do {
             let paired = try Pairing.parse(code)
-            UserDefaults.standard.set(try JSONEncoder().encode(paired), forKey: Self.destinationKey)
+            try UserDefaults.standard.set(JSONEncoder().encode(paired), forKey: Self.destinationKey)
             destination = paired
             uploader = nil
             lastError = nil
@@ -72,7 +72,9 @@ final class Services: ObservableObject {
     }
 
     func uploaderIfPaired() -> Uploader? {
-        if let uploader { return uploader }
+        if let uploader {
+            return uploader
+        }
         guard let destination else { return nil }
         let built = Uploader(destination: destination, store: store, identity: identity)
         uploader = built

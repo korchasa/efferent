@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- The app in one mark: something leaves a body and travels outward, never
+       back. Flat colours only, and no gradient anywhere — a gradient renders
+       slightly differently on every machine, and an icon that shifts per
+       developer is an icon nobody can review. -->
+  <rect width="1024" height="1024" fill="#0F2233"/>
+  <circle cx="300" cy="512" r="82" fill="#FFFFFF"/>
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="round">
+    <path d="M 420.4 340.0 A 210 210 0 0 1 420.4 684.0" stroke-width="60"/>
+    <path d="M 489.3 241.7 A 330 330 0 0 1 489.3 782.3" stroke-width="52"/>
+    <path d="M 558.1 143.4 A 450 450 0 0 1 558.1 880.6" stroke-width="44"/>
+  </g>
+</svg>

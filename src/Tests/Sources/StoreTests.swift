@@ -1,6 +1,5 @@
-import XCTest
-
 @testable import Efferent
+import XCTest
 
 final class StoreTests: XCTestCase {
     private func event(_ id: String, _ fields: [String: String]) throws -> Event {

@@ -1,7 +1,6 @@
 import CryptoKit
-import XCTest
-
 @testable import Efferent
+import XCTest
 
 final class WireTests: XCTestCase {
     /// The fixed reading key the cross-language check uses. A test key with no

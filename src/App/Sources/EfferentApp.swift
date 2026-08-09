@@ -17,8 +17,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     static let refreshTaskIdentifier = "dev.korchasa.efferent.refresh"
 
     func application(
-        _ application: UIApplication,
-        didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]? = nil
+        _: UIApplication,
+        didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         // Synchronously, right here. The system launches this app in the
         // background with no interface; an observer registered from a `Task` or
@@ -36,8 +36,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     func application(
-        _ application: UIApplication,
-        handleEventsForBackgroundURLSession identifier: String,
+        _: UIApplication,
+        handleEventsForBackgroundURLSession _: String,
         completionHandler: @escaping () -> Void
     ) {
         // iOS relaunched the app only to hand over transfers that finished while
@@ -68,7 +68,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     private func handleRefresh(_ task: BGTask) {
-        scheduleRefresh()   // always re-arm first; an early return would end the chain
+        scheduleRefresh() // always re-arm first; an early return would end the chain
 
         let work = Task { @MainActor in
             await Services.shared.collectNow()

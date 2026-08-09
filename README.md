@@ -127,6 +127,7 @@ deno task check
 - `dist` — unsigned App Store archive at `build/Efferent.xcarchive`.
 - `fmt` — format task scripts, and Swift if swiftformat is installed.
 - `generate` — regenerate the Xcode project from `Project.swift`.
+- `icons` — re-render the app icons from `documents/icon.svg`.
 - `server:dev` / `server:deploy` — the bucket service, locally or to Cloudflare.
 - `interop` — check that the Swift and TypeScript sides still make the same bytes.
 - `efferent` — the reading side: `keygen`, `pair` (prints the code to scan), `send`, `read`.

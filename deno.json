@@ -16,7 +16,8 @@
     "server:dev": "wrangler dev --config server/wrangler.toml",
     "server:deploy": "wrangler deploy --config server/wrangler.toml",
     "efferent": "deno run -A tools/efferent.ts",
-    "interop": "deno run -A scripts/interop.ts"
+    "interop": "deno run -A scripts/interop.ts",
+    "icons": "deno run -A scripts/icons.ts"
   },
   "fmt": {
     "include": [

@@ -16,7 +16,9 @@ public enum Deflate {
     }
 
     public static func compress(_ input: Data) throws -> Data {
-        if input.isEmpty { return Data() }
+        if input.isEmpty {
+            return Data()
+        }
 
         // Deflate can expand incompressible input very slightly, so the
         // destination is deliberately larger than the source.
