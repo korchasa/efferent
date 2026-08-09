@@ -11,6 +11,9 @@ struct StatusView: View {
     @EnvironmentObject private var services: Services
     @State private var scanning = false
     @State private var confirmingDisconnect = false
+    #if DEBUG
+        @State private var typedCode = ""
+    #endif
 
     var body: some View {
         NavigationStack {
@@ -77,7 +80,36 @@ struct StatusView: View {
                         + "Nothing secret travels this way — the key that decrypts never leaves the reader."
                 )
             }
+            typedCodeSection
         }
+    }
+
+    /// The way in when there is no camera.
+    ///
+    /// The simulator has none, so scanning — the only way to pair — cannot be
+    /// reached there, and neither can any screen behind it. This takes the same
+    /// string the code carries and goes through the same `pair` path, so what it
+    /// exercises is the real one. Debug builds only: a shipped app that accepts
+    /// a pasted destination is a shipped app someone can be talked into pasting
+    /// into.
+    @ViewBuilder private var typedCodeSection: some View {
+        #if DEBUG
+            Section {
+                TextField("{\"v\":1,\"url\":…,\"pk\":…}", text: $typedCode, axis: .vertical)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .font(.footnote.monospaced())
+                Button("Pair with this code") {
+                    services.pair(withScannedCode: typedCode.trimmingCharacters(in: .whitespacesAndNewlines))
+                    typedCode = ""
+                }
+                .disabled(typedCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            } header: {
+                Text("Debug")
+            } footer: {
+                Text("Paste what the code holds. Debug builds only — this is not in what ships.")
+            }
+        #endif
     }
 
     private var outboxSection: some View {
