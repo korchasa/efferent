@@ -145,6 +145,15 @@ Then, in another shell: `deno task efferent keygen`,
 efferent read --url http://127.0.0.1:8787` to see what arrived. `send` stands in for a
 phone when you have no device to hand.
 
+In the simulator there is no camera, so scanning cannot be reached and neither can any screen behind
+it. Debug builds therefore also take the code as text — put it on the device's pasteboard with
+`xcrun simctl pbcopy <udid>` and paste it in. It goes through the same pairing path as a scan, and
+is compiled out of what ships.
+
+One thing to watch when writing into a service that keeps its data: the first writer owns a bucket
+for good, so a test upload claims it and the phone is refused afterwards. Release the claim by
+deleting `<bucket>/key` from R2.
+
 Signing, packaging and upload all happen outside this repository. Nothing here touches a
 certificate, and the archive path above is the whole of the agreement with whatever does.
 
