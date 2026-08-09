@@ -2,18 +2,36 @@
   "name": "efferent",
   "version": "1.0.0",
   "exports": {},
+  "imports": {
+    "@std/assert": "jsr:@std/assert@^1.0.0"
+  },
   "tasks": {
     "check": "deno run -A scripts/check.ts",
     "test": "deno run -A scripts/test.ts",
+    "test:protocol": "deno test -A protocol/",
     "dist": "deno run -A scripts/dist.ts",
     "fmt": "deno run -A scripts/fmt.ts",
-    "generate": "deno run -A scripts/generate.ts"
+    "generate": "deno run -A scripts/generate.ts",
+    "server:dev": "wrangler dev --config server/wrangler.toml",
+    "server:deploy": "wrangler deploy --config server/wrangler.toml",
+    "efferent": "deno run -A tools/efferent.ts"
   },
   "fmt": {
-    "include": ["scripts/", "deno.json"],
+    "include": [
+      "scripts/",
+      "protocol/",
+      "server/",
+      "tools/",
+      "deno.json"
+    ],
     "lineWidth": 100
   },
   "lint": {
-    "include": ["scripts/"]
+    "include": [
+      "scripts/",
+      "protocol/",
+      "server/",
+      "tools/"
+    ]
   }
 }

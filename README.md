@@ -80,17 +80,62 @@ The server answers `{"ack": <seq>}` with the highest sequence number it has
 durably stored. The device moves its mark to that, not to what it happened to
 send — a half-accepted batch simply goes again.
 
+## Who can read it
+
+Nobody but you, and the service holding the data least of all.
+
+The reading key pair is made on the machine that will read — the one with a
+keyboard and a terminal. Its private half stays there and never travels. The
+phone is given only the public half, which it uses to seal every batch, so a
+lost or seized phone gives up nothing about the history it already sent. The
+bucket is named by the hash of that public key, which is why there are no
+accounts here: knowing where to write follows from knowing who to write to.
+
+Encryption says nothing about authorship, so the phone also makes a signing key
+on first launch and signs every upload. The first upload into an empty bucket
+registers that key and afterwards only it is accepted — otherwise a stranger who
+learned a bucket name could fill it with rubbish. It cannot decrypt, and the
+reading key cannot write: handing an agent the ability to read must not hand it
+the ability to forge.
+
+A batch on the wire is raw-deflate-compressed NDJSON inside a sealed envelope —
+`[version][ephemeral public key][nonce][ciphertext]` — with the bucket name and
+the sequence range bound into the tag, so a blob cannot be moved to another
+bucket or relabelled with a different range without the decryption failing. The
+building blocks are X25519, HKDF-SHA256 and AES-256-GCM, all of which CryptoKit
+and WebCrypto already ship. No crypto library is vendored anywhere.
+
+The service and the reading tool implement all of this today, and `protocol/`
+is the description both follow. The phone does not yet: it still posts plain
+NDJSON with a bearer token, which is the next thing to change.
+
+What the service still learns: which bucket, when, and how much. From the rhythm
+of uploads a determined observer could infer when you sleep. Encryption hides
+contents, not the fact of them, and the privacy copy should say so.
+
 ## Commands
 
 ```bash
 deno task check
 ```
 
-- `check` — types and lint on the task scripts, then a simulator build.
-- `test` — unit tests on any available iPhone simulator.
+- `check` — lint and types on the scripts, protocol tests, then a simulator build.
+- `test` — protocol tests, then unit tests on any available iPhone simulator.
 - `dist` — unsigned App Store archive at `build/Efferent.xcarchive`.
 - `fmt` — format task scripts, and Swift if swiftformat is installed.
 - `generate` — regenerate the Xcode project from `Project.swift`.
+- `server:dev` / `server:deploy` — the bucket service, locally or to Cloudflare.
+- `efferent` — the reading side: `keygen`, `pair`, `send`, `read`.
+
+Trying the whole path without a phone:
+
+```bash
+deno task server:dev
+```
+
+Then, in another shell, `deno task efferent keygen`, `deno task efferent send
+--url http://127.0.0.1:8787`, and `deno task efferent read --url
+http://127.0.0.1:8787`. `send` stands in for a phone until the app can do it.
 
 Signing, packaging and upload all happen outside this repository. Nothing here
 touches a certificate, and the archive path above is the whole of the agreement
@@ -101,6 +146,9 @@ with whatever does.
 - `src/Core/Sources/Health` — the metric catalogue, the readers, the coordinator.
 - `src/Core/Sources/Wire` — the event type and NDJSON assembly.
 - `src/Core/Sources/Store` — schema, outbox, anchors, counters.
-- `src/Core/Sources/Upload` — Keychain token, background upload.
+- `src/Core/Sources/Upload` — Keychain, background upload.
 - `src/App/Sources` — the SwiftUI screen and the composition root.
 - `src/Tests/Sources` — unit tests.
+- `protocol/` — bucket names, signing, sealed envelopes, framing.
+- `server/` — the bucket service, a Cloudflare Worker over R2.
+- `tools/` — the reading side as a command line tool.

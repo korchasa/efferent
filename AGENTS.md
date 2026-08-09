@@ -39,6 +39,26 @@ shaped the way it is. This file is the rulebook.
 - **A deletion reuses the id of the sample it removes.** Same id, different
   kind, so the receiver drops the record without keeping a lookup table.
 
+## The parts that must agree across languages
+
+`protocol/` is the single description of what goes on the wire, and the Swift
+side has to match it byte for byte. When you change anything there, change both
+sides in the same commit and keep the round-trip tests honest.
+
+- **Never log or persist the reading private key anywhere but the reader's own
+  machine.** The phone gets the public half only. If you find yourself adding a
+  way to send the private half to the device, the design has gone wrong.
+- **The signing key and the reading key are separate on purpose.** One writes,
+  one reads. Merging them would mean an agent's config file grants the right to
+  forge uploads.
+- **Bucket, sequence range and body hash are all bound into what gets signed and
+  into the encryption tag.** Dropping any of them from either place lets a blob
+  be replayed, relabelled or moved, silently.
+- **Compress before sealing, never after.** Ciphertext does not compress, and a
+  round trip that only works one way tends to be discovered on a phone.
+- The service must never gain a way to read a batch. If a feature seems to need
+  one, it belongs in the reading tool instead.
+
 ## HealthKit facts that shape the code
 
 - Read permission is unknowable. `authorizationStatus(for:)` always answers
