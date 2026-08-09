@@ -1,22 +1,24 @@
 import Foundation
 import os
 
-/// Composition root: builds the store and the uploader once and hands them out.
+/// Composition root: builds the store, the collector and the uploader once, and
+/// hands them out.
 ///
-/// Everything below this line is plain values and can be constructed in a test;
-/// this is the only place that knows about the file system and user defaults.
+/// This is the only place that knows about the file system and user defaults;
+/// everything below it is plain values that a test can construct.
 @MainActor
 final class Services: ObservableObject {
     static let shared = Services()
 
     let store: Store
     let health: HealthCoordinator
-    let tokens = TokenStore()
+    let identity = DeviceIdentity()
     private let log = Logger(subsystem: "dev.korchasa.efferent", category: "services")
 
     @Published private(set) var stats: Stats?
     @Published private(set) var lastError: String?
     @Published private(set) var backfill: String?
+    @Published private(set) var destination: Destination?
 
     private var uploader: Uploader?
 
@@ -30,40 +32,57 @@ final class Services: ObservableObject {
             fatalError("could not open the outbox: \(error)")
         }
         health = HealthCoordinator(store: store)
+        destination = Self.loadDestination()
         health.onNewData = { [weak self] in
             Task { @MainActor in await self?.sendNow() }
         }
     }
 
-    /// Where the endpoint lives. Not a secret, unlike the token beside it.
-    var endpoint: URL? {
-        get { UserDefaults.standard.url(forKey: "endpoint") }
-        set {
-            UserDefaults.standard.set(newValue, forKey: "endpoint")
+    // MARK: - Pairing
+
+    /// Take the scanned code and remember where this phone writes.
+    ///
+    /// Nothing here is secret, so it lives in user defaults rather than the
+    /// Keychain: an address and a public key. The one secret the device owns —
+    /// its signing key — is made separately and never leaves the Keychain.
+    func pair(withScannedCode code: String) {
+        do {
+            let paired = try Pairing.parse(code)
+            UserDefaults.standard.set(try JSONEncoder().encode(paired), forKey: Self.destinationKey)
+            destination = paired
             uploader = nil
-            objectWillChange.send()
+            lastError = nil
+            log.info("paired with bucket \(paired.bucket, privacy: .public)")
+        } catch {
+            lastError = "That code is not an Efferent pairing code. (\(error))"
         }
     }
 
-    func uploaderIfConfigured() -> Uploader? {
+    /// Forget where to send. The signing key goes too, so the bucket it claimed
+    /// can never be written to again — which is why this asks first.
+    func disconnect() {
+        UserDefaults.standard.removeObject(forKey: Self.destinationKey)
+        destination = nil
+        uploader = nil
+        do {
+            try identity.forget()
+        } catch {
+            lastError = String(describing: error)
+        }
+    }
+
+    func uploaderIfPaired() -> Uploader? {
         if let uploader { return uploader }
-        guard let endpoint else { return nil }
-        let built = Uploader(configuration: .init(endpoint: endpoint), store: store)
+        guard let destination else { return nil }
+        let built = Uploader(destination: destination, store: store, identity: identity)
         uploader = built
         return built
     }
 
+    // MARK: - Actions
+
     func setError(_ message: String?) {
         lastError = message
-    }
-
-    func storeToken(_ token: String) {
-        do {
-            try tokens.save(token)
-            lastError = nil
-        } catch {
-            lastError = String(describing: error)
-        }
     }
 
     func refreshStats() {
@@ -72,21 +91,6 @@ final class Services: ObservableObject {
         } catch {
             lastError = String(describing: error)
         }
-    }
-
-    func sendNow() async {
-        guard let uploader = uploaderIfConfigured() else {
-            lastError = "No endpoint configured yet."
-            return
-        }
-        do {
-            let outcome = try await uploader.send()
-            log.info("send outcome: \(String(describing: outcome), privacy: .public)")
-            lastError = nil
-        } catch {
-            lastError = String(describing: error)
-        }
-        refreshStats()
     }
 
     func requestHealthAccess() async {
@@ -108,6 +112,21 @@ final class Services: ObservableObject {
         refreshStats()
     }
 
+    func sendNow() async {
+        guard let uploader = uploaderIfPaired() else {
+            lastError = "Not paired with a reader yet."
+            return
+        }
+        do {
+            let outcome = try await uploader.send()
+            log.info("send outcome: \(String(describing: outcome), privacy: .public)")
+            lastError = nil
+        } catch {
+            lastError = String(describing: error)
+        }
+        refreshStats()
+    }
+
     /// The first export. Runs on screen because Health can hold years and a
     /// background wake-up gets about thirty seconds.
     func runFirstExport() async {
@@ -115,7 +134,8 @@ final class Services: ObservableObject {
         do {
             try await health.backfill { step in
                 Task { @MainActor [weak self] in
-                    self?.backfill = "\(step.metric) — back to \(step.reached.formatted(date: .abbreviated, time: .omitted))"
+                    self?.backfill =
+                        "\(step.metric) — back to \(step.reached.formatted(date: .abbreviated, time: .omitted))"
                 }
             }
             backfill = "done"
@@ -125,6 +145,15 @@ final class Services: ObservableObject {
             lastError = String(describing: error)
         }
         refreshStats()
+    }
+
+    // MARK: - Storage
+
+    private static let destinationKey = "destination"
+
+    private static func loadDestination() -> Destination? {
+        guard let data = UserDefaults.standard.data(forKey: destinationKey) else { return nil }
+        return try? JSONDecoder().decode(Destination.self, from: data)
     }
 
     private static func storeURL() -> URL {

@@ -12,6 +12,7 @@ import { bucketId, parseObjectName } from "../protocol/ids.ts";
 import { base64url, fromBase64url, signUpload, type UploadHeader } from "../protocol/signing.ts";
 import { associatedData, open, seal } from "../protocol/sealedbox.ts";
 import { compress, decompress } from "../protocol/framing.ts";
+import qrcode from "qrcode-terminal";
 
 interface ReadingKey {
   /** X25519 private key, pkcs8. The whole secret of the system. */
@@ -77,8 +78,18 @@ async function keygen(): Promise<void> {
 async function pair(url: string): Promise<void> {
   const key = await load<ReadingKey>("reading-key.json");
   // Nothing here is secret: an address and a public key. That is the point —
-  // this payload can be shown on a screen or photographed without consequence.
-  console.log(JSON.stringify({ v: 1, url, pk: key.readingPublic }));
+  // this payload can be shown on a screen or photographed without consequence,
+  // which is why pairing is a scan rather than a careful transfer.
+  const payload = JSON.stringify({ v: 1, url, pk: key.readingPublic });
+
+  await new Promise<void>((resolve) => {
+    qrcode.generate(payload, { small: true }, (code: string) => {
+      console.log(code);
+      resolve();
+    });
+  });
+  console.log(`bucket: ${await bucketId(fromBase64url(key.readingPublic))}`);
+  console.log(payload);
 }
 
 async function send(url: string, count: number): Promise<void> {

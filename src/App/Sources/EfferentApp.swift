@@ -45,7 +45,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // hold on to the handler until it says it has reported everything —
         // returning early makes the system count the app as unresponsive.
         Task { @MainActor in
-            guard let uploader = Services.shared.uploaderIfConfigured() else {
+            guard let uploader = Services.shared.uploaderIfPaired() else {
                 completionHandler()
                 return
             }

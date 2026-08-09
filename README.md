@@ -105,9 +105,15 @@ bucket or relabelled with a different range without the decryption failing. The
 building blocks are X25519, HKDF-SHA256 and AES-256-GCM, all of which CryptoKit
 and WebCrypto already ship. No crypto library is vendored anywhere.
 
-The service and the reading tool implement all of this today, and `protocol/`
-is the description both follow. The phone does not yet: it still posts plain
-NDJSON with a bearer token, which is the next thing to change.
+Pairing is therefore a scan, not a careful transfer. The reader prints a code
+holding its address and its public key — `deno task efferent pair --url …` — and
+the phone's camera reads it. Nothing worth protecting travels that way.
+
+`protocol/` describes these bytes in TypeScript and `src/Core` describes them
+again in Swift, so `deno task interop` exists to prove the two still agree: a
+Swift test seals and signs a real batch, and the reader opens it and checks the
+signature. With `--post <url>` it also puts that batch through a running service
+and reads it back out.
 
 What the service still learns: which bucket, when, and how much. From the rhythm
 of uploads a determined observer could infer when you sleep. Encryption hides
@@ -125,7 +131,8 @@ deno task check
 - `fmt` — format task scripts, and Swift if swiftformat is installed.
 - `generate` — regenerate the Xcode project from `Project.swift`.
 - `server:dev` / `server:deploy` — the bucket service, locally or to Cloudflare.
-- `efferent` — the reading side: `keygen`, `pair`, `send`, `read`.
+- `interop` — check that the Swift and TypeScript sides still make the same bytes.
+- `efferent` — the reading side: `keygen`, `pair` (prints the code to scan), `send`, `read`.
 
 Trying the whole path without a phone:
 
@@ -133,9 +140,10 @@ Trying the whole path without a phone:
 deno task server:dev
 ```
 
-Then, in another shell, `deno task efferent keygen`, `deno task efferent send
---url http://127.0.0.1:8787`, and `deno task efferent read --url
-http://127.0.0.1:8787`. `send` stands in for a phone until the app can do it.
+Then, in another shell: `deno task efferent keygen`, `deno task efferent pair
+--url http://127.0.0.1:8787` to get a code the phone can scan, and `deno task
+efferent read --url http://127.0.0.1:8787` to see what arrived. `send` stands in
+for a phone when you have no device to hand.
 
 Signing, packaging and upload all happen outside this repository. Nothing here
 touches a certificate, and the archive path above is the whole of the agreement
