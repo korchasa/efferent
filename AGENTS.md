@@ -43,7 +43,9 @@ shaped the way it is. This file is the rulebook.
 
 `protocol/` is the single description of what goes on the wire, and the Swift
 side has to match it byte for byte. When you change anything there, change both
-sides in the same commit and keep the round-trip tests honest.
+sides in the same commit and run `deno task interop` — Swift agreeing with Swift
+proves only that Swift is consistent, and that check is the only thing that
+catches drift before a phone does.
 
 - **Never log or persist the reading private key anywhere but the reader's own
   machine.** The phone gets the public half only. If you find yourself adding a

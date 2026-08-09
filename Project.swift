@@ -46,6 +46,17 @@ public let project = Project(
                 "NSHealthShareUsageDescription": .string(
                     "Efferent reads your health data so it can send it to the server you configure. Nothing is shared with anyone else."
                 ),
+                // Used once, to read the pairing code the reader displays.
+                "NSCameraUsageDescription": .string(
+                    "Efferent uses the camera once, to scan the pairing code shown by the reader you set up."
+                ),
+                // A reader on your own network is a normal way to run this, and
+                // it will not have a certificate. The batch is sealed either
+                // way, so plain http on a local address changes who can see the
+                // metadata, not the readings.
+                "NSAppTransportSecurity": .dictionary([
+                    "NSAllowsLocalNetworking": .boolean(true)
+                ]),
                 // Background delivery wakes the app; the deferred send finishes
                 // through a background URLSession, which needs no mode of its own.
                 "UIBackgroundModes": .array([.string("processing")]),

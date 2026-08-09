@@ -9,49 +9,18 @@ import SwiftUI
 /// honest answer to both "no access" and "nothing new".
 struct StatusView: View {
     @EnvironmentObject private var services: Services
-    @State private var endpointText = ""
-    @State private var tokenText = ""
+    @State private var scanning = false
+    @State private var confirmingDisconnect = false
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Destination") {
-                    TextField("https://…", text: $endpointText)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
-                    SecureField("Token", text: $tokenText)
-                    Button("Save") { save() }
-                        .disabled(endpointText.isEmpty)
-                }
+                destinationSection
 
-                Section("Outbox") {
-                    LabeledContent("Waiting", value: services.stats.map { String($0.pending) } ?? "—")
-                    LabeledContent("Kept for comparison", value: services.stats.map { String($0.retained) } ?? "—")
-                    LabeledContent("Confirmed through", value: services.stats.map { String($0.acknowledgedSeq) } ?? "—")
-                }
-
-                Section("Health") {
-                    Button("Allow access to Health") {
-                        Task { await services.requestHealthAccess() }
-                    }
-                    Button("Collect and send now") {
-                        Task {
-                            await services.collectNow()
-                            await services.sendNow()
-                        }
-                    }
-                }
-
-                Section {
-                    Button("Export the full history") {
-                        Task { await services.runFirstExport() }
-                    }
-                    if let backfill = services.backfill {
-                        Text(backfill).font(.footnote).foregroundStyle(.secondary)
-                    }
-                } footer: {
-                    Text("Walks back a month at a time. Leave this screen open; it continues where it stopped.")
+                if services.destination != nil {
+                    outboxSection
+                    healthSection
+                    firstExportSection
                 }
 
                 if let error = services.lastError {
@@ -61,22 +30,91 @@ struct StatusView: View {
                 }
             }
             .navigationTitle("Efferent")
-        }
-        .onAppear {
-            endpointText = services.endpoint?.absoluteString ?? ""
-            services.refreshStats()
+            .sheet(isPresented: $scanning) {
+                NavigationStack {
+                    ScannerView { code in
+                        scanning = false
+                        services.pair(withScannedCode: code)
+                    }
+                    .ignoresSafeArea()
+                    .navigationTitle("Scan the code")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") { scanning = false }
+                        }
+                    }
+                }
+            }
+            .alert("Disconnect?", isPresented: $confirmingDisconnect) {
+                Button("Disconnect", role: .destructive) { services.disconnect() }
+                Button("Keep", role: .cancel) {}
+            } message: {
+                Text(
+                    "This phone forgets its signing key, so it can never write to that bucket again. "
+                        + "Data already sent stays where it is."
+                )
+            }
+            .onAppear { services.refreshStats() }
         }
     }
 
-    private func save() {
-        guard let url = URL(string: endpointText), url.scheme == "https" else {
-            services.setError("The endpoint must be an https URL.")
-            return
+    @ViewBuilder private var destinationSection: some View {
+        if let destination = services.destination {
+            Section("Sending to") {
+                LabeledContent("Host", value: destination.endpoint.host() ?? "—")
+                // The first characters are enough to tell two buckets apart at a
+                // glance; the whole name is not something to leave on a screen.
+                LabeledContent("Bucket", value: String(destination.bucket.prefix(8)) + "…")
+                Button("Disconnect", role: .destructive) { confirmingDisconnect = true }
+            }
+        } else {
+            Section {
+                Button("Scan the pairing code") { scanning = true }
+            } footer: {
+                Text(
+                    "Your reader shows a code holding its address and its public key. "
+                        + "Nothing secret travels this way — the key that decrypts never leaves the reader."
+                )
+            }
         }
-        services.endpoint = url
-        if !tokenText.isEmpty {
-            services.storeToken(tokenText)
-            tokenText = ""
+    }
+
+    private var outboxSection: some View {
+        Section("Outbox") {
+            LabeledContent("Waiting", value: services.stats.map { String($0.pending) } ?? "—")
+            LabeledContent("Confirmed through", value: services.stats.map { String($0.acknowledgedSeq) } ?? "—")
+        }
+    }
+
+    private var healthSection: some View {
+        Section {
+            Button("Allow access to Health") {
+                Task { await services.requestHealthAccess() }
+            }
+            Button("Collect and send now") {
+                Task {
+                    await services.collectNow()
+                    await services.sendNow()
+                }
+            }
+        } header: {
+            Text("Health")
+        } footer: {
+            Text("New readings usually go out within an hour — that is as often as iOS wakes the app.")
+        }
+    }
+
+    private var firstExportSection: some View {
+        Section {
+            Button("Export the full history") {
+                Task { await services.runFirstExport() }
+            }
+            if let backfill = services.backfill {
+                Text(backfill).font(.footnote).foregroundStyle(.secondary)
+            }
+        } footer: {
+            Text("Walks back a month at a time. Leave this screen open; it continues where it stopped.")
         }
     }
 }
