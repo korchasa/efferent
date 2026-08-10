@@ -34,6 +34,17 @@ This file is the rulebook.
   hat. A test enforces this.
 - **A deletion reuses the id of the sample it removes.** Same id, different kind, so the receiver
   drops the record without keeping a lookup table.
+- **The service is an archive, not a letterbox.** It never overwrites a stored batch and never
+  deletes one. A repeated range is acknowledged and ignored, so a device that missed an answer stops
+  retrying without history changing underneath it.
+- **Anything that lists R2 must page.** R2 answers a listing with at most one page and a `truncated`
+  flag; code that fetches once and filters afterwards reports everything past that page as nothing at
+  all, and reports it as success. Follow the cursor until it runs out, and cap what is unbounded
+  loudly rather than quietly.
+- **One upload is in flight at a time, and the claim is released on every path.** The guard that
+  enforces it is a flag, and a flag that a `return` can slip past locks the outbox until the app is
+  relaunched. Release it before every early exit, and let an acknowledged batch start the next one —
+  otherwise sending stops at one batch and looks like a server that went quiet.
 
 ## The parts that must agree across languages
 
@@ -79,6 +90,17 @@ is the only thing that catches drift before a phone does.
   device.
 - Health data must not be put in iCloud — App Store rule 5.1.3. Sending it to a server the person
   configured is fine, and needs a privacy policy.
+
+## The screen
+
+One question matters more than everything else — is it still working — so it is answered first, in a
+sentence, and the counters sit underneath for when the answer is not the expected one. Keep it that
+way when adding anything: a number that needs interpreting is not a status.
+
+"Nothing waiting" is not the same fact as "nothing has ever been sent", and neither is the same as
+"stopped a week ago". That is why the outbox stamps when the confirmation mark last moved, and why
+the screen distinguishes all three. Collapsing them into one cheerful row is how a silent failure
+gets to look healthy.
 
 ## Other traps
 

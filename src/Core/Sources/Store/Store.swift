@@ -36,6 +36,10 @@ public struct Stats: Equatable, Sendable {
     public let retained: Int
     public let acknowledgedSeq: Int64
     public let nextSeq: Int64
+    /// When the confirmation mark last moved. `nil` before anything has ever
+    /// been confirmed, which is a different state from "confirmed long ago" and
+    /// the screen says so differently.
+    public let acknowledgedAt: Date?
 }
 
 public enum StoreError: Error, Equatable {
@@ -167,6 +171,10 @@ public final class Store {
             }
             let current = try Self.int(db, MetaKey.acknowledgedSeq.rawValue) ?? 0
             try Self.setInt(db, MetaKey.acknowledgedSeq.rawValue, max(current, seq))
+            // Stamped even when the mark did not move: the useful question on
+            // screen is "when did the service last answer", and an answer that
+            // confirmed nothing new still answered.
+            try Self.setInt(db, MetaKey.acknowledgedAt.rawValue, Int64(Date().timeIntervalSince1970))
         }
     }
 
@@ -229,9 +237,11 @@ public final class Store {
                 db, sql: "SELECT COUNT(*) FROM outbox WHERE seq > ?", arguments: [acknowledged]
             ) ?? 0
             let retained = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM outbox") ?? 0
+            let stamp = try Self.int(db, MetaKey.acknowledgedAt.rawValue)
             return Stats(
                 pending: pending, retained: retained,
-                acknowledgedSeq: acknowledged, nextSeq: nextSeq
+                acknowledgedSeq: acknowledged, nextSeq: nextSeq,
+                acknowledgedAt: stamp.map { Date(timeIntervalSince1970: TimeInterval($0)) }
             )
         }
     }
