@@ -37,6 +37,13 @@ public struct Destination: Equatable, Codable, Sendable {
     public var uploadURL: URL {
         endpoint.appendingPathComponent("b").appendingPathComponent(bucket)
     }
+
+    /// What the archive already holds, in counts rather than contents. Asked
+    /// once, before this device's first batch, to find out where to start
+    /// numbering.
+    public var statsURL: URL {
+        uploadURL.appendingPathComponent("stats")
+    }
 }
 
 public enum PairingError: Error, Equatable {
