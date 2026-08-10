@@ -77,6 +77,12 @@ final class Services: ObservableObject {
         }
         guard let destination else { return nil }
         let built = Uploader(destination: destination, store: store, identity: identity)
+        // The mark moves on the upload session's own queue, with no view in
+        // sight. Without this the counters only change when the screen
+        // reappears, which reads as a stall while data is going up fine.
+        built.didAcknowledge = { [weak self] in
+            Task { @MainActor in self?.refreshStats() }
+        }
         uploader = built
         return built
     }

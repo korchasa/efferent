@@ -22,6 +22,12 @@ import os
 /// `ack` in the response, not to the highest sequence number we happened to
 /// send. A service that accepted half a batch reports half, and the rest goes
 /// again.
+///
+/// **One acknowledged batch pulls the next.** A send ships `batchSize` lines and
+/// no more, so without this the outbox would only drain as fast as something
+/// else asked it to — which during the first export looks exactly like a stall
+/// at a round number. The chain stops the moment a batch fails or the service
+/// stops moving its mark, so a service stuck on one number cannot be hammered.
 public final class Uploader: NSObject {
     public struct Configuration {
         /// Lines per request. Enough to be worth a round trip, small enough to
@@ -68,6 +74,20 @@ public final class Uploader: NSObject {
     /// transfers; called once the session says it has reported everything.
     public var backgroundEventsFinished: (() -> Void)?
 
+    /// Called after every acknowledgement, so a screen showing the counters can
+    /// follow along. The confirmation mark moves on the session's delegate
+    /// queue, far away from any view, and without this the numbers on screen
+    /// only change when the screen happens to reappear.
+    public var didAcknowledge: (() -> Void)?
+
+    /// Guards against two batches in the air at once. A flag rather than a look
+    /// at `session.allTasks`, because the next batch is started from the
+    /// completion of the previous one, and at that moment the finished task may
+    /// still be listed — which would refuse the send and leave the outbox
+    /// standing.
+    private let inFlightLock = NSLock()
+    private var inFlight = false
+
     private lazy var session: URLSession = {
         let config = URLSessionConfiguration.background(withIdentifier: configuration.sessionIdentifier)
         // The data is small and the point of the app is freshness, so let it go
@@ -94,21 +114,48 @@ public final class Uploader: NSObject {
 
     /// Hand the next batch to the system. Returns as soon as it is queued.
     public func send() async throws -> Outcome {
-        guard await session.allTasks.isEmpty else { return .alreadyInFlight }
+        // A transfer the daemon carried on with while the app was dead is still
+        // running, and only shows up here.
+        let carriedOver = await session.allTasks.contains {
+            $0.state == .running || $0.state == .suspended
+        }
+        guard claimInFlight(unless: carriedOver) else { return .alreadyInFlight }
 
-        let batch = try store.pending(limit: configuration.batchSize)
-        guard let first = batch.first, let last = batch.last else { return .nothingToSend }
+        do {
+            let batch = try store.pending(limit: configuration.batchSize)
+            guard let first = batch.first, let last = batch.last else {
+                releaseInFlight()
+                return .nothingToSend
+            }
 
-        let body = try seal(batch, seqFrom: first.seq, seqTo: last.seq)
-        let file = try stage(body)
-        let request = try signedRequest(body: body, seqFrom: first.seq, seqTo: last.seq)
+            let body = try seal(batch, seqFrom: first.seq, seqTo: last.seq)
+            let file = try stage(body)
+            let request = try signedRequest(body: body, seqFrom: first.seq, seqTo: last.seq)
 
-        let task = session.uploadTask(with: request, fromFile: file)
-        stagedFiles[task.taskIdentifier] = file
-        task.resume()
+            let task = session.uploadTask(with: request, fromFile: file)
+            stagedFiles[task.taskIdentifier] = file
+            task.resume()
 
-        log.info("queued \(batch.count) lines through seq \(last.seq)")
-        return .scheduled(lines: batch.count, throughSeq: last.seq)
+            log.info("queued \(batch.count) lines through seq \(last.seq)")
+            return .scheduled(lines: batch.count, throughSeq: last.seq)
+        } catch {
+            releaseInFlight()
+            throw error
+        }
+    }
+
+    private func claimInFlight(unless carriedOver: Bool) -> Bool {
+        inFlightLock.lock()
+        defer { inFlightLock.unlock() }
+        guard !inFlight, !carriedOver else { return false }
+        inFlight = true
+        return true
+    }
+
+    private func releaseInFlight() {
+        inFlightLock.lock()
+        inFlight = false
+        inFlightLock.unlock()
     }
 
     /// Restart a transfer the system reported as finished while the app was not
@@ -184,6 +231,9 @@ extension Uploader: URLSessionDataDelegate {
         if let staged = stagedFiles.removeValue(forKey: task.taskIdentifier) {
             try? FileManager.default.removeItem(at: staged)
         }
+        // Before anything that can return early, or the next batch can never
+        // start and the outbox stands still until something else prods it.
+        releaseInFlight()
 
         if let error {
             // Nothing to undo: the mark has not moved, so the same lines go out
@@ -200,10 +250,20 @@ extension Uploader: URLSessionDataDelegate {
         }
 
         do {
+            let markBefore = try store.stats().acknowledgedSeq
             let ack = try JSONDecoder().decode(Acknowledgement.self, from: body)
             try store.acknowledge(through: ack.ack)
             let removed = try store.prune(confirmedBefore: Date().addingTimeInterval(-configuration.retention))
-            log.info("confirmed through seq \(ack.ack), pruned \(removed) rows")
+            let after = try store.stats()
+            log.info("confirmed through seq \(ack.ack), pruned \(removed) rows, \(after.pending) waiting")
+            didAcknowledge?()
+
+            // Only chain on real progress. A service that keeps answering with
+            // the same number would otherwise be sent the same batch forever,
+            // as fast as the network allows.
+            if ack.ack > markBefore, after.pending > 0 {
+                Task { [weak self] in _ = try? await self?.send() }
+            }
         } catch {
             log.error("could not apply acknowledgement: \(String(describing: error), privacy: .public)")
         }
