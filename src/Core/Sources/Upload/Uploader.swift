@@ -58,12 +58,16 @@ public final class Uploader: NSObject {
     public enum UploadError: Error, Equatable {
         case staging(String)
         case emptyBatch
+        /// The archive could not say how far it goes, so where to start counting
+        /// is unknown. Sending anyway is what silently loses a batch.
+        case archiveUnreachable(Int)
     }
 
     private let configuration: Configuration
     private let destination: Destination
     private let store: Store
     private let identity: DeviceIdentity
+    private let archiveHighestSeq: (Destination) async throws -> Int64
     private let log = Logger(subsystem: "dev.korchasa.efferent", category: "upload")
 
     /// Touched only on `delegateQueue`, which is serial.
@@ -103,17 +107,30 @@ public final class Uploader: NSObject {
         configuration: Configuration = Configuration(),
         destination: Destination,
         store: Store,
-        identity: DeviceIdentity = DeviceIdentity()
+        identity: DeviceIdentity = DeviceIdentity(),
+        // Injectable so a test can exercise the send path without a service to
+        // ask. Nothing else overrides it.
+        archiveHighestSeq: @escaping (Destination) async throws -> Int64 = Uploader.highestSeq
     ) {
         self.configuration = configuration
         self.destination = destination
         self.store = store
         self.identity = identity
+        self.archiveHighestSeq = archiveHighestSeq
         super.init()
     }
 
     /// Hand the next batch to the system. Returns as soon as it is queued.
     public func send() async throws -> Outcome {
+        // Where to start counting, before anything is counted. A reinstalled app
+        // begins at 1 again and would claim ranges the archive already has —
+        // which the service answers with an `ack` and then quietly ignores,
+        // because its stored batches cannot be rewritten. This throws when the
+        // archive cannot be reached: sending on a guess is what loses data.
+        if try store.stats().acknowledgedSeq == 0 {
+            try await store.adoptNumbering(after: archiveHighestSeq(destination))
+        }
+
         // A transfer the daemon carried on with while the app was dead is still
         // running, and only shows up here.
         let carriedOver = await session.allTasks.contains {
@@ -156,6 +173,19 @@ public final class Uploader: NSObject {
         inFlightLock.lock()
         inFlight = false
         inFlightLock.unlock()
+    }
+
+    /// The highest sequence number the archive holds, or 0 if it holds nothing.
+    ///
+    /// An ordinary session on purpose: this is a small GET whose answer decides
+    /// the very next step, while a background session hands its response to a
+    /// delegate at some unrelated later moment.
+    public static func highestSeq(of destination: Destination) async throws -> Int64 {
+        let (data, response) = try await URLSession.shared.data(from: destination.statsURL)
+        guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
+            throw UploadError.archiveUnreachable((response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+        return try JSONDecoder().decode(ArchiveStats.self, from: data).highestSeq
     }
 
     /// Restart a transfer the system reported as finished while the app was not
@@ -278,4 +308,10 @@ extension Uploader: URLSessionDataDelegate {
 /// What the service answers: the highest sequence number it has durably stored.
 struct Acknowledgement: Decodable {
     let ack: Int64
+}
+
+/// The part of `/stats` this side cares about. The rest — object count, bytes —
+/// is for a person looking at the archive, not for the phone.
+struct ArchiveStats: Decodable {
+    let highestSeq: Int64
 }

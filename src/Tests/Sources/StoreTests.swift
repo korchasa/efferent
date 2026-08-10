@@ -128,4 +128,48 @@ final class StoreTests: XCTestCase {
         let readBack = try XCTUnwrap(store.backfillProgress(for: "steps"))
         XCTAssertEqual(readBack.timeIntervalSince1970, reached.timeIntervalSince1970, accuracy: 0.001)
     }
+
+    /// A reinstalled app counts from 1 again while the archive already holds
+    /// batches under those numbers — and the service names a stored batch by its
+    /// sequence range, so those first batches would claim ranges that exist and
+    /// be dropped by the rule that keeps the past from being rewritten. Nothing
+    /// reports an error: the service answers `ack` either way.
+    func testNumberingStartsAboveWhatTheArchiveAlreadyHolds() throws {
+        let store = try Store.inMemory()
+        try store.commit(events: [
+            event("a", ["value": "1"]),
+            event("b", ["value": "2"]),
+        ])
+
+        try store.adoptNumbering(after: 1000)
+
+        XCTAssertEqual(try store.pending(limit: 10).map(\.seq), [1001, 1002])
+        try store.commit(events: [event("c", ["value": "3"])])
+        XCTAssertEqual(try store.pending(limit: 10).map(\.seq), [1001, 1002, 1003])
+    }
+
+    /// Called on every send until the first confirmation arrives, so it has to
+    /// be safe to repeat: a second shift would leave the outbox stranded further
+    /// and further above the archive for no reason.
+    func testAdoptingTheSameNumberingTwiceChangesNothing() throws {
+        let store = try Store.inMemory()
+        try store.commit(events: [event("a", ["value": "1"])])
+
+        try store.adoptNumbering(after: 1000)
+        try store.adoptNumbering(after: 1000)
+
+        XCTAssertEqual(try store.pending(limit: 10).map(\.seq), [1001])
+    }
+
+    /// After the first confirmation the numbers on this device are the ones the
+    /// service is answering about. Moving them then would break the mark.
+    func testNumberingIsLeftAloneOnceSomethingHasBeenConfirmed() throws {
+        let store = try Store.inMemory()
+        try store.commit(events: [event("a", ["value": "1"]), event("b", ["value": "2"])])
+        try store.acknowledge(through: 1)
+
+        try store.adoptNumbering(after: 1000)
+
+        XCTAssertEqual(try store.pending(limit: 10).map(\.seq), [2])
+    }
 }

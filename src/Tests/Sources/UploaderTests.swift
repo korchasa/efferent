@@ -9,7 +9,9 @@ import XCTest
 /// good, and it stops it at a round number, which reads like a server problem
 /// rather than a client one.
 final class UploaderTests: XCTestCase {
-    private func makeUploader(store: Store, identifier: String) throws -> Uploader {
+    private func makeUploader(
+        store: Store, identifier: String, archiveHighestSeq: Int64 = 0
+    ) throws -> Uploader {
         try Uploader(
             // A session identifier per test: background sessions are global to
             // the process, and two tests sharing one would share its tasks.
@@ -19,7 +21,8 @@ final class UploaderTests: XCTestCase {
                 readingPublicKey: WireTests.readingPublicKey
             ),
             store: store,
-            identity: DeviceIdentity()
+            identity: DeviceIdentity(),
+            archiveHighestSeq: { _ in archiveHighestSeq }
         )
     }
 
@@ -35,5 +38,21 @@ final class UploaderTests: XCTestCase {
 
         XCTAssertEqual(first, .nothingToSend)
         XCTAssertEqual(second, .nothingToSend, "the claim outlived a send that had nothing to do")
+    }
+
+    /// A reinstalled app has an outbox numbered from 1 and an archive that
+    /// already holds those numbers. The first send is the last moment to notice.
+    func testTheFirstSendCountsAboveWhatTheArchiveHolds() async throws {
+        let store = try Store.inMemory()
+        try store.commit(events: [
+            Event(id: "a", kind: .aggregate, payload: Event.payload(["value": "1"])),
+        ])
+        let uploader = try makeUploader(
+            store: store, identifier: "test.numbering.\(UUID().uuidString)", archiveHighestSeq: 1000
+        )
+
+        let outcome = try await uploader.send()
+
+        XCTAssertEqual(outcome, .scheduled(lines: 1, throughSeq: 1001))
     }
 }

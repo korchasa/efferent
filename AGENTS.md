@@ -37,6 +37,13 @@ This file is the rulebook.
 - **The service is an archive, not a letterbox.** It never overwrites a stored batch and never
   deletes one. A repeated range is acknowledged and ignored, so a device that missed an answer stops
   retrying without history changing underneath it.
+- **Sequence numbers are a device counter, and the archive names batches by
+  them.** A reinstall resets the counter to 1 while the archive still holds
+  those numbers, so the fresh device's first batches claim ranges that exist and
+  are dropped by the no-overwrite rule above — acknowledged, and gone. Before its
+  first confirmed batch the device asks `/stats` and counts on from the archive's
+  highest number. Never let a send proceed when that answer is unavailable: a
+  guess here loses data with a 200 in the log.
 - **Anything that lists R2 must page.** R2 answers a listing with at most one page and a `truncated`
   flag; code that fetches once and filters afterwards reports everything past that page as nothing at
   all, and reports it as success. Follow the cursor until it runs out, and cap what is unbounded

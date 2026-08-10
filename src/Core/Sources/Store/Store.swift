@@ -178,6 +178,36 @@ public final class Store {
         }
     }
 
+    /// Continue numbering above what the archive already holds.
+    ///
+    /// Sequence numbers are this device's own counter, and a reinstall resets it
+    /// to 1 — but the service names a stored batch by its sequence range and
+    /// refuses to rewrite one it already has. So a fresh install's first batches
+    /// claim ranges that exist, get acknowledged, and never land. Shifting the
+    /// whole outbox past the archive's highest number keeps the two in step, and
+    /// costs one request before the first send.
+    ///
+    /// Only before the first confirmation. After that these are the numbers the
+    /// service is answering about, and moving them would strand the mark.
+    public func adoptNumbering(after highest: Int64) throws {
+        try dbQueue.write { db in
+            guard try Self.int(db, MetaKey.acknowledgedSeq.rawValue) ?? 0 == 0 else { return }
+            let nextSeq = try Self.int(db, MetaKey.nextSeq.rawValue) ?? 1
+            let lowest = try Int64.fetchOne(db, sql: "SELECT MIN(seq) FROM outbox") ?? nextSeq
+            let offset = highest + 1 - lowest
+            // Already past the archive: a repeated call, or a bucket with
+            // nothing in it yet.
+            guard offset > 0 else { return }
+
+            // Through negative numbers, because the index on seq is unique and a
+            // single "add the offset" can land a row on a number another row
+            // still holds. Nothing positive collides with a negative.
+            try db.execute(sql: "UPDATE outbox SET seq = -seq")
+            try db.execute(sql: "UPDATE outbox SET seq = -seq + ?", arguments: [offset])
+            try Self.setInt(db, MetaKey.nextSeq.rawValue, nextSeq + offset)
+        }
+    }
+
     /// Drop confirmed events last touched before `cutoff`, returning how many went.
     ///
     /// Confirmed rows are not deleted straight away on purpose: they are what

@@ -96,6 +96,13 @@ Three properties make that true rather than merely intended:
 Nothing is ever deleted from the service. The phone prunes its own outbox after a month because it
 only keeps what it might still have to re-send, and it is the service, not the phone, that remembers.
 
+That the past cannot be rewritten has a consequence on the other end. Sequence numbers are the
+device's own counter, and a reinstalled app starts it at 1 again while the archive still holds
+batches under those numbers — so the fresh device's first batches would claim ranges that exist and
+be quietly dropped. Before its first confirmed batch the phone therefore asks `/stats` and carries on
+counting above what is already there. If it cannot get an answer it does not send: a guess about
+where to start is how a batch disappears with a 200 in the log.
+
 ## The reader's mirror
 
 Walking the whole archive to answer "how did I sleep last week" would be absurd, so the reading side
