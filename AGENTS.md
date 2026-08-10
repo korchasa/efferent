@@ -34,6 +34,14 @@ This file is the rulebook.
   hat. A test enforces this.
 - **A deletion reuses the id of the sample it removes.** Same id, different kind, so the receiver
   drops the record without keeping a lookup table.
+- **The manifest is the only thing the service may read, and it holds no values.** Sequence number,
+  kind, metric, interval — nothing else. Adding an id, a value or a source to it hands the service
+  the data the encryption exists to keep from it, and nothing would fail to make that visible. It
+  travels inside the signed body, never beside it: sent as a header it would be something a network
+  could rewrite without breaking a signature.
+- **The index points at objects; it never becomes one.** Rows go in after the object is stored, and
+  a `find` answers with batch names and counts. The moment it starts returning readings, the service
+  has become a thing that knows them.
 - **The service is an archive, not a letterbox.** It never overwrites a stored batch and never
   deletes one. A repeated range is acknowledged and ignored, so a device that missed an answer stops
   retrying without history changing underneath it.

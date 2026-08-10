@@ -15,6 +15,7 @@ import { SCHEME, systemToolPath, WORKSPACE } from "./config.ts";
 import { generate } from "./generate.ts";
 import { associatedData, open } from "../protocol/sealedbox.ts";
 import { decompress } from "../protocol/framing.ts";
+import { readManifest, unframe } from "../protocol/manifest.ts";
 import { canonicalRequest, fromBase64url, verifyUpload } from "../protocol/signing.ts";
 import { bucketId } from "../protocol/ids.ts";
 
@@ -63,8 +64,23 @@ const privateKey = await crypto.subtle.importKey(
 );
 
 const blob = fromBase64url(emitted.blob);
+// The body is framed: a manifest the service reads, then the sealed blob only
+// this side can. Both halves are inside what was signed.
+const parts = unframe(blob);
+expect(parts.manifest !== null, "the phone sent a body with no manifest in front of it");
+const manifest = await readManifest(parts.manifest!);
+expect(manifest.length === 2, `the manifest describes ${manifest.length} events, expected 2`);
+expect(
+  manifest[0].metric === "steps" && manifest[0].start === 1_754_557_200,
+  `the manifest's first entry is wrong: ${JSON.stringify(manifest[0])}`,
+);
+expect(
+  manifest[1].type === "health.delete" && (manifest[1].start ?? null) === null,
+  `a deletion has no interval, yet the manifest gave it one: ${JSON.stringify(manifest[1])}`,
+);
+
 const plaintext = await decompress(
-  await open(privateKey, readingPublic, blob, associatedData(bucket, SEQ_FROM, SEQ_TO)),
+  await open(privateKey, readingPublic, parts.sealed, associatedData(bucket, SEQ_FROM, SEQ_TO)),
 );
 
 const lines = new TextDecoder().decode(plaintext).trim().split("\n").map((line) =>
@@ -134,7 +150,12 @@ if (postTo) {
   );
   const readBack = new TextDecoder().decode(
     await decompress(
-      await open(privateKey, readingPublic, stored, associatedData(bucket, SEQ_FROM, SEQ_TO)),
+      await open(
+        privateKey,
+        readingPublic,
+        unframe(stored).sealed,
+        associatedData(bucket, SEQ_FROM, SEQ_TO),
+      ),
     ),
   );
   expect(
