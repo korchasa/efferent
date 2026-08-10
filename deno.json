@@ -9,7 +9,7 @@
   "tasks": {
     "check": "deno run -A scripts/check.ts",
     "test": "deno run -A scripts/test.ts",
-    "test:protocol": "deno test -A protocol/",
+    "test:protocol": "deno test -A protocol/ server/",
     "dist": "deno run -A scripts/dist.ts",
     "fmt": "deno run -A scripts/fmt.ts",
     "generate": "deno run -A scripts/generate.ts",
