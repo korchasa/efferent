@@ -72,6 +72,11 @@ enum MetaKey: String {
     case nextSeq = "outbox.nextSeq"
     /// Highest sequence number the server has confirmed. Starts at 0.
     case acknowledgedSeq = "outbox.acknowledgedSeq"
+    /// When that mark last moved, in seconds since 1970. The screen needs one
+    /// fact above all others — is this still working — and "nothing waiting"
+    /// cannot tell "nothing new to send" apart from "stopped a week ago". A
+    /// time can.
+    case acknowledgedAt = "outbox.acknowledgedAt"
 
     /// How far back the first full export has walked for one metric.
     static func backfillProgress(metric: String) -> String {

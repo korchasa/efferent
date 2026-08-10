@@ -75,6 +75,44 @@ The server answers `{"ack": <seq>}` with the highest sequence number it has dura
 device moves its mark to that, not to what it happened to send — a half-accepted batch simply goes
 again.
 
+## What the service keeps
+
+Everything, for good. The service is not a letterbox that empties when the reader collects — it is
+where the history lives, so an agent can ask a question months later without the phone being awake,
+reachable, or still owned by the same person.
+
+Three properties make that true rather than merely intended:
+
+- **A stored batch is never replaced.** A device that did not hear the answer sends the same range
+  again; the service acknowledges it and leaves what it already has. An archive whose past can change
+  is not an archive.
+- **The listing pages.** `GET /b/<bucket>/objects?after=<seq>` returns a run of batches and a `next`
+  cursor, and the walk continues until `next` is null. A listing that could only ever answer with its
+  first page would report the rest of the history as nothing at all, and would do it silently.
+- **`GET /b/<bucket>/stats`** says how much is there — object count, bytes, lowest and highest
+  sequence number — without handing any of it over. It is encrypted anyway; this is for deciding
+  whether to fetch.
+
+Nothing is ever deleted from the service. The phone prunes its own outbox after a month because it
+only keeps what it might still have to re-send, and it is the service, not the phone, that remembers.
+
+## The reader's mirror
+
+Walking the whole archive to answer "how did I sleep last week" would be absurd, so the reading side
+keeps a local copy and moves it forward:
+
+```bash
+deno task efferent sync      # fetch what is new, decrypt it, fold it in
+deno task efferent status    # what the archive holds, what the mirror holds
+deno task efferent query --type health.sample --metric sleep --since 2026-08-01
+```
+
+`sync` remembers its cursor in `.efferent/mirror.json` and saves after every batch, so an interrupted
+run keeps what it got and the next one starts where it stopped. Events land in
+`.efferent/events.ndjson`, keyed by the id each fact carries, so a re-sent bucket total replaces the
+old value instead of appearing twice — and a `health.delete` removes it. `query` reads that file and
+never touches the network.
+
 ## Who can read it
 
 Nobody but you, and the service holding the data least of all.
@@ -130,7 +168,8 @@ deno task check
 - `icons` — re-render the app icons from `documents/icon.svg`.
 - `server:dev` / `server:deploy` — the bucket service, locally or to Cloudflare.
 - `interop` — check that the Swift and TypeScript sides still make the same bytes.
-- `efferent` — the reading side: `keygen`, `pair` (prints the code to scan), `send`, `read`.
+- `efferent` — the reading side: `keygen`, `pair` (prints the code to scan), `sync`, `status`,
+  `query`, plus `send` and `read` for poking at a single batch by hand.
 
 Trying the whole path without a phone:
 
