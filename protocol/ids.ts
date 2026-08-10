@@ -72,6 +72,20 @@ export function parseObjectName(name: string): { seqFrom: number; seqTo: number 
   return { seqFrom: Number(match[1]), seqTo: Number(match[2]) };
 }
 
+/**
+ * The key to start a listing after, for a reader that already has everything up
+ * to `seq`.
+ *
+ * This is what makes the archive walkable. A listing that fetches a page and
+ * then filters it in the service can only ever return the first page: once a
+ * bucket holds more objects than a page, everything past it is invisible, and
+ * the symptom is an empty answer rather than an error. Skipping in the store
+ * itself has no such ceiling.
+ */
+export function listingStartAfter(bucket: string, seq: number): string {
+  return `${bucket}/${DATA_PREFIX}${pad(seq)}`;
+}
+
 /** 17 digits holds every value up to Number.MAX_SAFE_INTEGER. */
 function pad(value: number): string {
   return String(value).padStart(17, "0");

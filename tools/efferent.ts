@@ -3,9 +3,13 @@
  *
  * This is where the reading key lives. It never leaves this machine: the phone
  * only ever gets the public half, and the bucket service only gets ciphertext.
- * Later this grows into the tools an agent calls; for now it is what proves the
- * transfer works end to end, and `send` stands in for a phone that does not
- * exist yet.
+ *
+ * The service is an archive, not a letterbox, so this tool is a mirror of it
+ * rather than a viewer. `sync` walks everything new, decrypts it and folds it
+ * into a local file; `query` answers from that file with the network switched
+ * off. An agent that wants "how did I sleep last week" should be able to ask
+ * without downloading a year of history first, and without the machine holding
+ * the reading key being awake at the moment the phone happened to send.
  */
 
 import { bucketId, parseObjectName } from "../protocol/ids.ts";
@@ -26,7 +30,29 @@ interface WriterKey {
   writerPublic: string;
 }
 
+/** Where the mirror stopped, so the next sync asks only for what came after. */
+interface MirrorState {
+  endpoint: string;
+  cursor: number;
+  syncedAt: string;
+}
+
+/** One fact, as it left the phone, plus the sequence number it travelled under. */
+interface Event {
+  id: string;
+  seq: number;
+  v: number;
+  type: string;
+  metric?: string;
+  bucket?: string;
+  start?: string;
+  end?: string;
+  [key: string]: unknown;
+}
+
 const HOME = Deno.env.get("EFFERENT_HOME") ?? ".efferent";
+const EVENTS = "events.ndjson";
+const STATE = "mirror.json";
 
 if (import.meta.main) await main(Deno.args);
 
@@ -43,6 +69,12 @@ async function main(args: string[]): Promise<void> {
       return await send(requireOption(options, "url"), Number(options.count ?? "3"));
     case "read":
       return await read(requireOption(options, "url"), Number(options.after ?? "0"));
+    case "sync":
+      return await sync(options.url);
+    case "query":
+      return await query(options);
+    case "status":
+      return await status(options.url);
     default:
       console.error(
         [
@@ -50,7 +82,15 @@ async function main(args: string[]): Promise<void> {
           "  efferent keygen                       create the reading key pair",
           "  efferent pair --url <endpoint>        print what the phone needs",
           "  efferent send --url <endpoint>        pretend to be a phone",
-          "  efferent read --url <endpoint>        fetch and decrypt",
+          "  efferent read --url <endpoint>        fetch and decrypt, straight to stdout",
+          "  efferent sync [--url <endpoint>]      fold everything new into the local mirror",
+          "  efferent status [--url <endpoint>]    what the archive holds, and how far the mirror got",
+          "  efferent query [filters]              answer from the mirror, offline",
+          "",
+          "query filters:",
+          "  --type <health.agg|health.sample>    --metric <steps|sleep|…>",
+          "  --bucket <hour|day>                  --since <ISO date>  --until <ISO date>",
+          "  --limit <n>                          --format <ndjson|summary>",
         ].join("\n"),
       );
       Deno.exit(2);
@@ -147,6 +187,128 @@ async function send(url: string, count: number): Promise<void> {
 }
 
 async function read(url: string, after: number): Promise<void> {
+  const reader = await openArchive(url);
+  for await (const batch of reader.walk(after)) {
+    await Deno.stdout.write(
+      new TextEncoder().encode(batch.lines.map(JSON.stringify).join("\n") + "\n"),
+    );
+  }
+}
+
+/**
+ * Fold everything new into the local mirror.
+ *
+ * Runs from wherever the mirror stopped, so calling it twice in a row costs one
+ * listing and nothing else. Safe to interrupt: the cursor only moves once a
+ * batch has been written down.
+ */
+async function sync(url?: string): Promise<void> {
+  const state = await loadState(url);
+  const reader = await openArchive(state.endpoint);
+
+  const events = await loadEvents();
+  const before = events.size;
+  let batches = 0;
+  let cursor = state.cursor;
+
+  for await (const batch of reader.walk(cursor)) {
+    for (const event of batch.lines) apply(events, event);
+    cursor = batch.seqTo;
+    batches++;
+    // Written after every batch rather than at the end: a sync interrupted
+    // halfway should cost the batches it did not reach, not the ones it did.
+    await saveEvents(events);
+    await write(STATE, { ...state, cursor, syncedAt: new Date().toISOString() });
+  }
+
+  console.log(
+    batches === 0
+      ? `already up to date at seq ${cursor}, ${events.size} events`
+      : `${batches} batch${batches === 1 ? "" : "es"} folded in: ${events.size} events ` +
+        `(${events.size - before >= 0 ? "+" : ""}${events.size - before}), now at seq ${cursor}`,
+  );
+}
+
+/** What the archive holds and how much of it is mirrored here. */
+async function status(url?: string): Promise<void> {
+  const state = await loadState(url);
+  const reading = await load<ReadingKey>("reading-key.json");
+  const bucket = await bucketId(fromBase64url(reading.readingPublic));
+
+  const remote = await fetchJSON<{
+    exists: boolean;
+    objects: number;
+    bytes: number;
+    lowestSeq: number | null;
+    highestSeq: number;
+    complete: boolean;
+  }>(`${state.endpoint}/b/${bucket}/stats`);
+
+  const events = await loadEvents();
+  const spans = [...events.values()].map((event) => event.start).filter((s): s is string => !!s)
+    .sort();
+
+  console.log(`bucket   ${bucket}`);
+  console.log(
+    `archive  ${remote.objects}${remote.complete ? "" : "+"} batches, ` +
+      `${(remote.bytes / 1024).toFixed(0)} KiB, up to seq ${remote.highestSeq}`,
+  );
+  console.log(
+    `mirror   ${events.size} events, up to seq ${state.cursor}` +
+      (state.cursor < remote.highestSeq
+        ? `  — ${remote.highestSeq - state.cursor} behind, run sync`
+        : "  — up to date"),
+  );
+  if (spans.length > 0) {
+    console.log(`covering ${spans[0].slice(0, 10)} … ${spans[spans.length - 1].slice(0, 10)}`);
+  }
+}
+
+/** Answer from the mirror. No network, so it works on a plane and it is fast
+ * enough to call in a loop. */
+async function query(options: Record<string, string>): Promise<void> {
+  const events = [...(await loadEvents()).values()]
+    .filter((event) => !options.type || event.type === options.type)
+    .filter((event) => !options.metric || event.metric === options.metric)
+    .filter((event) => !options.bucket || event.bucket === options.bucket)
+    .filter((event) => !options.since || (event.start ?? "") >= options.since)
+    .filter((event) => !options.until || (event.start ?? "") <= options.until)
+    .sort((left, right) =>
+      (left.start ?? "").localeCompare(right.start ?? "") || left.seq - right.seq
+    );
+
+  const limited = options.limit ? events.slice(0, Number(options.limit)) : events;
+
+  if (options.format === "summary") {
+    const counts = new Map<string, number>();
+    for (const event of events) {
+      const key = `${event.type}${event.metric ? ` ${event.metric}` : ""}${
+        event.bucket ? `/${event.bucket}` : ""
+      }`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    console.log(`${events.length} events`);
+    for (const [key, count] of [...counts].sort((a, b) => b[1] - a[1])) {
+      console.log(`  ${String(count).padStart(7)}  ${key}`);
+    }
+    return;
+  }
+
+  const out = limited.map((event) => JSON.stringify(event)).join("\n");
+  if (out) console.log(out);
+}
+
+// MARK: - The archive, as something to walk
+
+/**
+ * A reader over the whole bucket, page by page.
+ *
+ * The paging matters more than it looks. A listing that fetches one page and
+ * filters it can only ever return the beginning of an archive, and it reports
+ * that as an empty answer — so a reader that does not follow `next` quietly
+ * stops seeing data the moment the history outgrows a page.
+ */
+async function openArchive(endpoint: string) {
   const reading = await load<ReadingKey>("reading-key.json");
   const readingPublic = fromBase64url(reading.readingPublic);
   const bucket = await bucketId(readingPublic);
@@ -158,30 +320,110 @@ async function read(url: string, after: number): Promise<void> {
     ["deriveBits"],
   );
 
-  const listing = await fetchJSON<{ objects: { name: string }[] }>(
-    `${url}/b/${bucket}/objects?after=${after}`,
-  );
+  async function* walk(after: number) {
+    let cursor = after;
+    for (;;) {
+      const listing = await fetchJSON<
+        { objects: { name: string }[]; next: number | null }
+      >(`${endpoint}/b/${bucket}/objects?after=${cursor}`);
+      if (listing.objects.length === 0) return;
 
-  for (const object of listing.objects) {
-    const range = parseObjectName(object.name);
-    if (!range) throw new Error(`the service returned an object it cannot name: ${object.name}`);
+      for (const object of listing.objects) {
+        const range = parseObjectName(object.name);
+        if (!range) {
+          throw new Error(`the service returned an object it cannot name: ${object.name}`);
+        }
 
-    const response = await fetch(`${url}/b/${bucket}/o/${object.name}`);
-    if (!response.ok) {
-      throw new Error(`${object.name}: ${response.status} ${await response.text()}`);
+        const response = await fetch(`${endpoint}/b/${bucket}/o/${object.name}`);
+        if (!response.ok) {
+          throw new Error(`${object.name}: ${response.status} ${await response.text()}`);
+        }
+
+        const plaintext = await decompress(
+          await open(
+            privateKey,
+            readingPublic,
+            new Uint8Array(await response.arrayBuffer()),
+            associatedData(bucket, range.seqFrom, range.seqTo),
+          ),
+        );
+        const lines = new TextDecoder().decode(plaintext).trim().split("\n")
+          .filter((line) => line.length > 0)
+          .map((line) => JSON.parse(line) as Event);
+
+        yield { ...range, lines };
+        cursor = range.seqTo;
+      }
+
+      if (listing.next === null) return;
+      cursor = listing.next;
     }
-
-    const plaintext = await open(
-      privateKey,
-      readingPublic,
-      new Uint8Array(await response.arrayBuffer()),
-      associatedData(bucket, range.seqFrom, range.seqTo),
-    );
-    await Deno.stdout.write(await decompress(plaintext));
   }
+
+  return { bucket, walk };
+}
+
+/**
+ * Fold one event into the mirror.
+ *
+ * A deletion carries the id of the sample it removes and nothing else, so it is
+ * applied rather than stored — keeping it would mean every reader had to know
+ * to look for it, which is exactly the bookkeeping the shared id was meant to
+ * avoid.
+ */
+function apply(events: Map<string, Event>, event: Event): void {
+  if (event.type === "health.delete") {
+    events.delete(event.id);
+    return;
+  }
+  events.set(event.id, event);
 }
 
 // MARK: - Storage
+
+async function loadState(url?: string): Promise<MirrorState> {
+  let stored: MirrorState | null = null;
+  try {
+    stored = await load<MirrorState>(STATE);
+  } catch {
+    stored = null;
+  }
+  const endpoint = url ?? stored?.endpoint;
+  if (!endpoint) {
+    console.error("error: --url is required the first time; after that it is remembered");
+    Deno.exit(2);
+  }
+  return { endpoint, cursor: stored?.cursor ?? 0, syncedAt: stored?.syncedAt ?? "" };
+}
+
+async function loadEvents(): Promise<Map<string, Event>> {
+  const events = new Map<string, Event>();
+  let text: string;
+  try {
+    text = await Deno.readTextFile(`${HOME}/${EVENTS}`);
+  } catch {
+    return events;
+  }
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    const event = JSON.parse(line) as Event;
+    events.set(event.id, event);
+  }
+  return events;
+}
+
+async function saveEvents(events: Map<string, Event>): Promise<void> {
+  const ordered = [...events.values()].sort((left, right) => left.seq - right.seq);
+  await Deno.mkdir(HOME, { recursive: true });
+  // Through a temporary file: a mirror truncated by an interrupted write would
+  // look like an archive that lost its history.
+  const temporary = `${HOME}/${EVENTS}.partial`;
+  await Deno.writeTextFile(
+    temporary,
+    ordered.map((event) => JSON.stringify(event)).join("\n") + "\n",
+  );
+  await Deno.rename(temporary, `${HOME}/${EVENTS}`);
+}
 
 async function loadOrCreateWriter(): Promise<WriterKey> {
   try {

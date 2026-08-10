@@ -1,5 +1,5 @@
 /**
- * The bucket service: an append-only store that cannot read what it holds.
+ * The bucket service: an append-only archive that cannot read what it holds.
  *
  * It does three things — check that a writer is the one who claimed the bucket,
  * keep blobs in sequence order, and hand them back. It never sees a key that
@@ -7,11 +7,18 @@
  *
  * There are no accounts and no registration. A bucket comes into existence on
  * its first write, and its name already proves who it belongs to.
+ *
+ * It is an archive rather than a letterbox: nothing here deletes, expires or
+ * overwrites, so a reader can come back months later and walk the whole history
+ * from the beginning. Two properties carry that promise, and both are easy to
+ * lose by accident — a write never replaces an object that already exists, and
+ * a listing skips in the store rather than filtering a page after the fact.
  */
 
 import {
   DATA_PREFIX,
   isBucketId,
+  listingStartAfter,
   objectKey,
   parseObjectName,
   signingKeyObject,
@@ -26,6 +33,9 @@ import {
 /** Room for a large batch; well under what a Worker can hold in memory. */
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 const MAX_OBJECTS_PER_PAGE = 200;
+/** How far `stats` will walk before it answers "at least this much". Bounded so
+ * that asking what is in an archive never costs more than a moment. */
+const STATS_PAGE_LIMIT = 20;
 
 /** Only the parts of R2 this service uses. Spelled out rather than pulled from
  * a types package, so the whole repository stays checkable without one. */
@@ -38,6 +48,7 @@ interface R2ObjectBody extends R2Object {
 }
 interface R2Bucket {
   get(key: string): Promise<R2ObjectBody | null>;
+  head(key: string): Promise<R2Object | null>;
   put(key: string, value: ArrayBuffer | Uint8Array): Promise<unknown>;
   list(
     options: { prefix?: string; startAfter?: string; limit?: number },
@@ -68,6 +79,9 @@ export default {
     }
     if (request.method === "GET" && segments.length === 3 && segments[2] === "objects") {
       return await listObjects(env, bucket, url);
+    }
+    if (request.method === "GET" && segments.length === 3 && segments[2] === "stats") {
+      return await describe(env, bucket);
     }
     if (request.method === "GET" && segments.length === 4 && segments[2] === "o") {
       return await fetchObject(env, bucket, segments[3]);
@@ -110,7 +124,11 @@ async function append(request: Request, env: Env, bucket: string): Promise<Respo
   // an unused bucket by presenting a key they do not hold.
   if (!registered) await env.BLOBS.put(signingKeyObject(bucket), claimed);
 
-  await env.BLOBS.put(objectKey(bucket, header.seqFrom, header.seqTo), body);
+  // Never replace what is already stored. A device that did not hear the answer
+  // sends the same range again, and it must be acknowledged rather than allowed
+  // to rewrite history — an archive whose past can change is not an archive.
+  const key = objectKey(bucket, header.seqFrom, header.seqTo);
+  if (!await env.BLOBS.head(key)) await env.BLOBS.put(key, body);
   return json({ ack: header.seqTo });
 }
 
@@ -119,9 +137,74 @@ async function listObjects(env: Env, bucket: string, url: URL): Promise<Response
   if (!Number.isSafeInteger(after) || after < 0) {
     return problem(400, "after must be a sequence number");
   }
+  const asked = Number(url.searchParams.get("limit") ?? MAX_OBJECTS_PER_PAGE);
+  if (!Number.isSafeInteger(asked) || asked < 1) return problem(400, "limit must be a count");
+  const limit = Math.min(asked, MAX_OBJECTS_PER_PAGE);
 
+  // Skipping in the store rather than filtering here is the whole reason a long
+  // history can be walked: a filtered page runs out at the first page and says
+  // so by returning nothing, which reads as "there is no more data".
+  const page = await listPage(env, bucket, after, limit);
+  return json({
+    objects: page.objects,
+    truncated: page.truncated,
+    // Where to continue. Following this until it comes back null is how a
+    // reader walks an archive of any size.
+    next: page.truncated && page.objects.length > 0
+      ? page.objects[page.objects.length - 1].seqTo
+      : null,
+  });
+}
+
+/** What is in here, without downloading it. Cheap enough for an agent to ask
+ * before deciding whether it needs anything at all. */
+async function describe(env: Env, bucket: string): Promise<Response> {
+  let objects = 0;
+  let bytes = 0;
+  let highestSeq = 0;
+  let lowestSeq: number | null = null;
+  let complete = true;
+
+  for (let page = 0; page < STATS_PAGE_LIMIT; page++) {
+    const listing = await listPage(env, bucket, highestSeq, MAX_OBJECTS_PER_PAGE);
+    for (const object of listing.objects) {
+      objects++;
+      bytes += object.size;
+      if (lowestSeq === null) lowestSeq = object.seqFrom;
+      highestSeq = Math.max(highestSeq, object.seqTo);
+    }
+    if (!listing.truncated || listing.objects.length === 0) break;
+    if (page === STATS_PAGE_LIMIT - 1) complete = false;
+  }
+
+  const claimed = await env.BLOBS.head(signingKeyObject(bucket));
+  return json({
+    exists: claimed !== null || objects > 0,
+    objects,
+    bytes,
+    lowestSeq,
+    highestSeq,
+    // False when the archive is larger than this endpoint will walk; the
+    // numbers are then a floor, not a total. Saying so beats quietly rounding
+    // an archive down to the part that was convenient to count.
+    complete,
+  });
+}
+
+async function listPage(
+  env: Env,
+  bucket: string,
+  after: number,
+  limit: number,
+): Promise<
+  { objects: { name: string; size: number; seqFrom: number; seqTo: number }[]; truncated: boolean }
+> {
   const prefix = `${bucket}/${DATA_PREFIX}`;
-  const listing = await env.BLOBS.list({ prefix, limit: MAX_OBJECTS_PER_PAGE });
+  const listing = await env.BLOBS.list({
+    prefix,
+    startAfter: listingStartAfter(bucket, after),
+    limit,
+  });
 
   const objects = listing.objects
     .map((object) => {
@@ -130,9 +213,11 @@ async function listObjects(env: Env, bucket: string, url: URL): Promise<Response
       return range ? { name, size: object.size, ...range } : null;
     })
     .filter((entry) => entry !== null)
+    // `startAfter` is a string comparison, so the object whose range *ends* at
+    // `after` can still come back. It holds nothing new.
     .filter((entry) => entry.seqTo > after);
 
-  return json({ objects, truncated: listing.truncated });
+  return { objects, truncated: listing.truncated };
 }
 
 async function fetchObject(env: Env, bucket: string, name: string): Promise<Response> {
