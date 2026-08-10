@@ -200,13 +200,17 @@ public final class Uploader: NSObject {
         let lines = try NDJSON.body(batch)
         guard !lines.isEmpty else { throw UploadError.emptyBatch }
 
-        return try SealedBox.seal(
+        let sealed = try SealedBox.seal(
             readingPublicKey: destination.readingPublicKey,
             plaintext: Deflate.compress(lines),
             associatedData: CanonicalRequest.associatedData(
                 bucket: destination.bucket, seqFrom: seqFrom, seqTo: seqTo
             )
         )
+        // The manifest goes inside the body, so the signature over the body
+        // covers it. Sent beside it, it would be something a network could
+        // rewrite without breaking anything visible.
+        return try Manifest.body(entries: Manifest.entries(for: batch), sealed: sealed)
     }
 
     private func signedRequest(body: Data, seqFrom: Int64, seqTo: Int64) throws -> URLRequest {

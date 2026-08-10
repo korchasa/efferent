@@ -37,15 +37,20 @@ final class InteropTests: XCTestCase {
             ),
         ])
 
-        let lines = try NDJSON.body(store.pending(limit: 10))
+        let batch = try store.pending(limit: 10)
+        let lines = try NDJSON.body(batch)
         let associatedData = CanonicalRequest.associatedData(
             bucket: Self.bucket, seqFrom: Self.seqFrom, seqTo: Self.seqTo
         )
-        let blob = try SealedBox.seal(
+        let sealed = try SealedBox.seal(
             readingPublicKey: WireTests.readingPublicKey,
             plaintext: Deflate.compress(lines),
             associatedData: associatedData
         )
+        // The framed body, not the bare sealed blob: the manifest in front of it
+        // is what the service reads and what the signature has to cover, so it
+        // is part of what the two languages must agree about.
+        let blob = try Manifest.body(entries: Manifest.entries(for: batch), sealed: sealed)
 
         // A key made here rather than fetched from the Keychain: the point is
         // the algorithm and the canonical string, not where the key is kept.

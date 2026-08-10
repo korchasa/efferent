@@ -96,6 +96,27 @@ Three properties make that true rather than merely intended:
 Nothing is ever deleted from the service. The phone prunes its own outbox after a month because it
 only keeps what it might still have to re-send, and it is the service, not the phone, that remembers.
 
+## The one thing the service is allowed to read
+
+Everything above keeps the service blind, which has a cost: a blind service cannot answer "which
+batches hold sleep in August", so every question means downloading the whole archive. That is
+tolerable once and absurd as a habit.
+
+So each batch carries, in front of the sealed blob and in the clear, a manifest: for every event its
+sequence number, its kind, its metric and the interval it covers. No values, no ids, no sources. The
+service keeps those rows in an index and `GET /b/<bucket>/find?metric=sleep&from=…&to=…` answers
+with the handful of batches worth fetching. A month then costs a few batches instead of a decade of
+them.
+
+The trade is deliberate and it is not free. Times and kinds are the shape of a life: from the index
+alone a reader of the service can tell when you sleep, when you train and when the watch came off.
+What it cannot tell is any number — how far you walked, how fast your heart went. Values stay sealed.
+
+The manifest travels inside the signed body rather than beside it, so the signature that protects the
+ciphertext protects it too, and the index only ever points at objects the archive actually holds.
+Batches written before manifests existed are still valid: they begin with the sealed-box version
+byte, which is how a reader tells the two shapes apart.
+
 That the past cannot be rewritten has a consequence on the other end. Sequence numbers are the
 device's own counter, and a reinstalled app starts it at 1 again while the archive still holds
 batches under those numbers — so the fresh device's first batches would claim ranges that exist and
@@ -103,19 +124,23 @@ be quietly dropped. Before its first confirmed batch the phone therefore asks `/
 counting above what is already there. If it cannot get an answer it does not send: a guess about
 where to start is how a batch disappears with a 200 in the log.
 
-## The reader's mirror
+## Asking the archive
 
-Walking the whole archive to answer "how did I sleep last week" would be absurd, so the reading side
-keeps a local copy and moves it forward:
+Two ways, and they differ in what they cost rather than in what they answer. `ask` goes to the
+service every time and downloads only what matches. `sync` walks everything once into a local copy
+and `query` then answers from it with the network switched off:
 
 ```bash
+deno task efferent ask --metric sleep --since 2026-08-01 --until 2026-09-01
 deno task efferent sync      # fetch what is new, decrypt it, fold it in
 deno task efferent status    # what the archive holds, what the mirror holds
 deno task efferent query --type health.sample --metric sleep --since 2026-08-01
 ```
 
-`sync` remembers its cursor in `.efferent/mirror.json` and saves after every batch, so an interrupted
-run keeps what it got and the next one starts where it stopped. Events land in
+`ask` needs no mirror at all: it puts the filters to the service, fetches only the batches it names —
+eight at a time — and filters exactly once they are open. `sync` remembers its cursor in
+`.efferent/mirror.json` and saves after every batch, so an interrupted run keeps what it got and the
+next one starts where it stopped. Events land in
 `.efferent/events.ndjson`, keyed by the id each fact carries, so a re-sent bucket total replaces the
 old value instead of appearing twice — and a `health.delete` removes it. `query` reads that file and
 never touches the network.
@@ -151,9 +176,9 @@ worth protecting travels that way.
 and the reader opens it and checks the signature. With `--post <url>` it also puts that batch
 through a running service and reads it back out.
 
-What the service still learns: which bucket, when, and how much. From the rhythm of uploads a
-determined observer could infer when you sleep. Encryption hides contents, not the fact of them, and
-the privacy copy should say so.
+What the service learns: which bucket, when, how much, and — since the manifest above — what kind of
+event happened at what time. Encryption hides contents, not the fact of them, and the privacy copy
+should say so plainly.
 
 The service itself is a Cloudflare Worker over an R2 bucket, deployed with `deno task server:deploy`
 and answering on a `workers.dev` address. It is open to the internet by design — there are no
@@ -175,7 +200,7 @@ deno task check
 - `icons` — re-render the app icons from `documents/icon.svg`.
 - `server:dev` / `server:deploy` — the bucket service, locally or to Cloudflare.
 - `interop` — check that the Swift and TypeScript sides still make the same bytes.
-- `efferent` — the reading side: `keygen`, `pair` (prints the code to scan), `sync`, `status`,
+- `efferent` — the reading side: `keygen`, `pair` (prints the code to scan), `ask`, `sync`, `status`,
   `query`, plus `send` and `read` for poking at a single batch by hand.
 
 Trying the whole path without a phone:

@@ -10,11 +10,49 @@
  */
 
 import { assert, assertEquals } from "@std/assert";
+import { DatabaseSync } from "node:sqlite";
 import worker from "./src/index.ts";
 import { objectKey, signingKeyObject } from "../protocol/ids.ts";
 import { base64url, signUpload, type UploadHeader } from "../protocol/signing.ts";
+import { frame, type ManifestEntry } from "../protocol/manifest.ts";
 
 const BUCKET = "flgs7wibu26oz5lcrnuc5ftuuk";
+
+/**
+ * The index, on real SQLite rather than something that pretends to read SQL.
+ *
+ * What is worth testing about the index is the query itself — overlap at the
+ * edges of a window, one row per batch, `json_each` unrolling five hundred
+ * events from one bound value. A hand-rolled fake would only ever prove that
+ * the fake agrees with itself.
+ */
+class MemoryIndex {
+  readonly db = new DatabaseSync(":memory:");
+
+  constructor() {
+    this.db.exec(Deno.readTextFileSync(`${import.meta.dirname}/schema.sql`));
+  }
+
+  prepare(sql: string) {
+    const db = this.db;
+    let bound: unknown[] = [];
+    const statement = {
+      bind(...values: unknown[]) {
+        bound = values;
+        return statement;
+      },
+      // deno-lint-ignore require-await
+      async all<T>() {
+        return { results: db.prepare(sql).all(...bound as never[]) as T[] };
+      },
+      // deno-lint-ignore require-await
+      async run() {
+        return db.prepare(sql).run(...bound as never[]);
+      },
+    };
+    return statement;
+  }
+}
 
 class MemoryBucket {
   readonly store = new Map<string, Uint8Array>();
@@ -67,8 +105,26 @@ async function writerKey() {
   };
 }
 
+type Environment = { BLOBS: MemoryBucket; INDEX?: MemoryIndex };
+
+/** The worker only ever touches the parts of R2 and D1 its interfaces name. */
+function bindings(env: Environment): Parameters<typeof worker.fetch>[1] {
+  return env as unknown as Parameters<typeof worker.fetch>[1];
+}
+
+function environment(): { BLOBS: MemoryBucket; INDEX: MemoryIndex } {
+  return { BLOBS: new MemoryBucket(), INDEX: new MemoryIndex() };
+}
+
+/** A body with no manifest: what every device wrote before the index existed,
+ * and still a valid batch. The leading byte is the sealed-box version, which is
+ * how the service tells the two shapes apart. */
+function sealedBody(...rest: number[]): Uint8Array {
+  return new Uint8Array([1, ...rest]);
+}
+
 async function post(
-  env: { BLOBS: MemoryBucket },
+  env: Environment,
   writer: { privateKey: CryptoKey; publicKey: string },
   seqFrom: number,
   seqTo: number,
@@ -92,17 +148,43 @@ async function post(
       },
       body: body as BodyInit,
     }),
-    // The worker only ever touches the parts of R2 the interface names.
-    { BLOBS: env.BLOBS } as unknown as Parameters<typeof worker.fetch>[1],
+    bindings(env),
   );
 }
 
+async function postWithManifest(
+  env: Environment,
+  writer: { privateKey: CryptoKey; publicKey: string },
+  seqFrom: number,
+  seqTo: number,
+  manifest: ManifestEntry[],
+): Promise<Response> {
+  return await post(env, writer, seqFrom, seqTo, await frame(manifest, sealedBody(7, 7, 7)));
+}
+
+function at(iso: string): number {
+  return Math.floor(Date.parse(iso) / 1000);
+}
+
+async function find(env: Environment, query: string) {
+  const response = await worker.fetch(
+    new Request(`https://example.invalid/b/${BUCKET}/find?${query}`),
+    bindings(env),
+  );
+  assertEquals(response.status, 200);
+  return await response.json() as {
+    objects: { name: string; seqFrom: number; seqTo: number; count: number }[];
+    events: number;
+    truncated: boolean;
+  };
+}
+
 Deno.test("a stored batch is never replaced by a later one claiming its range", async () => {
-  const env = { BLOBS: new MemoryBucket() };
+  const env = environment();
   const writer = await writerKey();
 
-  assertEquals((await post(env, writer, 1, 10, new Uint8Array([1, 2, 3]))).status, 200);
-  const answer = await post(env, writer, 1, 10, new Uint8Array([9, 9, 9, 9]));
+  assertEquals((await post(env, writer, 1, 10, sealedBody(2, 3))).status, 200);
+  const answer = await post(env, writer, 1, 10, sealedBody(9, 9, 9));
 
   // Acknowledged, so a device that missed the first answer stops retrying…
   assertEquals(answer.status, 200);
@@ -112,14 +194,14 @@ Deno.test("a stored batch is never replaced by a later one claiming its range", 
 });
 
 Deno.test("the listing walks past its own page size", async () => {
-  const env = { BLOBS: new MemoryBucket() };
+  const env = environment();
   const writer = await writerKey();
 
   // 250 batches: more than one page, which is exactly where a listing that
   // filters after fetching stops being able to see anything.
   for (let index = 0; index < 250; index++) {
     const from = index * 10 + 1;
-    await post(env, writer, from, from + 9, new Uint8Array([index & 0xff]));
+    await post(env, writer, from, from + 9, sealedBody(index & 0xff));
   }
 
   const seen: number[] = [];
@@ -127,7 +209,7 @@ Deno.test("the listing walks past its own page size", async () => {
   for (let page = 0; page < 10; page++) {
     const response = await worker.fetch(
       new Request(`https://example.invalid/b/${BUCKET}/objects?after=${after}`),
-      { BLOBS: env.BLOBS } as unknown as Parameters<typeof worker.fetch>[1],
+      bindings(env),
     );
     const body = await response.json() as {
       objects: { seqFrom: number; seqTo: number }[];
@@ -144,14 +226,14 @@ Deno.test("the listing walks past its own page size", async () => {
 });
 
 Deno.test("stats says what is in the archive without handing any of it over", async () => {
-  const env = { BLOBS: new MemoryBucket() };
+  const env = environment();
   const writer = await writerKey();
-  await post(env, writer, 1, 10, new Uint8Array([1, 2, 3]));
-  await post(env, writer, 11, 20, new Uint8Array([4, 5]));
+  await post(env, writer, 1, 10, sealedBody(2, 3));
+  await post(env, writer, 11, 20, sealedBody(4));
 
   const response = await worker.fetch(
     new Request(`https://example.invalid/b/${BUCKET}/stats`),
-    { BLOBS: env.BLOBS } as unknown as Parameters<typeof worker.fetch>[1],
+    bindings(env),
   );
   const body = await response.json() as Record<string, unknown>;
 
@@ -164,10 +246,10 @@ Deno.test("stats says what is in the archive without handing any of it over", as
 });
 
 Deno.test("an unknown bucket is empty rather than an error", async () => {
-  const env = { BLOBS: new MemoryBucket() };
+  const env = environment();
   const response = await worker.fetch(
     new Request(`https://example.invalid/b/${BUCKET}/stats`),
-    { BLOBS: env.BLOBS } as unknown as Parameters<typeof worker.fetch>[1],
+    bindings(env),
   );
   assertEquals(await response.json(), {
     exists: false,
@@ -177,4 +259,115 @@ Deno.test("an unknown bucket is empty rather than an error", async () => {
     highestSeq: 0,
     complete: true,
   });
+});
+
+Deno.test("find names the batches holding a metric in a window, and no others", async () => {
+  const env = environment();
+  const writer = await writerKey();
+
+  await postWithManifest(env, writer, 1, 2, [
+    {
+      seq: 1,
+      type: "health.sample",
+      metric: "sleep",
+      start: at("2026-07-05T22:00:00Z"),
+      end: at("2026-07-06T05:00:00Z"),
+    },
+    {
+      seq: 2,
+      type: "health.sample",
+      metric: "heartRate",
+      start: at("2026-07-05T22:10:00Z"),
+      end: at("2026-07-05T22:10:00Z"),
+    },
+  ]);
+  await postWithManifest(env, writer, 3, 4, [
+    {
+      seq: 3,
+      type: "health.sample",
+      metric: "sleep",
+      start: at("2026-08-10T22:00:00Z"),
+      end: at("2026-08-11T06:00:00Z"),
+    },
+    {
+      seq: 4,
+      type: "health.agg",
+      metric: "steps",
+      start: at("2026-08-11T00:00:00Z"),
+      end: at("2026-08-12T00:00:00Z"),
+    },
+  ]);
+
+  const august = await find(env, "metric=sleep&from=2026-08-01T00:00:00Z&to=2026-09-01T00:00:00Z");
+
+  assertEquals(august.objects.length, 1, "July's batch was named for an August question");
+  assertEquals(august.objects[0].seqFrom, 3);
+  assertEquals(august.events, 1, "the steps total in the same batch was counted as sleep");
+  assertEquals(august.truncated, false);
+});
+
+/// A night starts before midnight and ends after it. Filtering on the start
+/// alone would drop it from a query for that day, silently and plausibly.
+Deno.test("find keeps an event that straddles the edge of the window", async () => {
+  const env = environment();
+  const writer = await writerKey();
+
+  await postWithManifest(env, writer, 1, 1, [
+    {
+      seq: 1,
+      type: "health.sample",
+      metric: "sleep",
+      start: at("2026-08-10T21:50:00Z"),
+      end: at("2026-08-11T05:30:00Z"),
+    },
+  ]);
+
+  const eleventh = await find(env, "from=2026-08-11T00:00:00Z&to=2026-08-12T00:00:00Z");
+
+  assertEquals(eleventh.objects.length, 1);
+  assertEquals(eleventh.events, 1);
+});
+
+/// The whole point of the index is to save the download, not to become one.
+Deno.test("find answers with batch names and never with data", async () => {
+  const env = environment();
+  const writer = await writerKey();
+  await postWithManifest(env, writer, 1, 1, [
+    {
+      seq: 1,
+      type: "health.sample",
+      metric: "sleep",
+      start: at("2026-08-10T22:00:00Z"),
+      end: at("2026-08-11T06:00:00Z"),
+    },
+  ]);
+
+  const answer = await find(env, "from=&to=");
+  const text = JSON.stringify(answer);
+
+  assertEquals(answer.objects[0].name, "00000000000000001-00000000000000001");
+  assert(!text.includes("7"), `the answer carried payload bytes: ${text}`);
+});
+
+/// Every batch already in the archive was written before manifests existed.
+/// They have to keep working, and they have to stay out of the index rather
+/// than appear in it as events with no time.
+Deno.test("a batch without a manifest is stored and left out of the index", async () => {
+  const env = environment();
+  const writer = await writerKey();
+
+  assertEquals((await post(env, writer, 1, 500, sealedBody(2, 3))).status, 200);
+
+  assert(env.BLOBS.store.has(objectKey(BUCKET, 1, 500)), "the batch was not archived");
+  assertEquals((await find(env, "from=&to=")).objects.length, 0);
+});
+
+Deno.test("a body that is neither sealed nor framed is refused rather than archived", async () => {
+  const env = environment();
+  const writer = await writerKey();
+
+  const answer = await post(env, writer, 1, 1, new Uint8Array([9, 9, 9]));
+
+  assertEquals(answer.status, 400);
+  assertEquals(env.BLOBS.store.has(objectKey(BUCKET, 1, 1)), false);
 });

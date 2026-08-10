@@ -20,6 +20,7 @@ import {
   isBucketId,
   listingStartAfter,
   objectKey,
+  objectName,
   parseObjectName,
   signingKeyObject,
 } from "../../protocol/ids.ts";
@@ -29,10 +30,14 @@ import {
   type UploadHeader,
   verifyUpload,
 } from "../../protocol/signing.ts";
+import { type ManifestEntry, readManifest, unframe } from "../../protocol/manifest.ts";
 
 /** Room for a large batch; well under what a Worker can hold in memory. */
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 const MAX_OBJECTS_PER_PAGE = 200;
+/** How many batches one `find` will name. A question whose answer is more than
+ * this is a question better asked in narrower slices. */
+const MAX_FIND_OBJECTS = 500;
 /** How far `stats` will walk before it answers "at least this much". Bounded so
  * that asking what is in an archive never costs more than a moment. */
 const STATS_PAGE_LIMIT = 20;
@@ -55,8 +60,21 @@ interface R2Bucket {
   ): Promise<{ objects: R2Object[]; truncated: boolean }>;
 }
 
+/** Likewise for D1: only what the index needs. */
+interface D1PreparedStatement {
+  bind(...values: unknown[]): D1PreparedStatement;
+  all<T>(): Promise<{ results: T[] }>;
+  run(): Promise<unknown>;
+}
+interface D1Database {
+  prepare(sql: string): D1PreparedStatement;
+}
+
 export interface Env {
   BLOBS: R2Bucket;
+  /** When each event happened and what kind it is — never a value. See
+   * `protocol/manifest.ts` for what that buys and what it costs. */
+  INDEX: D1Database;
 }
 
 export default {
@@ -82,6 +100,9 @@ export default {
     }
     if (request.method === "GET" && segments.length === 3 && segments[2] === "stats") {
       return await describe(env, bucket);
+    }
+    if (request.method === "GET" && segments.length === 3 && segments[2] === "find") {
+      return await find(env, bucket, url);
     }
     if (request.method === "GET" && segments.length === 4 && segments[2] === "o") {
       return await fetchObject(env, bucket, segments[3]);
@@ -124,12 +145,125 @@ async function append(request: Request, env: Env, bucket: string): Promise<Respo
   // an unused bucket by presenting a key they do not hold.
   if (!registered) await env.BLOBS.put(signingKeyObject(bucket), claimed);
 
+  // Split before storing, so a malformed body is refused rather than archived.
+  // The whole body goes to R2 all the same: it is what was signed, and the
+  // reader checks the signature against exactly these bytes.
+  let manifest: ManifestEntry[] = [];
+  try {
+    const parts = unframe(body);
+    if (parts.manifest) manifest = await readManifest(parts.manifest);
+  } catch (cause) {
+    return problem(400, `body is not a batch this service understands: ${cause}`);
+  }
+
   // Never replace what is already stored. A device that did not hear the answer
   // sends the same range again, and it must be acknowledged rather than allowed
   // to rewrite history — an archive whose past can change is not an archive.
   const key = objectKey(bucket, header.seqFrom, header.seqTo);
   if (!await env.BLOBS.head(key)) await env.BLOBS.put(key, body);
+  // After the object, and ignoring rows that are already there: the index is a
+  // pointer into the archive, so it must never claim something the archive does
+  // not hold.
+  if (manifest.length > 0) {
+    await indexBatch(env, bucket, header.seqFrom, header.seqTo, manifest);
+  }
   return json({ ack: header.seqTo });
+}
+
+/**
+ * Write one batch's manifest into the index.
+ *
+ * One statement for the whole batch rather than a row at a time: SQLite unrolls
+ * the list itself with `json_each`, which keeps this to four bound values no
+ * matter how many events a batch carries. A loop here would be five hundred
+ * round trips inside a request that has to finish quickly.
+ */
+async function indexBatch(
+  env: Env,
+  bucket: string,
+  seqFrom: number,
+  seqTo: number,
+  manifest: ManifestEntry[],
+): Promise<void> {
+  await env.INDEX.prepare(
+    `INSERT OR IGNORE INTO events (bucket, seq, type, metric, start, end, seq_from, seq_to)
+     SELECT ?1,
+            entry.value ->> 'seq',
+            entry.value ->> 'type',
+            entry.value ->> 'metric',
+            entry.value ->> 'start',
+            entry.value ->> 'end',
+            ?2, ?3
+     FROM json_each(?4) AS entry`,
+  ).bind(bucket, seqFrom, seqTo, JSON.stringify(manifest)).run();
+}
+
+/**
+ * Which batches hold the events someone is asking about.
+ *
+ * The answer is a list of objects to fetch, not data — the service still cannot
+ * read a single reading. What it saves is the download: a question about one
+ * August comes back as a handful of batches instead of a decade of them.
+ *
+ * An event counts as inside the window when its interval overlaps it, so a
+ * night of sleep that began before midnight on the first is found by a query
+ * that starts at midnight. Filtering on the start alone would silently drop it.
+ */
+async function find(env: Env, bucket: string, url: URL): Promise<Response> {
+  const from = instant(url.searchParams.get("from"));
+  const to = instant(url.searchParams.get("to"));
+  if (from === undefined) return problem(400, "from must be a time");
+  if (to === undefined) return problem(400, "to must be a time");
+
+  const metric = url.searchParams.get("metric");
+  const type = url.searchParams.get("type");
+  const asked = Number(url.searchParams.get("limit") ?? MAX_OBJECTS_PER_PAGE);
+  if (!Number.isSafeInteger(asked) || asked < 1) return problem(400, "limit must be a count");
+  const limit = Math.min(asked, MAX_FIND_OBJECTS);
+
+  const { results } = await env.INDEX.prepare(
+    `SELECT seq_from, seq_to, COUNT(*) AS count
+     FROM events
+     WHERE bucket = ?1
+       AND (?2 IS NULL OR start < ?2)
+       AND (?3 IS NULL OR COALESCE(end, start) >= ?3)
+       AND (?4 IS NULL OR metric = ?4)
+       AND (?5 IS NULL OR type = ?5)
+     GROUP BY seq_from, seq_to
+     ORDER BY seq_from
+     LIMIT ?6`,
+  ).bind(bucket, to, from, metric, type, limit + 1).all<
+    { seq_from: number; seq_to: number; count: number }
+  >();
+
+  const truncated = results.length > limit;
+  const objects = results.slice(0, limit).map((row) => ({
+    name: objectName(row.seq_from, row.seq_to),
+    seqFrom: row.seq_from,
+    seqTo: row.seq_to,
+    count: row.count,
+  }));
+  return json({
+    objects,
+    events: objects.reduce((total, object) => total + object.count, 0),
+    // True when there are more batches than this answer names. Saying so beats
+    // handing back a convenient prefix that reads like the whole answer.
+    truncated,
+  });
+}
+
+/**
+ * A time, however it was written: seconds since 1970, or anything `Date` reads.
+ *
+ * `null` means "no bound", which is why an absent parameter is a value here
+ * rather than an error — asking for all the sleep there has ever been is a
+ * reasonable question.
+ */
+function instant(value: string | null): number | null | undefined {
+  if (value === null || value === "") return null;
+  if (/^-?\d+$/.test(value)) return Number(value);
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? undefined : Math.floor(parsed / 1000);
 }
 
 async function listObjects(env: Env, bucket: string, url: URL): Promise<Response> {

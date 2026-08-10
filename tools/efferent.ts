@@ -16,6 +16,7 @@ import { bucketId, parseObjectName } from "../protocol/ids.ts";
 import { base64url, fromBase64url, signUpload, type UploadHeader } from "../protocol/signing.ts";
 import { associatedData, open, seal } from "../protocol/sealedbox.ts";
 import { compress, decompress } from "../protocol/framing.ts";
+import { frame, type ManifestEntry, unframe } from "../protocol/manifest.ts";
 import qrcode from "qrcode-terminal";
 
 interface ReadingKey {
@@ -73,6 +74,8 @@ async function main(args: string[]): Promise<void> {
       return await sync(options.url);
     case "query":
       return await query(options);
+    case "ask":
+      return await ask(options);
     case "status":
       return await status(options.url);
     default:
@@ -86,8 +89,9 @@ async function main(args: string[]): Promise<void> {
           "  efferent sync [--url <endpoint>]      fold everything new into the local mirror",
           "  efferent status [--url <endpoint>]    what the archive holds, and how far the mirror got",
           "  efferent query [filters]              answer from the mirror, offline",
+          "  efferent ask [filters]                answer from the archive, fetching only what matches",
           "",
-          "query filters:",
+          "filters (both query and ask):",
           "  --type <health.agg|health.sample>    --metric <steps|sleep|…>",
           "  --bucket <hour|day>                  --since <ISO date>  --until <ISO date>",
           "  --limit <n>                          --format <ndjson|summary>",
@@ -139,24 +143,39 @@ async function send(url: string, count: number): Promise<void> {
 
   const seqFrom = Number(Deno.env.get("EFFERENT_SEQ_FROM") ?? "1");
   const seqTo = seqFrom + count - 1;
-  const lines = Array.from({ length: count }, (_, index) => {
+  const day = 24 * 60 * 60;
+  const start = Math.floor(Date.now() / 1000) - count * day;
+  const events = Array.from({ length: count }, (_, index) => {
     const seq = seqFrom + index;
-    return JSON.stringify({
+    return {
       id: `agg:steps:probe-${seq}:h`,
       seq,
       v: 1,
       type: "health.agg",
       metric: "steps",
+      start: new Date((start + index * day) * 1000).toISOString(),
+      end: new Date((start + (index + 1) * day) * 1000).toISOString(),
       value: 100 + seq,
       unit: "count",
-    });
-  }).join("\n") + "\n";
+    };
+  });
+  const lines = events.map((event) => JSON.stringify(event)).join("\n") + "\n";
 
-  const body = await seal(
+  const sealed = await seal(
     fromBase64url(reading.readingPublic),
     await compress(new TextEncoder().encode(lines)),
     associatedData(bucket, seqFrom, seqTo),
   );
+  // Framed exactly as a phone frames it, manifest included — a probe that
+  // skipped it would exercise a path no device uses.
+  const manifest: ManifestEntry[] = events.map((event) => ({
+    seq: event.seq,
+    type: event.type,
+    metric: event.metric,
+    start: Math.floor(Date.parse(event.start) / 1000),
+    end: Math.floor(Date.parse(event.end) / 1000),
+  }));
+  const body = await frame(manifest, sealed);
 
   const header: UploadHeader = { bucket, seqFrom, seqTo, timestamp: Math.floor(Date.now() / 1000) };
   const privateKey = await crypto.subtle.importKey(
@@ -190,7 +209,9 @@ async function read(url: string, after: number): Promise<void> {
   const reader = await openArchive(url);
   for await (const batch of reader.walk(after)) {
     await Deno.stdout.write(
-      new TextEncoder().encode(batch.lines.map(JSON.stringify).join("\n") + "\n"),
+      new TextEncoder().encode(
+        batch.lines.map((event) => JSON.stringify(event)).join("\n") + "\n",
+      ),
     );
   }
 }
@@ -267,33 +288,88 @@ async function status(url?: string): Promise<void> {
 /** Answer from the mirror. No network, so it works on a plane and it is fast
  * enough to call in a loop. */
 async function query(options: Record<string, string>): Promise<void> {
-  const events = [...(await loadEvents()).values()]
-    .filter((event) => !options.type || event.type === options.type)
-    .filter((event) => !options.metric || event.metric === options.metric)
-    .filter((event) => !options.bucket || event.bucket === options.bucket)
-    .filter((event) => !options.since || (event.start ?? "") >= options.since)
-    .filter((event) => !options.until || (event.start ?? "") <= options.until)
-    .sort((left, right) =>
-      (left.start ?? "").localeCompare(right.start ?? "") || left.seq - right.seq
-    );
+  report([...(await loadEvents()).values()].filter((event) => matches(event, options)), options);
+}
 
-  const limited = options.limit ? events.slice(0, Number(options.limit)) : events;
+/**
+ * Answer from the archive, without a mirror.
+ *
+ * The service keeps an index of when each event happened and what kind it is,
+ * so it can name the handful of batches worth downloading. A question about one
+ * August then costs those batches instead of the whole decade — which is what
+ * made holding a full local copy feel obligatory in the first place.
+ *
+ * The narrowing the service does is coarse: it answers with whole batches, and
+ * a batch holds whatever else was queued beside the events asked for. The exact
+ * filtering happens here, after decryption, because only here is there anything
+ * to filter.
+ */
+async function ask(options: Record<string, string>): Promise<void> {
+  const state = await loadState(options.url);
+  const archive = await openArchive(state.endpoint);
+
+  const parameters = new URLSearchParams({
+    from: options.since ?? "",
+    to: options.until ?? "",
+  });
+  if (options.metric) parameters.set("metric", options.metric);
+  if (options.type) parameters.set("type", options.type);
+
+  const found = await fetchJSON<{
+    objects: { name: string; count: number }[];
+    events: number;
+    truncated: boolean;
+  }>(`${state.endpoint}/b/${archive.bucket}/find?${parameters}`);
+
+  if (found.truncated) {
+    console.error(
+      `the service named ${found.objects.length} batches and stopped counting there — ` +
+        "ask for a narrower stretch of time to see the rest",
+    );
+  }
+
+  const collected: Event[] = [];
+  for await (const batch of archive.several(found.objects.map((object) => object.name))) {
+    for (const event of batch.lines) {
+      if (matches(event, options)) collected.push(event);
+    }
+  }
+  console.error(
+    `${found.objects.length} batches fetched, ${collected.length} of ${found.events} events kept`,
+  );
+  report(collected, options);
+}
+
+function matches(event: Event, options: Record<string, string>): boolean {
+  if (options.type && event.type !== options.type) return false;
+  if (options.metric && event.metric !== options.metric) return false;
+  if (options.bucket && event.bucket !== options.bucket) return false;
+  if (options.since && (event.start ?? "") < options.since) return false;
+  if (options.until && (event.start ?? "") > options.until) return false;
+  return true;
+}
+
+function report(events: Event[], options: Record<string, string>): void {
+  const ordered = events.sort((left, right) =>
+    (left.start ?? "").localeCompare(right.start ?? "") || left.seq - right.seq
+  );
 
   if (options.format === "summary") {
     const counts = new Map<string, number>();
-    for (const event of events) {
+    for (const event of ordered) {
       const key = `${event.type}${event.metric ? ` ${event.metric}` : ""}${
         event.bucket ? `/${event.bucket}` : ""
       }`;
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
-    console.log(`${events.length} events`);
+    console.log(`${ordered.length} events`);
     for (const [key, count] of [...counts].sort((a, b) => b[1] - a[1])) {
       console.log(`  ${String(count).padStart(7)}  ${key}`);
     }
     return;
   }
 
+  const limited = options.limit ? ordered.slice(0, Number(options.limit)) : ordered;
   const out = limited.map((event) => JSON.stringify(event)).join("\n");
   if (out) console.log(out);
 }
@@ -320,6 +396,33 @@ async function openArchive(endpoint: string) {
     ["deriveBits"],
   );
 
+  async function batch(name: string) {
+    const range = parseObjectName(name);
+    if (!range) throw new Error(`the service returned an object it cannot name: ${name}`);
+
+    const response = await fetch(`${endpoint}/b/${bucket}/o/${name}`);
+    if (!response.ok) {
+      throw new Error(`${name}: ${response.status} ${await response.text()}`);
+    }
+
+    // The manifest in front of the sealed blob is what the service reads to
+    // answer questions about time and kind. It holds nothing that is not also
+    // in the events themselves, so here it is stepped over.
+    const { sealed } = unframe(new Uint8Array(await response.arrayBuffer()));
+    const plaintext = await decompress(
+      await open(
+        privateKey,
+        readingPublic,
+        sealed,
+        associatedData(bucket, range.seqFrom, range.seqTo),
+      ),
+    );
+    const lines = new TextDecoder().decode(plaintext).trim().split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as Event);
+    return { ...range, lines };
+  }
+
   async function* walk(after: number) {
     let cursor = after;
     for (;;) {
@@ -329,30 +432,9 @@ async function openArchive(endpoint: string) {
       if (listing.objects.length === 0) return;
 
       for (const object of listing.objects) {
-        const range = parseObjectName(object.name);
-        if (!range) {
-          throw new Error(`the service returned an object it cannot name: ${object.name}`);
-        }
-
-        const response = await fetch(`${endpoint}/b/${bucket}/o/${object.name}`);
-        if (!response.ok) {
-          throw new Error(`${object.name}: ${response.status} ${await response.text()}`);
-        }
-
-        const plaintext = await decompress(
-          await open(
-            privateKey,
-            readingPublic,
-            new Uint8Array(await response.arrayBuffer()),
-            associatedData(bucket, range.seqFrom, range.seqTo),
-          ),
-        );
-        const lines = new TextDecoder().decode(plaintext).trim().split("\n")
-          .filter((line) => line.length > 0)
-          .map((line) => JSON.parse(line) as Event);
-
-        yield { ...range, lines };
-        cursor = range.seqTo;
+        const fetched = await batch(object.name);
+        yield fetched;
+        cursor = fetched.seqTo;
       }
 
       if (listing.next === null) return;
@@ -360,7 +442,22 @@ async function openArchive(endpoint: string) {
     }
   }
 
-  return { bucket, walk };
+  /**
+   * Named batches, several at a time, in the order they were asked for.
+   *
+   * One at a time is what made a long archive slow: the cost is a round trip
+   * per batch and almost nothing else, so waiting for each before starting the
+   * next spends the whole time idle. The window is small on purpose — enough to
+   * fill the link, not enough to look like an attack on it.
+   */
+  async function* several(names: string[], width = 8) {
+    for (let start = 0; start < names.length; start += width) {
+      const window = await Promise.all(names.slice(start, start + width).map(batch));
+      for (const fetched of window) yield fetched;
+    }
+  }
+
+  return { bucket, batch, walk, several };
 }
 
 /**

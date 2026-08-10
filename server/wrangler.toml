@@ -1,9 +1,12 @@
 # The bucket service. Deployed by hand for now:
 #   wrangler r2 bucket create efferent
+#   wrangler d1 create efferent-index
+#   wrangler d1 execute efferent-index --remote --file server/schema.sql
 #   wrangler deploy --config server/wrangler.toml
 #
-# Nothing secret lives here. The service holds ciphertext and a writer's public
-# key, and there is no configuration that could give it more.
+# Nothing secret lives here. The service holds ciphertext, a writer's public key
+# and an index of when each event happened and what kind it is — never a value,
+# and never a key that decrypts one.
 
 name = "efferent"
 main = "src/index.ts"
@@ -12,6 +15,11 @@ compatibility_date = "2026-08-01"
 [[r2_buckets]]
 binding = "BLOBS"
 bucket_name = "efferent"
+
+[[d1_databases]]
+binding = "INDEX"
+database_name = "efferent-index"
+database_id = "3e4bbc28-ba64-4802-8d2b-03e34eba936d"
 
 [observability]
 enabled = true

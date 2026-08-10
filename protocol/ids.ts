@@ -63,7 +63,13 @@ export function signingKeyObject(bucket: string): string {
  * would silently skip data.
  */
 export function objectKey(bucket: string, seqFrom: number, seqTo: number): string {
-  return `${bucket}/${DATA_PREFIX}${pad(seqFrom)}-${pad(seqTo)}`;
+  return `${bucket}/${DATA_PREFIX}${objectName(seqFrom, seqTo)}`;
+}
+
+/** The same name without the bucket in front: what a listing hands back, and
+ * what a reader asks for. */
+export function objectName(seqFrom: number, seqTo: number): string {
+  return `${pad(seqFrom)}-${pad(seqTo)}`;
 }
 
 export function parseObjectName(name: string): { seqFrom: number; seqTo: number } | null {
