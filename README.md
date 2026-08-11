@@ -143,8 +143,8 @@ deno task efferent query --metric sleep --since 2026-08-01
 ```
 
 Both fetch one day earlier than asked for. A night that began before midnight is in the evening's
-day, so a question about the 11th that fetched only the 11th would miss the night it is asking
-about — silently, which is the worst way for a query to be wrong. The exact filtering happens after
+day, so a question about the 11th that fetched only the 11th would miss the night it is asking about
+— silently, which is the worst way for a query to be wrong. The exact filtering happens after
 decryption, and compares day against day: an event's times are instants and a bound is a date, so
 comparing the two as strings would put every reading of the 6th after the 6th.
 
@@ -204,8 +204,8 @@ deno task check
 - `icons` — re-render the app icons from `documents/icon.svg`.
 - `server:dev` / `server:deploy` — the bucket service, locally or to Cloudflare.
 - `interop` — check that the Swift and TypeScript sides still make the same bytes.
-- `efferent` — the reading side: `keygen`, `pair` (prints the code to scan), `ask`, `sync`, `status`,
-  `query`, plus `send` and `read` for poking at a single day by hand.
+- `efferent` — the reading side: `keygen`, `pair` (prints the code to scan), `ask`, `sync`,
+  `status`, `query`, plus `send` and `read` for poking at a single day by hand.
 
 Trying the whole path without a phone:
 
