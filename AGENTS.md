@@ -15,51 +15,49 @@ This file is the rulebook.
 
 ## Invariants you must not break
 
-- **Events and their anchor go in one transaction.** `Store.commit` takes both for exactly this
-  reason. An anchor saved on its own tells HealthKit that data was delivered when it was not, and
-  HealthKit will never offer it again.
-- **Ids are derived from the data, never from a counter.** That is what makes a re-send free. If you
-  find yourself generating a UUID for an event id, the design has gone wrong.
-- **The confirmation mark only moves forward, and only to what the server reports.** Never advance
-  it because a request returned 200 with the batch you sent — a server that accepted half a batch
-  says so in its `ack`.
-- **Payload bytes must be canonical.** Build them with `Event.payload(_:)`. The outbox decides
-  whether anything changed by comparing those bytes, so an unstable encoder would make every re-scan
-  look like fresh data and turn the daily aggregate refresh into constant traffic.
-- **Confirmed rows are pruned late, not immediately.** They are what the comparison above compares
-  against. Retention must comfortably exceed the re-scan window — a month against a week.
+- **A day is read from Health and sent whole. Never send a difference.** The archive holds what
+  Health says now, not the sum of every update that was ever correct. If you find yourself computing
+  what changed and uploading only that, the design has gone wrong — mark the day and let it be
+  rebuilt.
+- **Marked days and their anchor go in one transaction.** `Store.markDirty` takes both for exactly
+  this reason. An anchor saved on its own tells HealthKit that data was delivered when it was not,
+  and HealthKit will never offer it again.
+- **Ids are derived from the data, never from a counter.** If you find yourself generating a UUID
+  for an event id, the design has gone wrong.
+- **A day that came back unchanged must not be uploaded.** The fingerprint is of the _plaintext_,
+  never of what goes on the wire: sealing uses a fresh throwaway key every time, so identical days
+  never produce identical bytes and a comparison of those would re-upload a week every hour.
+- **Payload bytes must be canonical, and the body is sorted by id.** Build payloads with
+  `Event.payload(_:)`. The comparison above is over the whole body, and HealthKit does not promise
+  to hand samples back in the same order twice.
 - **A metric belongs to exactly one catalogue.** Cumulative quantities are totals via
   `AggregateMetric`; everything else travels record by record via `SampleMetric`. Putting one in
   both sends the total _and_ the samples behind it, which is the double count wearing a different
   hat. A test enforces this.
-- **A deletion reuses the id of the sample it removes.** Same id, different kind, so the receiver
-  drops the record without keeping a lookup table.
-- **The manifest is the only thing the service may read, and it holds no values.** Sequence number,
-  kind, metric, interval — nothing else. Adding an id, a value or a source to it hands the service
-  the data the encryption exists to keep from it, and nothing would fail to make that visible. It
-  travels inside the signed body, never beside it: sent as a header it would be something a network
-  could rewrite without breaking a signature.
-- **The index points at objects; it never becomes one.** Rows go in after the object is stored, and
-  a `find` answers with batch names and counts. The moment it starts returning readings, the service
-  has become a thing that knows them.
-- **The service is an archive, not a letterbox.** It never overwrites a stored batch and never
-  deletes one. A repeated range is acknowledged and ignored, so a device that missed an answer stops
-  retrying without history changing underneath it.
-- **Sequence numbers are a device counter, and the archive names batches by
-  them.** A reinstall resets the counter to 1 while the archive still holds
-  those numbers, so the fresh device's first batches claim ranges that exist and
-  are dropped by the no-overwrite rule above — acknowledged, and gone. Before its
-  first confirmed batch the device asks `/stats` and counts on from the archive's
-  highest number. Never let a send proceed when that answer is unavailable: a
-  guess here loses data with a 200 in the log.
+- **A record belongs to the day it started on.** Not to every day it overlaps: a day written whole
+  cannot hold half a record twice. A query compensates by fetching one day earlier than it was asked
+  for.
+- **A record's day is written down while the record still exists.** A deletion arrives as a bare
+  identifier whose record is already gone from Health, so nothing can be asked about it afterwards.
+  Dropping the `sample` table would make old deletions unnoticeable — silently, and only for the
+  history nobody is looking at.
+- **A day that Health has nothing for still gets an entry.** Without one it stays marked forever and
+  is rebuilt on every pass.
+- **The service must not learn more than which days exist.** It sees a date, a size and a write
+  time. Anything that would tell it what happened inside a day — a summary, a count, a metric name
+  in the path — hands over what the encryption exists to keep, and nothing would fail to make that
+  visible.
 - **Anything that lists R2 must page.** R2 answers a listing with at most one page and a `truncated`
-  flag; code that fetches once and filters afterwards reports everything past that page as nothing at
-  all, and reports it as success. Follow the cursor until it runs out, and cap what is unbounded
+  flag; code that fetches once and filters afterwards reports everything past that page as nothing
+  at all, and reports it as success. Follow the cursor until it runs out, and cap what is unbounded
   loudly rather than quietly.
-- **One upload is in flight at a time, and the claim is released on every path.** The guard that
-  enforces it is a flag, and a flag that a `return` can slip past locks the outbox until the app is
-  relaunched. Release it before every early exit, and let an acknowledged batch start the next one —
-  otherwise sending stops at one batch and looks like a server that went quiet.
+- **A range is inclusive at both ends.** A listing skips _past_ a key, so `from` has to be turned
+  into the day before it. Passing `from` straight through drops the first day of every range — the
+  one most likely to be the point of the question. A test enforces this.
+- **One build pass runs at a time, and the claim is released on every path.** The guard is a flag,
+  and a flag a `return` can slip past stops sending until the app is relaunched. Days themselves are
+  independent and several may be in the air at once; the next pass starts only when none are left,
+  or it would rebuild work already under way.
 
 ## The parts that must agree across languages
 
@@ -73,13 +71,13 @@ is the only thing that catches drift before a phone does.
   device, the design has gone wrong.
 - **The signing key and the reading key are separate on purpose.** One writes, one reads. Merging
   them would mean an agent's config file grants the right to forge uploads.
-- **Bucket, sequence range and body hash are all bound into what gets signed and into the encryption
-  tag.** Dropping any of them from either place lets a blob be replayed, relabelled or moved,
-  silently.
+- **Bucket, day and body hash are all bound into what gets signed and into the encryption tag.**
+  Dropping any of them from either place lets a day be replayed, moved to another bucket, or handed
+  back as a different date, silently.
 - **Compress before sealing, never after.** Ciphertext does not compress, and a round trip that only
   works one way tends to be discovered on a phone.
-- The service must never gain a way to read a batch. If a feature seems to need one, it belongs in
-  the reading tool instead.
+- The service must never gain a way to read a day. If a feature seems to need one, it belongs in the
+  reading tool instead.
 
 ## HealthKit facts that shape the code
 
@@ -95,12 +93,13 @@ is the only thing that catches drift before a phone does.
 - The observer's `completion()` must be called, and quickly. Skip it and HealthKit treats the
   delivery as failed, retries, and after a few failures stops waking the app at all — with no error,
   and a symptom that shows up days later.
-- Never make a network call inside the observer. Read, write to the outbox, call `completion()`,
-  then hand the send to the background session.
+- Never make a network call inside the observer. Work out which days changed, mark them, call
+  `completion()`, then hand the send to the background session.
 - `.immediate` frequency is not honoured for most types; the system rounds it to hourly. Hourly is
   the real ceiling on freshness.
-- `HKAnchoredObjectQuery` returns deletions as well as additions. They must be sent as
-  `health.delete`, or the server keeps records the person has erased.
+- `HKAnchoredObjectQuery` returns deletions as well as additions, and a deleted object carries its
+  identifier and nothing else — no date, no type. `HKQuery.predicateForObject(with:)` cannot help:
+  it searches the records that still exist. The day has to come from what was written down earlier.
 - Background delivery does not work in the simulator. Anything touching it has to be tested on a
   device.
 - Health data must not be put in iCloud — App Store rule 5.1.3. Sending it to a server the person
@@ -113,9 +112,9 @@ sentence, and the counters sit underneath for when the answer is not the expecte
 way when adding anything: a number that needs interpreting is not a status.
 
 "Nothing waiting" is not the same fact as "nothing has ever been sent", and neither is the same as
-"stopped a week ago". That is why the outbox stamps when the confirmation mark last moved, and why
-the screen distinguishes all three. Collapsing them into one cheerful row is how a silent failure
-gets to look healthy.
+"stopped a week ago". That is why the device stamps when a day was last accepted, and why the screen
+distinguishes all three. Collapsing them into one cheerful row is how a silent failure gets to look
+healthy.
 
 ## Other traps
 
@@ -127,9 +126,11 @@ gets to look healthy.
   single-size "universal" icon compiles without one and the App Store listing icon comes out blank.
 - `xcodebuild` needs `/usr/bin` first on PATH. A Homebrew rsync earlier in the path breaks copy
   phases, and the error blames the copy rather than the tool.
-- **Never test-write into a bucket a real phone will use.** The first writer owns a bucket for
-  good, so a smoke test claims it and the phone is refused with 403 afterwards — a failure that
-  surfaces on the device, long after the test looked like it passed. This bites twice: `deno task
-  interop --post` signs with a throwaway key, and `efferent send` signs with the machine's own.
-  Post to `server:dev`, whose storage dies with the process. A real bucket that is already claimed
-  is released by deleting `<bucket>/key` from R2.
+- **Never test-write into a bucket a real phone will use.** The first writer owns a bucket for good,
+  so a smoke test claims it and the phone is refused with 403 afterwards — a failure that surfaces
+  on the device, long after the test looked like it passed. This bites twice:
+  `deno task
+  interop --post` signs with a throwaway key, and `efferent send` signs with the
+  machine's own. Post to `server:dev`; its storage lives in `server/.wrangler/state` and can be
+  deleted outright. A real bucket that is already claimed is released by deleting `<bucket>/key`
+  from R2.
