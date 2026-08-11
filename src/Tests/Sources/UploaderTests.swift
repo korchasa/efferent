@@ -1,16 +1,19 @@
+import CryptoKit
 @testable import Efferent
 import XCTest
 
-/// The in-flight guard, which is what a stalled outbox is usually made of.
+/// The pass guard and the fingerprint check — the two places where a day either
+/// stops going out or goes out for nothing.
 ///
-/// One send ships a batch and no more, so the next one is started from the
-/// completion of the previous. That only works if every path out of `send`
-/// releases the claim — an early return that keeps it held stops the outbox for
-/// good, and it stops it at a round number, which reads like a server problem
-/// rather than a client one.
+/// A pass builds the days that are waiting and hands the changed ones to the
+/// system; the next pass starts from the completion of the last one. That only
+/// works if every path out of `send` releases the claim. An early return that
+/// keeps it held stops the app for good, and it stops it looking healthy.
 final class UploaderTests: XCTestCase {
     private func makeUploader(
-        store: Store, identifier: String, archiveHighestSeq: Int64 = 0
+        store: Store,
+        identifier: String,
+        build: @escaping ([String]) async throws -> [String: DayContents] = { _ in [:] }
     ) throws -> Uploader {
         try Uploader(
             // A session identifier per test: background sessions are global to
@@ -22,11 +25,11 @@ final class UploaderTests: XCTestCase {
             ),
             store: store,
             identity: DeviceIdentity(),
-            archiveHighestSeq: { _ in archiveHighestSeq }
+            build: build
         )
     }
 
-    func testAnEmptyOutboxDoesNotHoldTheClaim() async throws {
+    func testNoDaysWaitingDoesNotHoldTheClaim() async throws {
         let store = try Store.inMemory()
         let uploader = try makeUploader(store: store, identifier: "test.empty.\(UUID().uuidString)")
 
@@ -40,19 +43,40 @@ final class UploaderTests: XCTestCase {
         XCTAssertEqual(second, .nothingToSend, "the claim outlived a send that had nothing to do")
     }
 
-    /// A reinstalled app has an outbox numbered from 1 and an archive that
-    /// already holds those numbers. The first send is the last moment to notice.
-    func testTheFirstSendCountsAboveWhatTheArchiveHolds() async throws {
+    /// Re-reading the last week happens on every refresh. A day that came back
+    /// exactly as it was sent must cost a comparison and no network at all —
+    /// otherwise the phone re-uploads a week of unchanged history every hour.
+    func testARebuiltDayThatDidNotChangeIsNotSentAgain() async throws {
         let store = try Store.inMemory()
-        try store.commit(events: [
-            Event(id: "a", kind: .aggregate, payload: Event.payload(["value": "1"])),
-        ])
-        let uploader = try makeUploader(
-            store: store, identifier: "test.numbering.\(UUID().uuidString)", archiveHighestSeq: 1000
-        )
+        let events = [try Event(id: "a", payload: Event.payload(["v": "1"]))]
+        let digest = Data(SHA256.hash(data: try NDJSON.body(events)))
+        try store.recordSent(day: "2026-08-07", digest: digest, sampleIdentifiers: [])
+        try store.markDirty(["2026-08-07"])
+
+        let uploader = try makeUploader(store: store, identifier: "test.same.\(UUID().uuidString)") { _ in
+            ["2026-08-07": DayContents(events: events, sampleIdentifiers: [])]
+        }
+        let outcome = try await uploader.send()
+
+        XCTAssertEqual(outcome, .scheduled(days: 0, unchanged: 1))
+        XCTAssertTrue(try store.pendingDays(limit: 10).isEmpty, "an unchanged day stayed waiting")
+    }
+
+    /// A day Health has nothing for is still a fact about that day. Without an
+    /// entry it would stay marked forever and be rebuilt on every single pass.
+    func testADayHealthKnowsNothingAboutStopsWaiting() async throws {
+        let store = try Store.inMemory()
+        try store.markDirty(["2026-08-07"])
+        let uploader = try makeUploader(store: store, identifier: "test.empty-day.\(UUID().uuidString)") { days in
+            Dictionary(uniqueKeysWithValues: days.map {
+                ($0, DayContents(events: [], sampleIdentifiers: []))
+            })
+        }
 
         let outcome = try await uploader.send()
 
-        XCTAssertEqual(outcome, .scheduled(lines: 1, throughSeq: 1001))
+        // Scheduled rather than skipped: an empty day that was never sent has no
+        // fingerprint to match, so it goes up as an empty day and says so.
+        XCTAssertEqual(outcome, .scheduled(days: 1, unchanged: 0))
     }
 }

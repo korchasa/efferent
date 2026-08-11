@@ -3,7 +3,7 @@
  *
  * `protocol/` and the Swift under `src/Core` describe the same bytes twice, in
  * two languages, and nothing but a test keeps them in step. A Swift test seals
- * and signs a real batch; this opens it with the matching private key and checks
+ * and signs a real day; this opens it with the matching private key and checks
  * the signature. Drift between the two shows up here rather than on a phone.
  *
  * The reading key below is a fixture. Its public half is in `WireTests.swift`,
@@ -15,18 +15,16 @@ import { SCHEME, systemToolPath, WORKSPACE } from "./config.ts";
 import { generate } from "./generate.ts";
 import { associatedData, open } from "../protocol/sealedbox.ts";
 import { decompress } from "../protocol/framing.ts";
-import { readManifest, unframe } from "../protocol/manifest.ts";
 import { canonicalRequest, fromBase64url, verifyUpload } from "../protocol/signing.ts";
 import { bucketId } from "../protocol/ids.ts";
 
 const READING_PRIVATE = "MC4CAQAwBQYDK2VuBCIEIB-BUIZTXqbNIR0MFd8VXE2BPlP2ohi2pcpCd_FksGD6";
 const READING_PUBLIC = "YAvPaXBsGTnyrLF6FcE1oI2EjHmIeKAg07zRX51nI2w";
-const SEQ_FROM = 1;
-const SEQ_TO = 2;
+const DAY = "2026-08-07";
 
 await generate();
 
-section("Producing a batch from the Swift side");
+section("Producing a day from the Swift side");
 const { stdout } = await run("xcodebuild", {
   args: [
     "test",
@@ -64,22 +62,8 @@ const privateKey = await crypto.subtle.importKey(
 );
 
 const blob = fromBase64url(emitted.blob);
-// The body is framed: a manifest the service reads, then the sealed blob only
-// this side can. Both halves are inside what was signed.
-const parts = unframe(blob);
-const manifest = await readManifest(parts.manifest);
-expect(manifest.length === 2, `the manifest describes ${manifest.length} events, expected 2`);
-expect(
-  manifest[0].metric === "steps" && manifest[0].start === 1_754_557_200,
-  `the manifest's first entry is wrong: ${JSON.stringify(manifest[0])}`,
-);
-expect(
-  manifest[1].type === "health.delete" && (manifest[1].start ?? null) === null,
-  `a deletion has no interval, yet the manifest gave it one: ${JSON.stringify(manifest[1])}`,
-);
-
 const plaintext = await decompress(
-  await open(privateKey, readingPublic, parts.sealed, associatedData(bucket, SEQ_FROM, SEQ_TO)),
+  await open(privateKey, readingPublic, blob, associatedData(bucket, DAY)),
 );
 
 const lines = new TextDecoder().decode(plaintext).trim().split("\n").map((line) =>
@@ -87,31 +71,32 @@ const lines = new TextDecoder().decode(plaintext).trim().split("\n").map((line) 
 );
 
 expect(lines.length === 2, `expected 2 lines, got ${lines.length}`);
+// Sorted by id, which is what makes an unchanged day the same bytes twice.
 expect(lines[0].id === "agg:steps:2026-08-07T09:00:00Z:h", `first id was ${lines[0].id}`);
-expect(lines[0].seq === 1 && lines[1].seq === 2, "sequence numbers did not survive");
-expect(lines[0].type === "health.agg", `first type was ${lines[0].type}`);
 expect(lines[0].metric === "steps" && lines[0].value === 842, "the payload fields did not survive");
-expect(lines[1].type === "health.delete", `second type was ${lines[1].type}`);
-expect(lines[1].metric === "sleep", "a deletion must name its metric");
+expect(lines[0].bucket === "hour", "a total has to say which bucket it is");
+expect(lines[1].id === "hk:sleep:9A2C", `second id was ${lines[1].id}`);
+expect(lines[1].metric === "sleep" && lines[1].stage === "asleepCore", "the sleep stage was lost");
+expect(lines[1].bucket === undefined, "a record must not look like a total");
 
 section("Checking the signature the phone produced");
 const verified = await verifyUpload(
   fromBase64url(emitted.writer),
   fromBase64url(emitted.signature),
-  { bucket, seqFrom: SEQ_FROM, seqTo: SEQ_TO, timestamp: emitted.timestamp },
+  { bucket, day: DAY, timestamp: emitted.timestamp },
   blob,
 );
 expect(verified, "the reader could not verify a signature the phone made");
 
 // A signature that verifies against the wrong body would mean the body hash is
-// not really in the canonical string — the failure that lets anyone swap a batch.
+// not really in the canonical string — the failure that lets anyone swap a day.
 const tampered = new Uint8Array(blob);
 tampered[tampered.length - 1] ^= 0x01;
 expect(
   !await verifyUpload(
     fromBase64url(emitted.writer),
     fromBase64url(emitted.signature),
-    { bucket, seqFrom: SEQ_FROM, seqTo: SEQ_TO, timestamp: emitted.timestamp },
+    { bucket, day: DAY, timestamp: emitted.timestamp },
     tampered,
   ),
   "a changed body still verified — the body is not covered by the signature",
@@ -124,13 +109,11 @@ const postTo = Deno.args.includes("--post")
   : undefined;
 
 if (postTo) {
-  section(`Posting the Swift batch to ${postTo}`);
-  const response = await fetch(`${postTo}/b/${bucket}`, {
-    method: "POST",
+  section(`Posting the Swift day to ${postTo}`);
+  const response = await fetch(`${postTo}/b/${bucket}/d/${DAY}`, {
+    method: "PUT",
     headers: {
       "content-type": "application/octet-stream",
-      "x-efferent-seq-from": String(SEQ_FROM),
-      "x-efferent-seq-to": String(SEQ_TO),
       "x-efferent-timestamp": marker(stdout, "LIVETIMESTAMP"),
       "x-efferent-writer": emitted.writer,
       "x-efferent-signature": marker(stdout, "LIVESIGNATURE"),
@@ -138,24 +121,17 @@ if (postTo) {
     body: blob as BodyInit,
   });
   const answer = await response.text();
-  expect(response.ok, `the service refused a batch the phone made: ${response.status} ${answer}`);
-  expect(JSON.parse(answer).ack === SEQ_TO, `expected ack ${SEQ_TO}, got ${answer}`);
+  expect(response.ok, `the service refused a day the phone made: ${response.status} ${answer}`);
+  expect(JSON.parse(answer).stored === DAY, `expected the day back, got ${answer}`);
 
   section("Reading it back out of the service");
-  const listing = await (await fetch(`${postTo}/b/${bucket}/objects?after=0`)).json();
-  expect(listing.objects.length >= 1, "the service listed nothing back");
+  const listing = await (await fetch(`${postTo}/b/${bucket}/days`)).json();
+  expect(listing.days.length >= 1, "the service listed nothing back");
   const stored = new Uint8Array(
-    await (await fetch(`${postTo}/b/${bucket}/o/${listing.objects[0].name}`)).arrayBuffer(),
+    await (await fetch(`${postTo}/b/${bucket}/d/${DAY}`)).arrayBuffer(),
   );
   const readBack = new TextDecoder().decode(
-    await decompress(
-      await open(
-        privateKey,
-        readingPublic,
-        unframe(stored).sealed,
-        associatedData(bucket, SEQ_FROM, SEQ_TO),
-      ),
-    ),
+    await decompress(await open(privateKey, readingPublic, stored, associatedData(bucket, DAY))),
   );
   expect(
     readBack.includes("agg:steps:2026-08-07T09:00:00Z:h"),
@@ -165,16 +141,11 @@ if (postTo) {
 }
 
 section(
-  `Both sides agree: bucket ${bucket}, ${lines.length} lines, ${blob.length} bytes on the wire`,
+  `Both sides agree: bucket ${bucket}, day ${DAY}, ${lines.length} lines, ${blob.length} bytes`,
 );
 console.log(
   `  canonical request the reader rebuilt:\n${
-    (await canonicalRequest({
-      bucket,
-      seqFrom: SEQ_FROM,
-      seqTo: SEQ_TO,
-      timestamp: emitted.timestamp,
-    }, blob))
+    (await canonicalRequest({ bucket, day: DAY, timestamp: emitted.timestamp }, blob))
       .split("\n").map((part) => `    ${part}`).join("\n")
   }`,
 );

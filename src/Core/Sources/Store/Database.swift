@@ -6,29 +6,43 @@ import GRDB
 /// The device deliberately does **not** mirror Health. HealthKit is already the
 /// source of truth and sits a millisecond away, so a second full copy would buy
 /// nothing and cost hundreds of megabytes plus a migration every time the shape
-/// of a record changes. Three small things do have to survive a relaunch, and
-/// this is all of them:
+/// of a record changes. What has to survive a relaunch is only bookkeeping:
 ///
-/// - `outbox` — facts waiting to reach the server, in the order they were made;
+/// - `day`    — one row per day this device knows about: whether it still has to
+///              be sent, and the fingerprint of what was sent last time;
+/// - `sample` — which day each HealthKit record belongs to. The one place a
+///              record's own contents are shadowed, and only its date;
 /// - `anchor` — where each HealthKit reader stopped, one row per sample type;
-/// - `meta`   — the counters: next sequence number, last sequence the server
-///              confirmed, and how far the first full export has got.
+/// - `meta`   — how far the first export has walked, and when the last day went.
 enum Database {
     static func migrator() -> DatabaseMigrator {
         var migrator = DatabaseMigrator()
 
-        migrator.registerMigration("v1.initial") { db in
-            // Keyed by the event's own stable id, so re-reading the same slice
-            // of Health lands on the same row instead of appending a duplicate.
-            try db.create(table: "outbox") { table in
-                table.column("id", .text).primaryKey().notNull()
-                table.column("seq", .integer).notNull()
-                table.column("kind", .text).notNull()
-                table.column("payload", .blob).notNull()
+        migrator.registerMigration("v1.days") { db in
+            // A day is the unit of everything: what gets built, what gets sent,
+            // what gets replaced. `digest` is the fingerprint of the body the
+            // service last accepted, so rebuilding a day that has not changed
+            // costs a comparison instead of an upload.
+            try db.create(table: "day") { table in
+                table.column("day", .text).primaryKey().notNull()
+                table.column("digest", .blob)
+                table.column("dirty", .integer).notNull()
                 table.column("updatedAt", .double).notNull()
             }
-            // Sending walks this index in order and never scans the table.
-            try db.create(index: "outbox_on_seq", on: "outbox", columns: ["seq"], unique: true)
+            // Picking the next days to send walks this index instead of the
+            // table, which matters once history is four thousand rows long.
+            try db.create(index: "day_on_dirty", on: "day", columns: ["dirty", "day"])
+
+            // Deletions are why this exists. HealthKit reports a removed record
+            // as a bare identifier — no date, no type — and the record it names
+            // is already gone, so nothing can be asked about it afterwards. The
+            // day it belonged to is knowable only if it was written down while
+            // the record still existed.
+            try db.create(table: "sample") { table in
+                table.column("uuid", .blob).primaryKey().notNull()
+                table.column("day", .text).notNull()
+            }
+            try db.create(index: "sample_on_day", on: "sample", columns: ["day"])
 
             try db.create(table: "anchor") { table in
                 table.column("typeIdentifier", .text).primaryKey().notNull()
@@ -65,21 +79,21 @@ enum Database {
     }
 }
 
-/// Counters that live in `meta`. Spelled out here so a typo is a compile error
+/// Values that live in `meta`. Spelled out here so a typo is a compile error
 /// rather than a silently missing value that reads as zero.
 enum MetaKey: String {
-    /// Sequence number the next enqueued event will take. Starts at 1.
-    case nextSeq = "outbox.nextSeq"
-    /// Highest sequence number the server has confirmed. Starts at 0.
-    case acknowledgedSeq = "outbox.acknowledgedSeq"
-    /// When that mark last moved, in seconds since 1970. The screen needs one
-    /// fact above all others — is this still working — and "nothing waiting"
-    /// cannot tell "nothing new to send" apart from "stopped a week ago". A
-    /// time can.
-    case acknowledgedAt = "outbox.acknowledgedAt"
-
-    /// How far back the first full export has walked for one metric.
-    static func backfillProgress(metric: String) -> String {
-        "backfill.\(metric)"
-    }
+    /// The oldest day the first export has reached, walking backwards. Absent
+    /// until it starts, and left in place when it finishes so a reinstall does
+    /// not silently begin again.
+    case backfillReached = "backfill.reached"
+    /// When a day was last accepted by the service, in seconds since 1970.
+    ///
+    /// The screen needs one fact above all others — is this still working — and
+    /// "nothing waiting" cannot tell "nothing new to send" apart from "stopped a
+    /// week ago". A time can.
+    case lastUploadAt = "upload.lastAt"
+    /// The day this app first ran. Hourly totals begin here: buckets by the hour
+    /// for a decade would be several hundred thousand readings at a resolution
+    /// nobody asks of last decade.
+    case installedDay = "install.day"
 }

@@ -71,7 +71,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         scheduleRefresh() // always re-arm first; an early return would end the chain
 
         let work = Task { @MainActor in
-            await Services.shared.collectNow()
+            await Services.shared.refreshNow()
             await Services.shared.sendNow()
             task.setTaskCompleted(success: true)
         }

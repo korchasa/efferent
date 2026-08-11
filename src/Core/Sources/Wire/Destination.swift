@@ -34,15 +34,19 @@ public struct Destination: Equatable, Codable, Sendable {
         return String(Base32.encode(Data(digest)).prefix(26))
     }
 
-    public var uploadURL: URL {
+    public var bucketURL: URL {
         endpoint.appendingPathComponent("b").appendingPathComponent(bucket)
     }
 
-    /// What the archive already holds, in counts rather than contents. Asked
-    /// once, before this device's first batch, to find out where to start
-    /// numbering.
+    /// Where one day is written and read. The same address for both, because a
+    /// day has one place and writing it again is the ordinary case.
+    public func dayURL(_ day: String) -> URL {
+        bucketURL.appendingPathComponent("d").appendingPathComponent(day)
+    }
+
+    /// What the archive holds, in counts rather than contents.
     public var statsURL: URL {
-        uploadURL.appendingPathComponent("stats")
+        bucketURL.appendingPathComponent("stats")
     }
 }
 
@@ -94,26 +98,25 @@ public enum CanonicalRequest {
     public static let protocolName = "efferent/v1"
 
     public static func bytes(
-        bucket: String, seqFrom: Int64, seqTo: Int64, timestamp: Int64, body: Data
+        bucket: String, day: String, timestamp: Int64, body: Data
     ) -> Data {
         let digest = Data(SHA256.hash(data: body))
         let line = [
             protocolName,
             bucket,
-            String(seqFrom),
-            String(seqTo),
+            day,
             String(timestamp),
             Base64URL.encode(digest),
         ].joined(separator: "\n")
         return Data(line.utf8)
     }
 
-    /// What the sealed batch is bound to.
+    /// What the sealed day is bound to.
     ///
-    /// With the bucket and the range inside the tag, a service that cannot read
-    /// a blob also cannot move it somewhere else or relabel its range — the
-    /// decryption simply stops working.
-    public static func associatedData(bucket: String, seqFrom: Int64, seqTo: Int64) -> Data {
-        Data("\(protocolName)\n\(bucket)\n\(seqFrom)\n\(seqTo)".utf8)
+    /// With the bucket and the date inside the tag, a service that cannot read a
+    /// day also cannot move it somewhere else or answer one date with another
+    /// date's object — the decryption simply stops working.
+    public static func associatedData(bucket: String, day: String) -> Data {
+        Data("\(protocolName)\n\(bucket)\n\(day)".utf8)
     }
 }

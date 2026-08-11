@@ -9,28 +9,21 @@ public let eventSchemaVersion = 1
 /// One thing that happened in Health, in the shape it travels in.
 ///
 /// `id` is derived from the data itself — never from a counter — so the same
-/// fact always carries the same id. That is what makes a re-send free: the
-/// receiver overwrites a row instead of growing a duplicate, and the device is
-/// therefore allowed to be careless and send a batch twice.
+/// fact always carries the same id whichever day it is read on and however many
+/// times. It is what a reader keys by.
+///
+/// There is no kind on an event any more, and nothing lost by that. A day is
+/// sent whole and replaces the day before it, so there is nothing to say about
+/// a record being removed: it is simply not in the day the next time. What is
+/// left is a total or a reading, and a total is the one that names its bucket.
 public struct Event: Equatable, Sendable {
     /// Stable identity of the fact, e.g. `agg:steps:2026-08-07T09:00Z:h`.
     public let id: String
-    public let kind: Kind
-    /// The kind-specific fields, already encoded as a canonical JSON object.
-    /// Build it with ``payload(_:)`` — hand-rolled bytes will break change
-    /// detection in the outbox.
+    /// The fields, already encoded as a canonical JSON object. Build it with
+    /// ``payload(_:)`` — hand-rolled bytes will break change detection.
     public let payload: Data
 
-    public enum Kind: String, Sendable {
-        /// A bucketed, de-duplicated total: steps per hour, energy per day.
-        case aggregate = "health.agg"
-        /// A single record kept as-is: a sleep interval, a workout, a heart rate.
-        case sample = "health.sample"
-        /// A record the person removed from Health.
-        case deletion = "health.delete"
-    }
-
-    public init(id: String, kind: Kind, payload: Data) throws {
+    public init(id: String, payload: Data) throws {
         guard !id.isEmpty else {
             throw EventError.emptyIdentifier
         }
@@ -38,16 +31,15 @@ public struct Event: Equatable, Sendable {
             throw EventError.payloadIsNotAnObject(id: id)
         }
         self.id = id
-        self.kind = kind
         self.payload = payload
     }
 
-    /// Encode kind-specific fields into a canonical payload.
+    /// Encode the fields into a canonical payload.
     ///
     /// Keys come out sorted and dates as ISO-8601, so encoding the same values
-    /// twice yields byte-identical output. The outbox compares those bytes to
-    /// decide whether anything actually changed, and an unstable encoder would
-    /// make every re-scan look like new data.
+    /// twice yields byte-identical output. A day is only re-sent when its bytes
+    /// differ from the ones already up there, and an unstable encoder would make
+    /// every re-read look like a change.
     public static func payload(_ fields: some Encodable) throws -> Data {
         try canonicalEncoder.encode(fields)
     }

@@ -26,8 +26,8 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(destination.bucket, Self.expectedBucket)
         XCTAssertEqual(destination.endpoint.host(), "efferent.example.com")
         XCTAssertEqual(
-            destination.uploadURL.absoluteString,
-            "https://efferent.example.com/b/\(Self.expectedBucket)"
+            destination.dayURL("2026-08-07").absoluteString,
+            "https://efferent.example.com/b/\(Self.expectedBucket)/d/2026-08-07"
         )
     }
 
@@ -59,24 +59,24 @@ final class WireTests: XCTestCase {
     /// reordered field here means every upload is refused.
     func testTheCanonicalRequestIsTheOneTheServiceRebuilds() {
         let bytes = CanonicalRequest.bytes(
-            bucket: "b", seqFrom: 7, seqTo: 9, timestamp: 1_700_000_000, body: Data("x".utf8)
+            bucket: "b", day: "2026-08-07", timestamp: 1_700_000_000, body: Data("x".utf8)
         )
 
         let lines = String(decoding: bytes, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false)
-        XCTAssertEqual(Array(lines.prefix(5)), ["efferent/v1", "b", "7", "9", "1700000000"])
+        XCTAssertEqual(Array(lines.prefix(4)), ["efferent/v1", "b", "2026-08-07", "1700000000"])
         // base64url of SHA-256("x"), as the reader computes it.
-        XCTAssertEqual(lines[5], "LXEWQrcmsEQBYnyp-6wy9chTD7GQPMTbAiWHF5IaSIE")
+        XCTAssertEqual(lines[4], "LXEWQrcmsEQBYnyp-6wy9chTD7GQPMTbAiWHF5IaSIE")
     }
 
-    func testAssociatedDataBindsTheBucketAndTheRange() {
-        let data = CanonicalRequest.associatedData(bucket: "abc", seqFrom: 1, seqTo: 3)
+    func testAssociatedDataBindsTheBucketAndTheDay() {
+        let data = CanonicalRequest.associatedData(bucket: "abc", day: "2026-08-07")
 
-        XCTAssertEqual(String(decoding: data, as: UTF8.self), "efferent/v1\nabc\n1\n3")
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), "efferent/v1\nabc\n2026-08-07")
     }
 
     func testDeflateActuallyShrinksABatch() throws {
         let lines = (0 ..< 200)
-            .map { #"{"id":"agg:steps:\#($0):h","seq":\#($0),"v":1,"type":"health.agg"}"# }
+            .map { #"{"id":"agg:steps:\#($0):h","v":1,"metric":"steps","bucket":"hour"}"# }
             .joined(separator: "\n")
         let original = Data(lines.utf8)
 
@@ -85,10 +85,11 @@ final class WireTests: XCTestCase {
         XCTAssertLessThan(packed.count, original.count / 5)
     }
 
-    /// Sealing twice must never repeat, or a service watching the bytes could
-    /// tell that the same reading went up again.
-    func testSealingTheSameBatchTwiceGivesDifferentBytes() throws {
-        let aad = CanonicalRequest.associatedData(bucket: "abc", seqFrom: 1, seqTo: 1)
+    /// Sealing twice must never repeat. A day is rewritten whenever it changes,
+    /// so a service that saw identical bytes would learn that a day went up
+    /// again unchanged — and it has no business knowing even that.
+    func testSealingTheSameDayTwiceGivesDifferentBytes() throws {
+        let aad = CanonicalRequest.associatedData(bucket: "abc", day: "2026-08-07")
 
         let first = try SealedBox.seal(
             readingPublicKey: Self.readingPublicKey, plaintext: Data("same".utf8), associatedData: aad
@@ -106,7 +107,7 @@ final class WireTests: XCTestCase {
         let blob = try SealedBox.seal(
             readingPublicKey: Self.readingPublicKey,
             plaintext: plaintext,
-            associatedData: CanonicalRequest.associatedData(bucket: "abc", seqFrom: 1, seqTo: 1)
+            associatedData: CanonicalRequest.associatedData(bucket: "abc", day: "2026-08-07")
         )
 
         XCTAssertEqual(blob.first, SealedBox.version)

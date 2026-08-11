@@ -10,55 +10,58 @@ final class NDJSONTests: XCTestCase {
 
     func testTheEnvelopeSitsAlongsideThePayloadFields() throws {
         let payload = try Event.payload(["metric": "steps", "value": "842"])
-        let line = try NDJSON.line(id: "agg:steps:2026-08-07T09:00Z:h", seq: 41207, kind: .aggregate, payload: payload)
+        let line = try NDJSON.line(id: "agg:steps:2026-08-07T09:00Z:h", payload: payload)
 
         let object = try decode(line)
         XCTAssertEqual(object["id"] as? String, "agg:steps:2026-08-07T09:00Z:h")
-        XCTAssertEqual(object["seq"] as? Int, 41207)
         XCTAssertEqual(object["v"] as? Int, eventSchemaVersion)
-        XCTAssertEqual(object["type"] as? String, "health.agg")
         XCTAssertEqual(object["metric"] as? String, "steps")
         XCTAssertEqual(object["value"] as? String, "842")
     }
 
-    /// A deletion carries nothing but its id, so the payload is `{}` and the
-    /// splice must not leave a trailing comma behind.
+    /// An event with nothing but its identity leaves `{}` behind, and the splice
+    /// must not leave a trailing comma with it.
     func testAnEmptyPayloadStillProducesValidJSON() throws {
-        let line = try NDJSON.line(id: "hk:sleep:9A2C", seq: 3, kind: .deletion, payload: Data("{}".utf8))
+        let line = try NDJSON.line(id: "hk:sleep:9A2C", payload: Data("{}".utf8))
 
         let object = try decode(line)
-        XCTAssertEqual(object.count, 4)
-        XCTAssertEqual(object["type"] as? String, "health.delete")
+        XCTAssertEqual(object.count, 2)
+        XCTAssertEqual(object["id"] as? String, "hk:sleep:9A2C")
     }
 
     func testQuotesAndNewlinesInAnIdAreEscaped() throws {
-        let line = try NDJSON.line(id: "odd\"id\nhere", seq: 1, kind: .sample, payload: Data("{}".utf8))
+        let line = try NDJSON.line(id: "odd\"id\nhere", payload: Data("{}".utf8))
 
         let object = try decode(line)
         XCTAssertEqual(object["id"] as? String, "odd\"id\nhere")
     }
 
     func testPayloadThatIsNotAnObjectIsRefused() {
-        XCTAssertThrowsError(
-            try NDJSON.line(id: "a", seq: 1, kind: .sample, payload: Data("[1,2]".utf8))
-        )
+        XCTAssertThrowsError(try NDJSON.line(id: "a", payload: Data("[1,2]".utf8)))
     }
 
     func testBodyIsOneLinePerEvent() throws {
-        let store = try Store.inMemory()
-        try store.commit(events: [
-            Event(id: "a", kind: .sample, payload: Event.payload(["v": "1"])),
-            Event(id: "b", kind: .sample, payload: Event.payload(["v": "2"])),
+        let body = try NDJSON.body([
+            Event(id: "a", payload: Event.payload(["v": "1"])),
+            Event(id: "b", payload: Event.payload(["v": "2"])),
         ])
 
-        let body = try NDJSON.body(store.pending(limit: 10))
-
-        let lines = body.split(separator: UInt8(ascii: "\n"))
-        XCTAssertEqual(lines.count, 2)
+        XCTAssertEqual(body.split(separator: UInt8(ascii: "\n")).count, 2)
     }
 
-    /// Change detection in the outbox compares payload bytes, so the encoder has
-    /// to be stable: the same values must always produce the same bytes.
+    /// Whether a day has changed is decided by comparing the bytes of its body
+    /// against the bytes last sent. HealthKit makes no promise about the order
+    /// it hands samples back in, so without sorting an unchanged day would look
+    /// different every time and re-upload itself forever.
+    func testTheBodyIsTheSameWhicheverOrderTheEventsArriveIn() throws {
+        let first = try Event(id: "a", payload: Event.payload(["v": "1"]))
+        let second = try Event(id: "b", payload: Event.payload(["v": "2"]))
+
+        XCTAssertEqual(try NDJSON.body([first, second]), try NDJSON.body([second, first]))
+    }
+
+    /// Change detection compares payload bytes, so the encoder has to be stable:
+    /// the same values must always produce the same bytes.
     func testPayloadEncodingIsStableAcrossCalls() throws {
         let first = try Event.payload(["b": "2", "a": "1"])
         let second = try Event.payload(["a": "1", "b": "2"])

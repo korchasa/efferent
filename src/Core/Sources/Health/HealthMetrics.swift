@@ -115,11 +115,6 @@ struct WorkoutPayload: Encodable {
     let source: String
 }
 
-/// A deletion names its metric so the receiver never has to parse the id apart.
-struct DeletionPayload: Encodable {
-    let metric: String
-}
-
 // MARK: - Encoders
 
 @Sendable private func encodeSleep(_ sample: HKSample) throws -> Data {

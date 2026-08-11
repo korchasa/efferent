@@ -31,12 +31,24 @@ public enum Bucket: String, Sendable {
     }
 }
 
+/// One event with the two things only this layer can work out: the day it
+/// belongs to, and — for a record HealthKit can later report as deleted — the
+/// identifier it will be named by.
+///
+/// Both travel alongside the event rather than inside it. They are the device's
+/// own bookkeeping and mean nothing to whoever reads the archive.
+public struct Reading: Sendable {
+    public let event: Event
+    public let day: String
+    public let identifier: UUID?
+}
+
 /// Turns HealthKit into events. Knows nothing about sending or storing.
 public struct HealthReader {
     private let healthStore: HKHealthStore
     private let calendar: Calendar
 
-    public init(healthStore: HKHealthStore, calendar: Calendar = .current) {
+    public init(healthStore: HKHealthStore, calendar: Calendar = Day.calendar()) {
         self.healthStore = healthStore
         self.calendar = calendar
     }
@@ -66,13 +78,12 @@ public struct HealthReader {
 
     /// De-duplicated totals for `metric`, one event per bucket that has data.
     ///
-    /// Buckets with nothing in them are skipped rather than sent as zero. The
-    /// receiver already knows how far the stream has got from the sequence
-    /// number, so a gap is unambiguous, and an hour of zeros every night would
-    /// be most of the traffic.
+    /// Buckets with nothing in them are skipped rather than sent as zero. A day
+    /// is sent whole, so an absent bucket is unambiguous — nothing happened —
+    /// and an hour of zeros every night would be most of the traffic.
     public func aggregates(
         metric: AggregateMetric, from: Date, to: Date, bucket: Bucket
-    ) async throws -> [Event] {
+    ) async throws -> [Reading] {
         let descriptor = HKStatisticsCollectionQueryDescriptor(
             predicate: HKSamplePredicate.quantitySample(
                 type: metric.type,
@@ -84,7 +95,7 @@ public struct HealthReader {
         )
 
         let collection = try await descriptor.result(for: healthStore)
-        var events: [Event] = []
+        var readings: [Reading] = []
 
         for statistics in collection.statistics() {
             guard statistics.startDate >= from, statistics.startDate < to else { continue }
@@ -98,64 +109,107 @@ public struct HealthReader {
                 value: sum.doubleValue(for: metric.unit),
                 unit: metric.unit.unitString
             ))
-            try events.append(Event(
-                id: Self.aggregateID(metric: metric.name, start: statistics.startDate, bucket: bucket),
-                kind: .aggregate,
-                payload: payload
+            try readings.append(Reading(
+                event: Event(
+                    id: Self.aggregateID(
+                        metric: metric.name, start: statistics.startDate, bucket: bucket
+                    ),
+                    payload: payload
+                ),
+                day: Day.of(statistics.startDate, in: calendar),
+                identifier: nil
             ))
         }
-        return events
+        return readings
     }
 
     /// `agg:steps:2026-08-07T09:00:00Z:h` — recomputing the same bucket always
-    /// produces the same id, which is what makes the daily re-scan free.
+    /// produces the same id, which is what makes re-reading a day cheap.
     static func aggregateID(metric: String, start: Date, bucket: Bucket) -> String {
         "agg:\(metric):\(iso.string(from: start)):\(bucket.rawValue)"
     }
 
     // MARK: - Samples
 
-    public struct SampleBatch {
-        public let events: [Event]
-        public let anchor: HKQueryAnchor
+
+    /// Every record of `metric` that starts within the interval.
+    ///
+    /// By start rather than by overlap, and that is a decision worth naming: a
+    /// night of sleep that begins before midnight belongs to the evening it
+    /// began in. Overlap would put it in two days, and a day that is written
+    /// whole cannot hold half a record twice.
+    public func samples(metric: SampleMetric, from: Date, to: Date) async throws -> [Reading] {
+        let descriptor = HKSampleQueryDescriptor(
+            predicates: [
+                .sample(
+                    type: metric.type,
+                    predicate: HKQuery.predicateForSamples(
+                        withStart: from, end: to, options: .strictStartDate
+                    )
+                ),
+            ],
+            sortDescriptors: [SortDescriptor(\.startDate, order: .forward)]
+        )
+
+        return try await descriptor.result(for: healthStore).map { sample in
+            Reading(
+                event: try Event(
+                    id: Self.sampleID(metric: metric.name, uuid: sample.uuid),
+                    payload: metric.encode(sample)
+                ),
+                day: Day.of(sample.startDate, in: calendar),
+                identifier: sample.uuid
+            )
+        }
     }
 
-    /// Everything added or removed for `metric` since `anchor`.
+    /// What changed for `metric` since `anchor`, as days rather than as data.
     ///
-    /// Deletions matter as much as additions: a person who removes a mistaken
-    /// workout expects it gone everywhere, and without these events the server
-    /// would keep it for good. A deletion reuses the id of the sample it
-    /// removes, so the receiver needs no lookup table to know what to drop.
-    public func samples(
-        metric: SampleMetric, anchor: HKQueryAnchor?, limit: Int = HKObjectQueryNoLimit
-    ) async throws -> SampleBatch {
+    /// The events themselves are thrown away here on purpose. A change is only
+    /// ever a reason to rebuild the day it happened in; the day is then read
+    /// from Health in full, which is what makes the upload the truth rather than
+    /// a running total of differences that has to stay correct forever.
+    ///
+    /// Deletions come back as bare identifiers — no date — so their days are not
+    /// in here. The caller looks those up in what it wrote down earlier.
+    public func changedDays(
+        metric: SampleMetric, anchor: HKQueryAnchor?
+    ) async throws -> (days: Set<String>, removed: [UUID], anchor: HKQueryAnchor) {
         let descriptor = HKAnchoredObjectQueryDescriptor(
             predicates: [.sample(type: metric.type)],
-            anchor: anchor,
-            limit: limit == HKObjectQueryNoLimit ? nil : limit
+            anchor: anchor
         )
         let result = try await descriptor.result(for: healthStore)
 
-        var events: [Event] = []
+        var days: Set<String> = []
         for sample in result.addedSamples {
-            try events.append(Event(
-                id: Self.sampleID(metric: metric.name, uuid: sample.uuid),
-                kind: .sample,
-                payload: metric.encode(sample)
-            ))
+            days.insert(Day.of(sample.startDate, in: calendar))
         }
-        for deleted in result.deletedObjects {
-            try events.append(Event(
-                id: Self.sampleID(metric: metric.name, uuid: deleted.uuid),
-                kind: .deletion,
-                payload: Event.payload(DeletionPayload(metric: metric.name))
-            ))
-        }
-        return SampleBatch(events: events, anchor: result.newAnchor)
+        return (days, result.deletedObjects.map(\.uuid), result.newAnchor)
     }
 
     static func sampleID(metric: String, uuid: UUID) -> String {
         "hk:\(metric):\(uuid.uuidString)"
+    }
+
+    /// The first day Health has anything at all about, or nil on an empty store.
+    ///
+    /// It is where the first export stops walking backwards. Asked of the
+    /// aggregate types only: a phone whose oldest record is a step count from
+    /// 2015 has nothing before that to find.
+    public func earliestDay() async throws -> String? {
+        var earliest: Date?
+        for metric in AggregateMetric.all {
+            let descriptor = HKSampleQueryDescriptor(
+                predicates: [.quantitySample(type: metric.type)],
+                sortDescriptors: [SortDescriptor(\.startDate, order: .forward)],
+                limit: 1
+            )
+            if let first = try await descriptor.result(for: healthStore).first?.startDate {
+                earliest = min(earliest ?? first, first)
+            }
+        }
+        return earliest.map { Day.of($0, in: calendar) }
     }
 }
 
