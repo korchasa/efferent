@@ -2,21 +2,24 @@ import Foundation
 import HealthKit
 import os
 
-/// Drives collection: subscribes to HealthKit, turns what arrives into events,
-/// and puts them in the outbox.
+/// Drives collection: subscribes to HealthKit, works out which days changed,
+/// and builds a day when one is asked for.
 ///
-/// Nothing here sends anything. It calls ``onNewData`` when there is something
-/// worth sending and lets the uploader decide when that happens.
+/// Nothing here sends anything. It marks days and calls ``onNewData`` when
+/// there is something worth sending; the uploader decides when that happens.
+///
+/// The shape to keep in mind: a change is never turned into an update. It is
+/// turned into the *date* it happened on, and that day is later read out of
+/// Health in full. So what reaches the archive is always what Health says right
+/// now, never a running total of differences that has to have been right every
+/// time.
 public final class HealthCoordinator {
-    /// Days of daily totals recomputed on every refresh.
+    /// Days re-read on every refresh.
     ///
     /// The Watch syncs late, so yesterday can still grow tomorrow. Re-reading a
-    /// week costs nothing because unchanged days never leave the device — see
-    /// `Store.commit`.
+    /// week costs almost nothing because a day whose contents did not change is
+    /// never uploaded — see ``Uploader``.
     public static let recomputedDays = 7
-    /// Days of hourly totals kept fresh. Shorter than the daily window: hourly
-    /// buckets are seven times the volume and settle much sooner.
-    public static let hourlyWindowDays = 2
 
     private let store: Store
     private let reader: HealthReader
@@ -25,10 +28,14 @@ public final class HealthCoordinator {
     private let log = Logger(subsystem: "dev.korchasa.efferent", category: "health")
     private var observers: [HKObserverQuery] = []
 
-    /// Called after new events land in the outbox.
+    /// Called after days are marked as needing to go.
     public var onNewData: (() -> Void)?
 
-    public init(store: Store, healthStore: HKHealthStore = HKHealthStore(), calendar: Calendar = .current) {
+    public init(
+        store: Store,
+        healthStore: HKHealthStore = HKHealthStore(),
+        calendar: Calendar = Day.calendar()
+    ) {
         self.store = store
         self.healthStore = healthStore
         self.calendar = calendar
@@ -37,6 +44,10 @@ public final class HealthCoordinator {
 
     public func requestAuthorization() async throws {
         try await reader.requestAuthorization()
+    }
+
+    public var today: String {
+        Day.of(Date(), in: calendar)
     }
 
     // MARK: - Subscriptions
@@ -56,14 +67,15 @@ public final class HealthCoordinator {
 
         for metric in SampleMetric.all {
             subscribe(to: metric.type, frequency: .immediate) { [weak self] in
-                _ = try await self?.drain(metric: metric)
+                _ = try await self?.noteChanges(metric: metric)
             }
         }
         for metric in AggregateMetric.all {
             // Hourly is the real ceiling anyway: the system quietly downgrades
-            // `.immediate` for these types.
+            // `.immediate` for these types. And a total has no anchor to consult,
+            // so all a delivery can say is "the recent past moved".
             subscribe(to: metric.type, frequency: .hourly) { [weak self] in
-                _ = try await self?.refreshRecentAggregates(metrics: [metric])
+                _ = try self?.markRecentDays()
             }
         }
     }
@@ -111,117 +123,149 @@ public final class HealthCoordinator {
         observers.removeAll()
     }
 
-    // MARK: - Collection
+    // MARK: - Noticing
 
-    /// Read everything new for one record-by-record metric and store it.
+    /// Work out which days `metric` changed on, and mark them.
     ///
-    /// The events and the new anchor go into a single transaction. That is the
-    /// one rule this method exists to keep: an anchor saved without its events
-    /// tells HealthKit the data was delivered, and it is never offered again.
+    /// The days and the new anchor go down in one transaction. That is the one
+    /// rule this method exists to keep: an anchor saved without its marks tells
+    /// HealthKit the change was handled, and it is never offered again.
     @discardableResult
-    public func drain(metric: SampleMetric) async throws -> Int {
+    public func noteChanges(metric: SampleMetric) async throws -> Int {
         let stored = try store.anchor(for: metric.type.identifier)
         let previous = try stored.flatMap(HKQueryAnchor.decode)
 
-        let batch = try await reader.samples(metric: metric, anchor: previous)
-        let result = try store.commit(
-            events: batch.events,
-            anchor: Anchor(typeIdentifier: metric.type.identifier, value: batch.anchor.encoded())
+        let changes = try await reader.changedDays(metric: metric, anchor: previous)
+        // A deletion arrives as a bare identifier, so the day it was in has to
+        // come from what was written down when the day was last sent.
+        let removedDays = try store.days(ofRemoved: changes.removed)
+
+        let marked = try store.markDirty(
+            changes.days.union(removedDays),
+            anchor: Anchor(
+                typeIdentifier: metric.type.identifier, value: changes.anchor.encoded()
+            )
         )
-        if result.enqueued > 0 {
-            log.info("\(metric.name, privacy: .public): queued \(result.enqueued) events")
+        if marked > 0 {
+            log.info("\(metric.name, privacy: .public): \(marked) days to re-read")
         }
-        return result.enqueued
+        return marked
     }
 
-    /// Recompute the recent totals: a week of days, two days of hours.
+    /// Mark the recent past as worth re-reading. Cheap: an unchanged day is
+    /// noticed as unchanged when it is built, and never leaves the phone.
     @discardableResult
-    public func refreshRecentAggregates(
-        metrics: [AggregateMetric] = AggregateMetric.all
-    ) async throws -> Int {
-        let now = Date()
-        let dayFrom = calendar.startOfDay(
-            for: calendar.date(byAdding: .day, value: -Self.recomputedDays, to: now) ?? now
+    public func markRecentDays() throws -> Int {
+        let startOfWindow = calendar.date(
+            byAdding: .day, value: -(Self.recomputedDays - 1), to: Date()
+        ) ?? Date()
+        let days = try Day.range(
+            from: Day.of(startOfWindow, in: calendar), to: today, in: calendar
         )
-        let hourFrom = calendar.startOfDay(
-            for: calendar.date(byAdding: .day, value: -Self.hourlyWindowDays, to: now) ?? now
-        )
-
-        var events: [Event] = []
-        for metric in metrics {
-            events += try await reader.aggregates(metric: metric, from: dayFrom, to: now, bucket: .day)
-            events += try await reader.aggregates(metric: metric, from: hourFrom, to: now, bucket: .hour)
-        }
-
-        let result = try store.commit(events: events)
-        if result.enqueued > 0 {
-            log.info("aggregates: queued \(result.enqueued), unchanged \(result.unchanged)")
-        }
-        return result.enqueued
+        return try store.markDirty(days)
     }
 
     /// Everything at once, for the button and for a background refresh.
     @discardableResult
-    public func collectEverythingRecent() async throws -> Int {
-        var queued = try await refreshRecentAggregates()
+    public func refresh() async throws -> Int {
+        var marked = try markRecentDays()
         for metric in SampleMetric.all {
-            queued += try await drain(metric: metric)
+            marked += try await noteChanges(metric: metric)
         }
-        if queued > 0 {
+        if marked > 0 {
             onNewData?()
         }
-        return queued
+        return marked
     }
 
     // MARK: - First export
 
-    public struct BackfillStep: Sendable {
-        public let metric: String
-        public let reached: Date
+    /// Mark every day Health has anything about, back to the very first record.
+    ///
+    /// One transaction and a second of work, because marking a day is a row and
+    /// nothing more. What takes the time afterwards is the sending, and that
+    /// resumes on its own: a day is either still marked or it is not.
+    @discardableResult
+    public func markHistory() async throws -> Int {
+        guard let earliest = try await reader.earliestDay() else {
+            log.info("no history in Health to export")
+            return 0
+        }
+        let days = try Day.range(from: earliest, to: today, in: calendar)
+        let marked = try store.markDirty(days)
+        try store.recordBackfillReached(earliest)
+        log.info("history back to \(earliest, privacy: .public): \(marked) days to send")
+        onNewData?()
+        return marked
     }
 
-    /// Walk the history backwards a month at a time, saving progress as it goes.
+    // MARK: - Building
+
+    /// Read `days` out of Health, whole.
     ///
-    /// This cannot run in the background: Health can hold years, and a wake-up
-    /// gets about thirty seconds. It belongs on screen, with a progress bar, and
-    /// it has to survive being interrupted — hence the saved boundary per metric.
+    /// Queried as one span rather than a day at a time. Health answers a range
+    /// almost as fast as a single day, and the first export asks for thousands
+    /// of them — per-day queries would turn a minute into an hour for no
+    /// difference in the result.
     ///
-    /// Only daily totals are backfilled. Hourly buckets for five years would be
-    /// several hundred thousand events for a resolution nobody asks of last
-    /// decade; hourly history therefore begins when the app was installed.
-    public func backfill(onStep: @Sendable (BackfillStep) -> Void = { _ in }) async throws {
+    /// Hourly totals only from the day the app was installed. Buckets by the
+    /// hour for a decade would be several hundred thousand readings at a
+    /// resolution nobody asks of last decade, and daily totals for that history
+    /// are what people actually look at.
+    public func build(days: [String]) async throws -> [String: DayContents] {
+        guard let first = days.min(), let last = days.max() else { return [:] }
+        let span = (start: try Day.bounds(first, in: calendar).start,
+                    end: try Day.bounds(last, in: calendar).end)
+        let wanted = Set(days)
+        let hourlyFrom = try store.installedDay(defaultingTo: today)
+
+        var readings: [Reading] = []
         for metric in AggregateMetric.all {
-            guard let earliest = try await earliestSample(for: metric) else { continue }
-
-            var upperBound = try store.backfillProgress(for: metric.name)
-                ?? calendar.startOfDay(for: Date())
-
-            while upperBound > earliest {
-                try Task.checkCancellation()
-
-                // Rolling months rather than calendar ones: the boundary only
-                // has to move backwards steadily, and this cannot land on a
-                // month that does not exist.
-                let lowerBound = calendar.date(byAdding: .month, value: -1, to: upperBound) ?? earliest
-                let events = try await reader.aggregates(
-                    metric: metric, from: max(lowerBound, earliest), to: upperBound, bucket: .day
+            readings += try await reader.aggregates(
+                metric: metric, from: span.start, to: span.end, bucket: .day
+            )
+            if last >= hourlyFrom {
+                let hourly = try Day.bounds(max(first, hourlyFrom), in: calendar).start
+                readings += try await reader.aggregates(
+                    metric: metric, from: hourly, to: span.end, bucket: .hour
                 )
-                try store.commit(events: events)
-                try store.recordBackfillProgress(lowerBound, for: metric.name)
-
-                upperBound = lowerBound
-                onStep(BackfillStep(metric: metric.name, reached: lowerBound))
             }
         }
-        onNewData?()
+        for metric in SampleMetric.all {
+            readings += try await reader.samples(metric: metric, from: span.start, to: span.end)
+        }
+
+        // Every wanted day gets an entry, including the ones Health had nothing
+        // for. A day that came back empty is a fact about that day — and without
+        // an entry it would stay marked forever, retried on every pass.
+        var contents: [String: DayContents] = [:]
+        for day in wanted {
+            contents[day] = DayContents(events: [], sampleIdentifiers: [])
+        }
+        for reading in readings where wanted.contains(reading.day) {
+            contents[reading.day]?.add(reading)
+        }
+        return contents
+    }
+}
+
+/// One day as it will be sent: the events, and the identifiers of the records
+/// they came from.
+public struct DayContents: Sendable {
+    public private(set) var events: [Event]
+    /// What HealthKit will name if one of these records is later deleted. Kept
+    /// on the device, never sent.
+    public private(set) var sampleIdentifiers: [UUID]
+
+    public init(events: [Event], sampleIdentifiers: [UUID]) {
+        self.events = events
+        self.sampleIdentifiers = sampleIdentifiers
     }
 
-    private func earliestSample(for metric: AggregateMetric) async throws -> Date? {
-        let descriptor = HKSampleQueryDescriptor(
-            predicates: [.quantitySample(type: metric.type)],
-            sortDescriptors: [SortDescriptor(\.startDate, order: .forward)],
-            limit: 1
-        )
-        return try await descriptor.result(for: healthStore).first?.startDate
+    mutating func add(_ reading: Reading) {
+        events.append(reading.event)
+        if let identifier = reading.identifier {
+            sampleIdentifiers.append(identifier)
+        }
     }
 }

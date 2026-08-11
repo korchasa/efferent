@@ -94,13 +94,14 @@ export async function open(
 /**
  * What the ciphertext is bound to.
  *
- * Feeding the bucket and the sequence range in as associated data means a blob
- * cannot be moved to another bucket or relabelled with a different range: the
- * tag stops matching. Without it, a server could shuffle history around
- * undetected even while unable to read a word of it.
+ * Feeding the bucket and the day in as associated data means a blob cannot be
+ * moved to another bucket or relabelled with a different date: the tag stops
+ * matching. Without it, a server could shuffle history around undetected even
+ * while unable to read a word of it — and with days it would not even need to
+ * forge anything, only to answer one date with another date's object.
  */
-export function associatedData(bucket: string, seqFrom: number, seqTo: number): Uint8Array {
-  return new TextEncoder().encode(`efferent/v1\n${bucket}\n${seqFrom}\n${seqTo}`);
+export function associatedData(bucket: string, day: string): Uint8Array {
+  return new TextEncoder().encode(`efferent/v1\n${bucket}\n${day}`);
 }
 
 /**

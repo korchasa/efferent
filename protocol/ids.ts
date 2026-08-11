@@ -1,9 +1,14 @@
 /**
- * Names: how a bucket is identified and how its objects are laid out.
+ * Names: how a bucket is identified and how its days are laid out.
  *
  * The bucket id is derived from the reading key, not chosen. That is what
  * removes accounts from the design entirely — there is nothing to register,
  * and knowing where to write follows from knowing who to write to.
+ *
+ * Inside a bucket the address of everything is a day. Not a sequence number: a
+ * counter belongs to the device that keeps it, so a reinstall restarts it and
+ * two devices could never share one archive. A date is the same date for
+ * everyone, which is what makes a write idempotent and a query a range.
  */
 
 /** RFC 4648 base32, lowercase, no padding — safe in a URL and in a filename. */
@@ -48,7 +53,7 @@ export function isBucketId(value: string): boolean {
 }
 
 /** Everything a device writes lives under this prefix; the trust-on-first-use
- * key sits outside it, so listing data never trips over it. */
+ * key sits outside it, so listing days never trips over it. */
 export const DATA_PREFIX = "d/";
 
 export function signingKeyObject(bucket: string): string {
@@ -56,43 +61,41 @@ export function signingKeyObject(bucket: string): string {
 }
 
 /**
- * `<bucket>/d/00000000000000001-00000000000000500`.
+ * `<bucket>/d/2026-08-07`.
  *
- * Zero-padded so that a plain lexicographic listing comes back in sequence
- * order. Without the padding, blob 100 would sort before blob 20 and paging
- * would silently skip data.
+ * `YYYY-MM-DD` sorts lexicographically in the same order it runs in time, which
+ * is the whole reason a range of days is one listing rather than a scan.
  */
-export function objectKey(bucket: string, seqFrom: number, seqTo: number): string {
-  return `${bucket}/${DATA_PREFIX}${objectName(seqFrom, seqTo)}`;
+export function dayKey(bucket: string, day: string): string {
+  return `${bucket}/${DATA_PREFIX}${day}`;
 }
 
-/** The same name without the bucket in front: what a listing hands back, and
- * what a reader asks for. */
-export function objectName(seqFrom: number, seqTo: number): string {
-  return `${pad(seqFrom)}-${pad(seqTo)}`;
-}
-
-export function parseObjectName(name: string): { seqFrom: number; seqTo: number } | null {
-  const match = /^(\d{17})-(\d{17})$/.exec(name);
-  if (!match) return null;
-  return { seqFrom: Number(match[1]), seqTo: Number(match[2]) };
+export function dayPrefix(bucket: string): string {
+  return `${bucket}/${DATA_PREFIX}`;
 }
 
 /**
- * The key to start a listing after, for a reader that already has everything up
- * to `seq`.
+ * A calendar day, and one that exists.
  *
- * This is what makes the archive walkable. A listing that fetches a page and
- * then filters it in the service can only ever return the first page: once a
- * bucket holds more objects than a page, everything past it is invisible, and
- * the symptom is an empty answer rather than an error. Skipping in the store
- * itself has no such ceiling.
+ * The regex alone would accept the 31st of February, and a day nobody can ever
+ * write is a day a reader could ask for forever. Round-tripping through `Date`
+ * is the cheapest way to insist on a real one.
  */
-export function listingStartAfter(bucket: string, seq: number): string {
-  return `${bucket}/${DATA_PREFIX}${pad(seq)}`;
+export function isDay(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
-/** 17 digits holds every value up to Number.MAX_SAFE_INTEGER. */
-function pad(value: number): string {
-  return String(value).padStart(17, "0");
+/**
+ * The day before `day`.
+ *
+ * Listings skip *after* a key, while a range asks *from* one. Rather than
+ * decrementing the string — which works and reads like a trick — the boundary
+ * is moved by a day, which is what it means.
+ */
+export function dayBefore(day: string): string {
+  const date = new Date(`${day}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
 }

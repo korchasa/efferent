@@ -17,7 +17,6 @@ final class Services: ObservableObject {
 
     @Published private(set) var stats: Stats?
     @Published private(set) var lastError: String?
-    @Published private(set) var backfill: String?
     @Published private(set) var destination: Destination?
 
     private var uploader: Uploader?
@@ -26,10 +25,10 @@ final class Services: ObservableObject {
         do {
             store = try Store(url: Self.storeURL())
         } catch {
-            // The app has nothing to do without its outbox, and carrying on
-            // would silently drop every reading. Better to stop where the cause
-            // is still visible.
-            fatalError("could not open the outbox: \(error)")
+            // The app has nothing to do without it, and carrying on would
+            // silently forget every day that still has to go. Better to stop
+            // where the cause is still visible.
+            fatalError("could not open the day store: \(error)")
         }
         health = HealthCoordinator(store: store)
         destination = Self.loadDestination()
@@ -76,11 +75,19 @@ final class Services: ObservableObject {
             return uploader
         }
         guard let destination else { return nil }
-        let built = Uploader(destination: destination, store: store, identity: identity)
-        // The mark moves on the upload session's own queue, with no view in
-        // sight. Without this the counters only change when the screen
-        // reappears, which reads as a stall while data is going up fine.
-        built.didAcknowledge = { [weak self] in
+        let built = Uploader(
+            destination: destination,
+            store: store,
+            identity: identity,
+            // The uploader decides *when* a day goes; Health decides what is in
+            // it. Handing the reading in rather than the coordinator keeps the
+            // uploader testable without a phone.
+            build: { [health] days in try await health.build(days: days) }
+        )
+        // Days land on the upload session's own queue, with no view in sight.
+        // Without this the counters only change when the screen reappears,
+        // which reads as a stall while data is going up fine.
+        built.didStoreDay = { [weak self] in
             Task { @MainActor in self?.refreshStats() }
         }
         uploader = built
@@ -110,9 +117,9 @@ final class Services: ObservableObject {
         }
     }
 
-    func collectNow() async {
+    func refreshNow() async {
         do {
-            _ = try await health.collectEverythingRecent()
+            _ = try await health.refresh()
             lastError = nil
         } catch {
             lastError = String(describing: error)
@@ -135,24 +142,20 @@ final class Services: ObservableObject {
         refreshStats()
     }
 
-    /// The first export. Runs on screen because Health can hold years and a
-    /// background wake-up gets about thirty seconds.
-    func runFirstExport() async {
-        backfill = "starting…"
+    /// The first export: find how far Health goes back and mark every day since.
+    ///
+    /// Quick, because marking a day is a row and nothing more. The sending that
+    /// follows takes as long as it takes and needs nobody watching — a day is
+    /// either in the archive or still marked.
+    func exportEverything() async {
         do {
-            try await health.backfill { step in
-                Task { @MainActor [weak self] in
-                    self?.backfill =
-                        "\(step.metric) — back to \(step.reached.formatted(date: .abbreviated, time: .omitted))"
-                }
-            }
-            backfill = "done"
+            _ = try await health.markHistory()
             lastError = nil
         } catch {
-            backfill = nil
             lastError = String(describing: error)
         }
         refreshStats()
+        await sendNow()
     }
 
     // MARK: - Storage
@@ -164,9 +167,13 @@ final class Services: ObservableObject {
         return try? JSONDecoder().decode(Destination.self, from: data)
     }
 
+    /// Named for what it holds. It is not an outbox — there is no queue of
+    /// readings any more, only a row per day saying whether that day still has
+    /// to go. A build that finds the older file simply starts fresh beside it
+    /// rather than failing to open a shape it no longer understands.
     private static func storeURL() -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("efferent", isDirectory: true)
-            .appendingPathComponent("outbox.sqlite")
+            .appendingPathComponent("days.sqlite")
     }
 }

@@ -4,19 +4,18 @@
  * This is where the reading key lives. It never leaves this machine: the phone
  * only ever gets the public half, and the bucket service only gets ciphertext.
  *
- * The service is an archive, not a letterbox, so this tool is a mirror of it
- * rather than a viewer. `sync` walks everything new, decrypts it and folds it
- * into a local file; `query` answers from that file with the network switched
- * off. An agent that wants "how did I sleep last week" should be able to ask
- * without downloading a year of history first, and without the machine holding
- * the reading key being awake at the moment the phone happened to send.
+ * Everything is addressed by day, which is what makes both commands cheap.
+ * `ask` goes to the service and downloads only the days a question covers.
+ * `sync` keeps a local copy — one file per day — so `query` can answer with the
+ * network switched off. Neither has a position to keep track of: a day in the
+ * mirror is either the one the archive holds or an older version of it, and the
+ * archive says which by when it was last written.
  */
 
-import { bucketId, parseObjectName } from "../protocol/ids.ts";
+import { bucketId, dayBefore, isDay } from "../protocol/ids.ts";
 import { base64url, fromBase64url, signUpload, type UploadHeader } from "../protocol/signing.ts";
 import { associatedData, open, seal } from "../protocol/sealedbox.ts";
 import { compress, decompress } from "../protocol/framing.ts";
-import { frame, type ManifestEntry, unframe } from "../protocol/manifest.ts";
 import qrcode from "qrcode-terminal";
 
 interface ReadingKey {
@@ -31,20 +30,27 @@ interface WriterKey {
   writerPublic: string;
 }
 
-/** Where the mirror stopped, so the next sync asks only for what came after. */
+/**
+ * What the mirror has, and when each day was written when it took its copy.
+ *
+ * The upload time is the whole of the bookkeeping. A day can be rewritten at any
+ * moment — the phone re-reads it from Health and puts it up again — so "I have
+ * everything up to here" is not a thing that can be known. "I have this version
+ * of this day" is.
+ */
 interface MirrorState {
   endpoint: string;
-  cursor: number;
+  days: Record<string, string>;
   syncedAt: string;
 }
 
-/** One fact, as it left the phone, plus the sequence number it travelled under. */
+/** One fact, as it left the phone. */
 interface Event {
   id: string;
-  seq: number;
   v: number;
-  type: string;
   metric?: string;
+  /** Present on a total, absent on a record — which is the only difference
+   * between the two now that nothing carries a kind. */
   bucket?: string;
   start?: string;
   end?: string;
@@ -52,7 +58,7 @@ interface Event {
 }
 
 const HOME = Deno.env.get("EFFERENT_HOME") ?? ".efferent";
-const EVENTS = "events.ndjson";
+const DAYS = "days";
 const STATE = "mirror.json";
 
 if (import.meta.main) await main(Deno.args);
@@ -67,11 +73,11 @@ async function main(args: string[]): Promise<void> {
     case "pair":
       return await pair(requireOption(options, "url"));
     case "send":
-      return await send(requireOption(options, "url"), Number(options.count ?? "3"));
+      return await send(requireOption(options, "url"), options.day ?? today());
     case "read":
-      return await read(requireOption(options, "url"), Number(options.after ?? "0"));
+      return await read(options);
     case "sync":
-      return await sync(options.url);
+      return await sync(options);
     case "query":
       return await query(options);
     case "ask":
@@ -84,16 +90,16 @@ async function main(args: string[]): Promise<void> {
           "usage:",
           "  efferent keygen                       create the reading key pair",
           "  efferent pair --url <endpoint>        print what the phone needs",
-          "  efferent send --url <endpoint>        pretend to be a phone",
+          "  efferent send --url <endpoint>        pretend to be a phone, write one day",
           "  efferent read --url <endpoint>        fetch and decrypt, straight to stdout",
-          "  efferent sync [--url <endpoint>]      fold everything new into the local mirror",
-          "  efferent status [--url <endpoint>]    what the archive holds, and how far the mirror got",
+          "  efferent sync [--url <endpoint>]      copy every day that changed since last time",
+          "  efferent status [--url <endpoint>]    what the archive holds, and what the mirror does",
           "  efferent query [filters]              answer from the mirror, offline",
-          "  efferent ask [filters]                answer from the archive, fetching only what matches",
+          "  efferent ask [filters]                answer from the archive, fetching only those days",
           "",
-          "filters (both query and ask):",
-          "  --type <health.agg|health.sample>    --metric <steps|sleep|…>",
-          "  --bucket <hour|day>                  --since <ISO date>  --until <ISO date>",
+          "filters (query, ask and read):",
+          "  --metric <steps|sleep|…>             --bucket <hour|day>",
+          "  --since <YYYY-MM-DD>                 --until <YYYY-MM-DD>",
           "  --limit <n>                          --format <ndjson|summary>",
         ].join("\n"),
       );
@@ -136,48 +142,32 @@ async function pair(url: string): Promise<void> {
   console.log(payload);
 }
 
-async function send(url: string, count: number): Promise<void> {
+/** Stand in for a phone: build one day and write it exactly as a device would. */
+async function send(url: string, day: string): Promise<void> {
+  if (!isDay(day)) fail(`--day must be YYYY-MM-DD, got ${day}`);
   const reading = await load<ReadingKey>("reading-key.json");
   const writer = await loadOrCreateWriter();
   const bucket = await bucketId(fromBase64url(reading.readingPublic));
 
-  const seqFrom = Number(Deno.env.get("EFFERENT_SEQ_FROM") ?? "1");
-  const seqTo = seqFrom + count - 1;
-  const day = 24 * 60 * 60;
-  const start = Math.floor(Date.now() / 1000) - count * day;
-  const events = Array.from({ length: count }, (_, index) => {
-    const seq = seqFrom + index;
-    return {
-      id: `agg:steps:probe-${seq}:h`,
-      seq,
-      v: 1,
-      type: "health.agg",
-      metric: "steps",
-      start: new Date((start + index * day) * 1000).toISOString(),
-      end: new Date((start + (index + 1) * day) * 1000).toISOString(),
-      value: 100 + seq,
-      unit: "count",
-    };
-  });
+  const events = Array.from({ length: 3 }, (_, hour) => ({
+    id: `agg:steps:${day}T${String(9 + hour).padStart(2, "0")}:00:00Z:h`,
+    v: 1,
+    metric: "steps",
+    bucket: "hour",
+    start: `${day}T${String(9 + hour).padStart(2, "0")}:00:00Z`,
+    end: `${day}T${String(10 + hour).padStart(2, "0")}:00:00Z`,
+    value: 100 + hour,
+    unit: "count",
+  }));
   const lines = events.map((event) => JSON.stringify(event)).join("\n") + "\n";
 
-  const sealed = await seal(
+  const body = await seal(
     fromBase64url(reading.readingPublic),
     await compress(new TextEncoder().encode(lines)),
-    associatedData(bucket, seqFrom, seqTo),
+    associatedData(bucket, day),
   );
-  // Framed exactly as a phone frames it, manifest included — a probe that
-  // skipped it would exercise a path no device uses.
-  const manifest: ManifestEntry[] = events.map((event) => ({
-    seq: event.seq,
-    type: event.type,
-    metric: event.metric,
-    start: Math.floor(Date.parse(event.start) / 1000),
-    end: Math.floor(Date.parse(event.end) / 1000),
-  }));
-  const body = await frame(manifest, sealed);
 
-  const header: UploadHeader = { bucket, seqFrom, seqTo, timestamp: Math.floor(Date.now() / 1000) };
+  const header: UploadHeader = { bucket, day, timestamp: Math.floor(Date.now() / 1000) };
   const privateKey = await crypto.subtle.importKey(
     "pkcs8",
     fromBase64url(writer.writerPrivate) as BufferSource,
@@ -186,12 +176,10 @@ async function send(url: string, count: number): Promise<void> {
     ["sign"],
   );
 
-  const response = await fetch(`${url}/b/${bucket}`, {
-    method: "POST",
+  const response = await fetch(`${url}/b/${bucket}/d/${day}`, {
+    method: "PUT",
     headers: {
       "content-type": "application/octet-stream",
-      "x-efferent-seq-from": String(seqFrom),
-      "x-efferent-seq-to": String(seqTo),
       "x-efferent-timestamp": String(header.timestamp),
       "x-efferent-writer": writer.writerPublic,
       "x-efferent-signature": base64url(await signUpload(privateKey, header, body)),
@@ -205,52 +193,54 @@ async function send(url: string, count: number): Promise<void> {
   if (!response.ok) Deno.exit(1);
 }
 
-async function read(url: string, after: number): Promise<void> {
-  const reader = await openArchive(url);
-  for await (const batch of reader.walk(after)) {
-    await Deno.stdout.write(
-      new TextEncoder().encode(
-        batch.lines.map((event) => JSON.stringify(event)).join("\n") + "\n",
-      ),
-    );
+async function read(options: Record<string, string>): Promise<void> {
+  const state = await loadState(options.url);
+  const archive = await openArchive(state.endpoint);
+  const listing = await archive.list(bounds(filterFrom(options)));
+
+  const encoder = new TextEncoder();
+  for await (const fetched of archive.several(listing.map((entry) => entry.day))) {
+    const out = fetched.events.map((event) => JSON.stringify(event)).join("\n");
+    if (out) await Deno.stdout.write(encoder.encode(out + "\n"));
   }
 }
 
 /**
- * Fold everything new into the local mirror.
+ * Copy every day the archive has that this mirror does not, or has an older
+ * version of.
  *
- * Runs from wherever the mirror stopped, so calling it twice in a row costs one
- * listing and nothing else. Safe to interrupt: the cursor only moves once a
- * batch has been written down.
+ * Interrupting it costs the days it had not reached and nothing else: each day
+ * is its own file, and the record of what was taken is written as it goes.
  */
-async function sync(url?: string): Promise<void> {
-  const state = await loadState(url);
-  const reader = await openArchive(state.endpoint);
+async function sync(options: Record<string, string>): Promise<void> {
+  const state = await loadState(options.url);
+  const archive = await openArchive(state.endpoint);
 
-  const events = await loadEvents();
-  const before = events.size;
-  let batches = 0;
-  let cursor = state.cursor;
-
-  for await (const batch of reader.walk(cursor)) {
-    for (const event of batch.lines) apply(events, event);
-    cursor = batch.seqTo;
-    batches++;
-    // Written after every batch rather than at the end: a sync interrupted
-    // halfway should cost the batches it did not reach, not the ones it did.
-    await saveEvents(events);
-    await write(STATE, { ...state, cursor, syncedAt: new Date().toISOString() });
+  const listing = await archive.list(bounds(filterFrom(options)));
+  const stale = listing.filter((entry) => state.days[entry.day] !== entry.uploaded);
+  if (stale.length === 0) {
+    console.log(`already up to date: ${Object.keys(state.days).length} days mirrored`);
+    return;
   }
 
+  let taken = 0;
+  for await (const fetched of archive.several(stale.map((entry) => entry.day))) {
+    await writeDay(fetched.day, fetched.events);
+    state.days[fetched.day] = stale.find((entry) => entry.day === fetched.day)!.uploaded;
+    taken++;
+    // Every eight, which is one window of fetches. Often enough that an
+    // interrupted sync loses almost nothing, rarely enough that a long run is
+    // not mostly writing a file about itself.
+    if (taken % 8 === 0) await write(STATE, { ...state, syncedAt: new Date().toISOString() });
+  }
+  await write(STATE, { ...state, syncedAt: new Date().toISOString() });
+
   console.log(
-    batches === 0
-      ? `already up to date at seq ${cursor}, ${events.size} events`
-      : `${batches} batch${batches === 1 ? "" : "es"} folded in: ${events.size} events ` +
-        `(${events.size - before >= 0 ? "+" : ""}${events.size - before}), now at seq ${cursor}`,
+    `${taken} day${taken === 1 ? "" : "s"} copied, ${Object.keys(state.days).length} mirrored`,
   );
 }
 
-/** What the archive holds and how much of it is mirrored here. */
+/** What the archive holds and what the mirror has of it. */
 async function status(url?: string): Promise<void> {
   const state = await loadState(url);
   const reading = await load<ReadingKey>("reading-key.json");
@@ -258,108 +248,141 @@ async function status(url?: string): Promise<void> {
 
   const remote = await fetchJSON<{
     exists: boolean;
-    objects: number;
+    days: number;
     bytes: number;
-    lowestSeq: number | null;
-    highestSeq: number;
+    firstDay: string | null;
+    lastDay: string | null;
     complete: boolean;
   }>(`${state.endpoint}/b/${bucket}/stats`);
 
-  const events = await loadEvents();
-  const spans = [...events.values()].map((event) => event.start).filter((s): s is string => !!s)
-    .sort();
-
+  const mirrored = Object.keys(state.days).sort();
   console.log(`bucket   ${bucket}`);
   console.log(
-    `archive  ${remote.objects}${remote.complete ? "" : "+"} batches, ` +
-      `${(remote.bytes / 1024).toFixed(0)} KiB, up to seq ${remote.highestSeq}`,
+    `archive  ${remote.days}${remote.complete ? "" : "+"} days, ` +
+      `${(remote.bytes / 1024 / 1024).toFixed(1)} MiB` +
+      (remote.firstDay ? `, ${remote.firstDay} … ${remote.lastDay}` : ""),
   );
-  console.log(
-    `mirror   ${events.size} events, up to seq ${state.cursor}` +
-      (state.cursor < remote.highestSeq
-        ? `  — ${remote.highestSeq - state.cursor} behind, run sync`
-        : "  — up to date"),
-  );
-  if (spans.length > 0) {
-    console.log(`covering ${spans[0].slice(0, 10)} … ${spans[spans.length - 1].slice(0, 10)}`);
+  if (mirrored.length === 0) {
+    console.log("mirror   nothing yet — run sync");
+    return;
   }
+  const behind = remote.days - mirrored.length;
+  console.log(
+    `mirror   ${mirrored.length} days, ${mirrored[0]} … ${mirrored[mirrored.length - 1]}` +
+      (behind > 0 ? `  — ${behind} behind, run sync` : "  — up to date"),
+  );
 }
 
 /** Answer from the mirror. No network, so it works on a plane and it is fast
  * enough to call in a loop. */
 async function query(options: Record<string, string>): Promise<void> {
-  report([...(await loadEvents()).values()].filter((event) => matches(event, options)), options);
+  const filter = filterFrom(options);
+  const events: Event[] = [];
+  for (const day of await mirroredDays(bounds(filter))) {
+    for (const event of await readDay(day)) {
+      if (matches(event, filter)) events.push(event);
+    }
+  }
+  report(events, options);
 }
 
 /**
  * Answer from the archive, without a mirror.
  *
- * The service keeps an index of when each event happened and what kind it is,
- * so it can name the handful of batches worth downloading. A question about one
- * August then costs those batches instead of the whole decade — which is what
- * made holding a full local copy feel obligatory in the first place.
- *
- * The narrowing the service does is coarse: it answers with whole batches, and
- * a batch holds whatever else was queued beside the events asked for. The exact
- * filtering happens here, after decryption, because only here is there anything
- * to filter.
+ * A question about one August costs that August: the days it covers are named
+ * by their dates, so the service hands over thirty-one objects and nothing else.
+ * It is still the exact filtering that happens here, after decryption — a day
+ * holds everything that happened in it, and the service cannot see inside.
  */
 async function ask(options: Record<string, string>): Promise<void> {
   const state = await loadState(options.url);
   const archive = await openArchive(state.endpoint);
 
-  const parameters = new URLSearchParams({
-    from: options.since ?? "",
-    to: options.until ?? "",
-  });
-  if (options.metric) parameters.set("metric", options.metric);
-  if (options.type) parameters.set("type", options.type);
-
-  const found = await fetchJSON<{
-    objects: { name: string; count: number }[];
-    events: number;
-    truncated: boolean;
-  }>(`${state.endpoint}/b/${archive.bucket}/find?${parameters}`);
-
-  if (found.truncated) {
-    console.error(
-      `the service named ${found.objects.length} batches and stopped counting there — ` +
-        "ask for a narrower stretch of time to see the rest",
-    );
-  }
-
+  const filter = filterFrom(options);
+  const listing = await archive.list(bounds(filter));
   const collected: Event[] = [];
-  for await (const batch of archive.several(found.objects.map((object) => object.name))) {
-    for (const event of batch.lines) {
-      if (matches(event, options)) collected.push(event);
+  for await (const fetched of archive.several(listing.map((entry) => entry.day))) {
+    for (const event of fetched.events) {
+      if (matches(event, filter)) collected.push(event);
     }
   }
-  console.error(
-    `${found.objects.length} batches fetched, ${collected.length} of ${found.events} events kept`,
-  );
+  console.error(`${listing.length} days fetched, ${collected.length} events kept`);
   report(collected, options);
 }
 
-function matches(event: Event, options: Record<string, string>): boolean {
-  if (options.type && event.type !== options.type) return false;
-  if (options.metric && event.metric !== options.metric) return false;
-  if (options.bucket && event.bucket !== options.bucket) return false;
-  if (options.since && (event.start ?? "") < options.since) return false;
-  if (options.until && (event.start ?? "") > options.until) return false;
+/**
+ * What a question asks for, in the terms everything here is addressed by.
+ *
+ * Both bounds are days and are inclusive. Anything finer would be a promise
+ * this tool cannot keep anyway: the archive is cut into days, so an hour is
+ * something to filter with `jq` after the fact rather than something to ask for.
+ */
+interface Filter {
+  metric?: string;
+  bucket?: string;
+  since?: string;
+  until?: string;
+}
+
+function filterFrom(options: Record<string, string>): Filter {
+  return {
+    metric: options.metric || undefined,
+    bucket: options.bucket || undefined,
+    since: options.since ? dayOf(options.since, "--since") : undefined,
+    until: options.until ? dayOf(options.until, "--until") : undefined,
+  };
+}
+
+/**
+ * The days a question covers.
+ *
+ * One day earlier than asked for, always. A night of sleep that began before
+ * midnight is in the evening's day, so a question about the 11th that fetched
+ * only the 11th would miss the night it is asking about — and would do it
+ * silently, which is the worst way for a query to be wrong.
+ */
+function bounds(filter: Filter): { from?: string; to?: string } {
+  return {
+    from: filter.since ? dayBefore(filter.since) : undefined,
+    to: filter.until,
+  };
+}
+
+function dayOf(value: string, option: string): string {
+  const day = value.slice(0, 10);
+  if (!isDay(day)) fail(`${option} must be a day, YYYY-MM-DD, got ${value}`);
+  return day;
+}
+
+/**
+ * Whether an event belongs in the answer.
+ *
+ * Time is compared by overlap, not by the start alone. An interval that began
+ * the evening before still happened during the day being asked about, and
+ * dropping it would quietly lose exactly the nights a sleep question is about.
+ *
+ * Compared day against day. An event's times are instants and a bound is a
+ * date, so comparing the two as strings would put every reading of the 6th
+ * after the 6th — a whole day dropped from a query that named it.
+ */
+function matches(event: Event, filter: Filter): boolean {
+  if (filter.metric && event.metric !== filter.metric) return false;
+  if (filter.bucket && event.bucket !== filter.bucket) return false;
+  const start = (event.start ?? "").slice(0, 10);
+  if (filter.since && (event.end ?? event.start ?? "").slice(0, 10) < filter.since) return false;
+  if (filter.until && start > filter.until) return false;
   return true;
 }
 
 function report(events: Event[], options: Record<string, string>): void {
   const ordered = events.sort((left, right) =>
-    (left.start ?? "").localeCompare(right.start ?? "") || left.seq - right.seq
+    (left.start ?? "").localeCompare(right.start ?? "") || left.id.localeCompare(right.id)
   );
 
   if (options.format === "summary") {
     const counts = new Map<string, number>();
     for (const event of ordered) {
-      const key = `${event.type}${event.metric ? ` ${event.metric}` : ""}${
-        event.bucket ? `/${event.bucket}` : ""
-      }`;
+      const key = `${event.metric ?? "?"}${event.bucket ? `/${event.bucket}` : ""}`;
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
     console.log(`${ordered.length} events`);
@@ -374,16 +397,8 @@ function report(events: Event[], options: Record<string, string>): void {
   if (out) console.log(out);
 }
 
-// MARK: - The archive, as something to walk
+// MARK: - The archive, as something to read from
 
-/**
- * A reader over the whole bucket, page by page.
- *
- * The paging matters more than it looks. A listing that fetches one page and
- * filters it can only ever return the beginning of an archive, and it reports
- * that as an empty answer — so a reader that does not follow `next` quietly
- * stops seeing data the moment the history outgrows a page.
- */
 async function openArchive(endpoint: string) {
   const reading = await load<ReadingKey>("reading-key.json");
   const readingPublic = fromBase64url(reading.readingPublic);
@@ -396,84 +411,109 @@ async function openArchive(endpoint: string) {
     ["deriveBits"],
   );
 
-  async function batch(name: string) {
-    const range = parseObjectName(name);
-    if (!range) throw new Error(`the service returned an object it cannot name: ${name}`);
-
-    const response = await fetch(`${endpoint}/b/${bucket}/o/${name}`);
+  async function day(name: string): Promise<{ day: string; events: Event[] }> {
+    const response = await fetch(`${endpoint}/b/${bucket}/d/${name}`);
     if (!response.ok) {
       throw new Error(`${name}: ${response.status} ${await response.text()}`);
     }
 
-    // The manifest in front of the sealed blob is what the service reads to
-    // answer questions about time and kind. It holds nothing that is not also
-    // in the events themselves, so here it is stepped over.
-    const { sealed } = unframe(new Uint8Array(await response.arrayBuffer()));
     const plaintext = await decompress(
       await open(
         privateKey,
         readingPublic,
-        sealed,
-        associatedData(bucket, range.seqFrom, range.seqTo),
+        new Uint8Array(await response.arrayBuffer()),
+        associatedData(bucket, name),
       ),
     );
-    const lines = new TextDecoder().decode(plaintext).trim().split("\n")
+    const events = new TextDecoder().decode(plaintext).trim().split("\n")
       .filter((line) => line.length > 0)
       .map((line) => JSON.parse(line) as Event);
-    return { ...range, lines };
+    return { day: name, events };
   }
 
-  async function* walk(after: number) {
-    let cursor = after;
+  /**
+   * Which days the archive has in a range.
+   *
+   * Following `next` until it comes back null is not optional. A listing that
+   * stopped at its first page would report the rest of a decade as nothing at
+   * all, and would do it without an error.
+   */
+  async function list(
+    range: { from?: string; to?: string },
+  ): Promise<{ day: string; uploaded: string }[]> {
+    const entries: { day: string; uploaded: string }[] = [];
+    let after: string | undefined;
     for (;;) {
-      const listing = await fetchJSON<
-        { objects: { name: string }[]; next: number | null }
-      >(`${endpoint}/b/${bucket}/objects?after=${cursor}`);
-      if (listing.objects.length === 0) return;
+      const parameters = new URLSearchParams();
+      if (after) parameters.set("after", after);
+      else if (range.from) parameters.set("from", range.from);
+      if (range.to) parameters.set("to", range.to);
 
-      for (const object of listing.objects) {
-        const fetched = await batch(object.name);
-        yield fetched;
-        cursor = fetched.seqTo;
-      }
-
-      if (listing.next === null) return;
-      cursor = listing.next;
+      const page = await fetchJSON<
+        { days: { day: string; uploaded: string }[]; next: string | null }
+      >(`${endpoint}/b/${bucket}/days?${parameters}`);
+      entries.push(...page.days);
+      if (page.next === null) return entries;
+      after = page.next;
     }
   }
 
   /**
-   * Named batches, several at a time, in the order they were asked for.
+   * Named days, several at a time, in the order they were asked for.
    *
-   * One at a time is what made a long archive slow: the cost is a round trip
-   * per batch and almost nothing else, so waiting for each before starting the
+   * One at a time is what makes a long history slow: the cost is a round trip
+   * per day and almost nothing else, so waiting for each before starting the
    * next spends the whole time idle. The window is small on purpose — enough to
    * fill the link, not enough to look like an attack on it.
    */
   async function* several(names: string[], width = 8) {
     for (let start = 0; start < names.length; start += width) {
-      const window = await Promise.all(names.slice(start, start + width).map(batch));
+      const window = await Promise.all(names.slice(start, start + width).map(day));
       for (const fetched of window) yield fetched;
     }
   }
 
-  return { bucket, batch, walk, several };
+  return { bucket, day, list, several };
 }
 
-/**
- * Fold one event into the mirror.
- *
- * A deletion carries the id of the sample it removes and nothing else, so it is
- * applied rather than stored — keeping it would mean every reader had to know
- * to look for it, which is exactly the bookkeeping the shared id was meant to
- * avoid.
- */
-function apply(events: Map<string, Event>, event: Event): void {
-  if (event.type === "health.delete") {
-    events.delete(event.id);
-    return;
+// MARK: - The mirror, one file per day
+
+async function writeDay(day: string, events: Event[]): Promise<void> {
+  await Deno.mkdir(`${HOME}/${DAYS}`, { recursive: true });
+  // Through a temporary file: a day truncated by an interrupted write would look
+  // like a day on which almost nothing happened.
+  const temporary = `${HOME}/${DAYS}/${day}.partial`;
+  await Deno.writeTextFile(
+    temporary,
+    events.map((event) => JSON.stringify(event)).join("\n") + "\n",
+  );
+  await Deno.rename(temporary, `${HOME}/${DAYS}/${day}.ndjson`);
+}
+
+async function readDay(day: string): Promise<Event[]> {
+  try {
+    const text = await Deno.readTextFile(`${HOME}/${DAYS}/${day}.ndjson`);
+    return text.split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line) as Event);
+  } catch {
+    return [];
   }
-  events.set(event.id, event);
+}
+
+/** The mirrored days inside a range, in order. */
+async function mirroredDays(range: { from?: string; to?: string }): Promise<string[]> {
+  const days: string[] = [];
+  try {
+    for await (const entry of Deno.readDir(`${HOME}/${DAYS}`)) {
+      const day = entry.name.replace(/\.ndjson$/, "");
+      if (!entry.isFile || day === entry.name || !isDay(day)) continue;
+      if (range.from && day < range.from) continue;
+      if (range.to && day > range.to) continue;
+      days.push(day);
+    }
+  } catch {
+    return [];
+  }
+  return days.sort();
 }
 
 // MARK: - Storage
@@ -487,39 +527,14 @@ async function loadState(url?: string): Promise<MirrorState> {
   }
   const endpoint = url ?? stored?.endpoint;
   if (!endpoint) {
-    console.error("error: --url is required the first time; after that it is remembered");
-    Deno.exit(2);
+    fail("--url is required the first time; after that it is remembered");
   }
-  return { endpoint, cursor: stored?.cursor ?? 0, syncedAt: stored?.syncedAt ?? "" };
-}
-
-async function loadEvents(): Promise<Map<string, Event>> {
-  const events = new Map<string, Event>();
-  let text: string;
-  try {
-    text = await Deno.readTextFile(`${HOME}/${EVENTS}`);
-  } catch {
-    return events;
-  }
-  for (const line of text.split("\n")) {
-    if (!line.trim()) continue;
-    const event = JSON.parse(line) as Event;
-    events.set(event.id, event);
-  }
-  return events;
-}
-
-async function saveEvents(events: Map<string, Event>): Promise<void> {
-  const ordered = [...events.values()].sort((left, right) => left.seq - right.seq);
-  await Deno.mkdir(HOME, { recursive: true });
-  // Through a temporary file: a mirror truncated by an interrupted write would
-  // look like an archive that lost its history.
-  const temporary = `${HOME}/${EVENTS}.partial`;
-  await Deno.writeTextFile(
-    temporary,
-    ordered.map((event) => JSON.stringify(event)).join("\n") + "\n",
-  );
-  await Deno.rename(temporary, `${HOME}/${EVENTS}`);
+  const state = { endpoint, days: stored?.days ?? {}, syncedAt: stored?.syncedAt ?? "" };
+  // Written here rather than by whichever command happens to save afterwards.
+  // "After that it is remembered" has to be true of the first command a person
+  // runs, not only of the ones that keep a mirror.
+  if (endpoint !== stored?.endpoint) await write(STATE, state);
+  return state;
 }
 
 async function loadOrCreateWriter(): Promise<WriterKey> {
@@ -553,6 +568,10 @@ async function write(name: string, value: unknown): Promise<void> {
 
 // MARK: - Plumbing
 
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 async function fetchJSON<T>(url: string): Promise<T> {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`${url}: ${response.status} ${await response.text()}`);
@@ -572,9 +591,11 @@ function parseOptions(args: string[]): Record<string, string> {
 
 function requireOption(options: Record<string, string>, name: string): string {
   const value = options[name];
-  if (!value) {
-    console.error(`error: --${name} is required`);
-    Deno.exit(2);
-  }
+  if (!value) fail(`--${name} is required`);
   return value;
+}
+
+function fail(message: string): never {
+  console.error(`error: ${message}`);
+  Deno.exit(2);
 }

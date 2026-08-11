@@ -19,8 +19,8 @@ export const TIMESTAMP_TOLERANCE_SECONDS = 300;
 
 export interface UploadHeader {
   bucket: string;
-  seqFrom: number;
-  seqTo: number;
+  /** `YYYY-MM-DD`. The day this body is the whole contents of. */
+  day: string;
   /** Unix seconds. Bounds how long a captured request stays replayable. */
   timestamp: number;
 }
@@ -37,8 +37,7 @@ export async function canonicalRequest(header: UploadHeader, body: Uint8Array): 
   return [
     PROTOCOL,
     header.bucket,
-    String(header.seqFrom),
-    String(header.seqTo),
+    header.day,
     String(header.timestamp),
     base64url(new Uint8Array(digest)),
   ].join("\n");

@@ -1,18 +1,23 @@
 import Foundation
 
-/// Assembles the NDJSON body the device POSTs: one self-contained JSON object
-/// per line, newline-terminated.
+/// Assembles the NDJSON body for one day: one self-contained JSON object per
+/// line, newline-terminated.
 ///
-/// Each line carries its own `id`, `seq`, `v` and `type` at the top level and
-/// then the payload's own fields, flattened alongside them. Flat rather than
-/// nested because the receiver's first act is to read those four keys, and a
-/// wrapper object would make every consumer reach one level deeper for nothing.
+/// Each line carries its own `id` and `v` at the top level and then the
+/// payload's own fields, flattened alongside them. Flat rather than nested
+/// because the receiver's first act is to read those two keys, and a wrapper
+/// object would make every consumer reach one level deeper for nothing.
+///
+/// Lines come out sorted by id. The body is what decides whether a day has
+/// changed since it was last sent, so two reads of an unchanged day have to
+/// produce the same bytes — and HealthKit does not promise to hand back samples
+/// in the same order twice.
 ///
 /// The envelope is spliced in as bytes rather than re-encoded: the payload was
-/// already canonical JSON when it entered the outbox, and decoding it back into
-/// a dictionary only to re-encode it would risk changing it on the way through.
+/// already canonical JSON when it was built, and decoding it back into a
+/// dictionary only to re-encode it would risk changing it on the way through.
 public enum NDJSON {
-    public static func line(id: String, seq: Int64, kind: Event.Kind, payload: Data) throws -> Data {
+    public static func line(id: String, payload: Data) throws -> Data {
         guard payload.first == UInt8(ascii: "{"), payload.last == UInt8(ascii: "}") else {
             throw EventError.payloadIsNotAnObject(id: id)
         }
@@ -21,8 +26,7 @@ public enum NDJSON {
         line.append(jsonString: "id")
         line.append(UInt8(ascii: ":"))
         line.append(jsonString: id)
-        line.append(contentsOf: ",\"seq\":\(seq),\"v\":\(eventSchemaVersion),\"type\":".utf8)
-        line.append(jsonString: kind.rawValue)
+        line.append(contentsOf: ",\"v\":\(eventSchemaVersion)".utf8)
 
         // `{}` means the payload adds nothing; splicing it would leave a
         // trailing comma and produce a line no parser accepts.
@@ -37,10 +41,10 @@ public enum NDJSON {
         return line
     }
 
-    public static func body(_ events: [PendingEvent]) throws -> Data {
+    public static func body(_ events: [Event]) throws -> Data {
         var body = Data()
-        for event in events {
-            try body.append(line(id: event.id, seq: event.seq, kind: event.kind, payload: event.payload))
+        for event in events.sorted(by: { $0.id < $1.id }) {
+            try body.append(line(id: event.id, payload: event.payload))
         }
         return body
     }

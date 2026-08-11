@@ -1,6 +1,6 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
 
-import { base32, bucketId, isBucketId, objectKey, parseObjectName } from "./ids.ts";
+import { base32, bucketId, dayBefore, dayKey, isBucketId, isDay } from "./ids.ts";
 import { canonicalRequest, signUpload, verifyUpload } from "./signing.ts";
 import { associatedData, open, seal } from "./sealedbox.ts";
 import { compress, decompress } from "./framing.ts";
@@ -49,21 +49,46 @@ Deno.test("different reading keys name different buckets", async () => {
   assert(one !== another);
 });
 
-/// Paging walks a plain lexicographic listing, so blob 100 must sort after
-/// blob 20 — without the padding it would not, and reads would skip data.
-Deno.test("object names sort in sequence order", () => {
-  const names = [
-    objectKey("b", 100, 199),
-    objectKey("b", 20, 99),
-    objectKey("b", 1, 19),
+/// Paging walks a plain lexicographic listing, so the order days sort in has
+/// to be the order they happen in. `YYYY-MM-DD` gives that for free; any
+/// friendlier format would not, and reads would silently skip data.
+Deno.test("day keys sort in the order the days happened", () => {
+  const keys = [
+    dayKey("b", "2026-01-02"),
+    dayKey("b", "2025-12-31"),
+    dayKey("b", "2026-01-10"),
   ].sort();
 
-  assertEquals(names.map((name) => parseObjectName(name.split("/")[2])?.seqFrom), [1, 20, 100]);
+  assertEquals(keys, [
+    dayKey("b", "2025-12-31"),
+    dayKey("b", "2026-01-02"),
+    dayKey("b", "2026-01-10"),
+  ]);
+});
+
+/// A date the regex accepts but the calendar does not could be written and then
+/// never asked for again.
+Deno.test("only dates that exist count as days", () => {
+  assert(isDay("2026-02-28"));
+  assert(isDay("2024-02-29"), "2024 is a leap year");
+  assert(!isDay("2026-02-29"), "2026 is not");
+  assert(!isDay("2026-13-01"));
+  assert(!isDay("2026-8-7"), "a day is always ten characters");
+  assert(!isDay(""));
+});
+
+/// A range asks *from* a day while a listing skips *past* a key, so this is
+/// what keeps the first day of every range from disappearing.
+Deno.test("the day before a boundary crosses months and years", () => {
+  assertEquals(dayBefore("2026-08-07"), "2026-08-06");
+  assertEquals(dayBefore("2026-08-01"), "2026-07-31");
+  assertEquals(dayBefore("2026-01-01"), "2025-12-31");
+  assertEquals(dayBefore("2024-03-01"), "2024-02-29");
 });
 
 Deno.test("a signature covers the body, not just the headers", async () => {
   const { privateKey, publicRaw } = await writerKeys();
-  const header = { bucket: "a".repeat(26), seqFrom: 1, seqTo: 5, timestamp: 1_700_000_000 };
+  const header = { bucket: "a".repeat(26), day: "2026-08-07", timestamp: 1_700_000_000 };
   const body = encoder.encode("the batch as sent");
 
   const signature = await signUpload(privateKey, header, body);
@@ -72,20 +97,20 @@ Deno.test("a signature covers the body, not just the headers", async () => {
   assert(!await verifyUpload(publicRaw, signature, header, encoder.encode("a different batch")));
 });
 
-Deno.test("a signature does not carry over to another sequence range", async () => {
+Deno.test("a signature does not carry over to another day", async () => {
   const { privateKey, publicRaw } = await writerKeys();
-  const header = { bucket: "a".repeat(26), seqFrom: 1, seqTo: 5, timestamp: 1_700_000_000 };
+  const header = { bucket: "a".repeat(26), day: "2026-08-07", timestamp: 1_700_000_000 };
   const body = encoder.encode("batch");
 
   const signature = await signUpload(privateKey, header, body);
 
-  assert(!await verifyUpload(publicRaw, signature, { ...header, seqTo: 6 }, body));
+  assert(!await verifyUpload(publicRaw, signature, { ...header, day: "2026-08-08" }, body));
 });
 
 Deno.test("someone else's key does not verify the signature", async () => {
   const mine = await writerKeys();
   const theirs = await writerKeys();
-  const header = { bucket: "a".repeat(26), seqFrom: 1, seqTo: 1, timestamp: 1_700_000_000 };
+  const header = { bucket: "a".repeat(26), day: "2026-08-07", timestamp: 1_700_000_000 };
   const body = encoder.encode("batch");
 
   const signature = await signUpload(mine.privateKey, header, body);
@@ -95,22 +120,21 @@ Deno.test("someone else's key does not verify the signature", async () => {
 
 Deno.test("the canonical request names every field the server acts on", async () => {
   const line = await canonicalRequest(
-    { bucket: "b".repeat(26), seqFrom: 7, seqTo: 9, timestamp: 1_700_000_000 },
+    { bucket: "b".repeat(26), day: "2026-08-07", timestamp: 1_700_000_000 },
     encoder.encode("x"),
   );
 
-  assertEquals(line.split("\n").slice(0, 5), [
+  assertEquals(line.split("\n").slice(0, 4), [
     "efferent/v1",
     "b".repeat(26),
-    "7",
-    "9",
+    "2026-08-07",
     "1700000000",
   ]);
 });
 
 Deno.test("what the phone seals, the reading key opens", async () => {
   const { privateKey, publicRaw } = await readingKeys();
-  const aad = associatedData("c".repeat(26), 1, 3);
+  const aad = associatedData("c".repeat(26), "2026-08-07");
   const plaintext = encoder.encode('{"metric":"steps"}');
 
   const blob = await seal(publicRaw, plaintext, aad);
@@ -122,7 +146,7 @@ Deno.test("what the phone seals, the reading key opens", async () => {
 /// about what it already sent. Sealing twice must not produce the same bytes.
 Deno.test("sealing the same batch twice gives different ciphertext", async () => {
   const { publicRaw } = await readingKeys();
-  const aad = associatedData("c".repeat(26), 1, 1);
+  const aad = associatedData("c".repeat(26), "2026-08-07");
   const plaintext = encoder.encode("same every time");
 
   const first = await seal(publicRaw, plaintext, aad);
@@ -131,29 +155,33 @@ Deno.test("sealing the same batch twice gives different ciphertext", async () =>
   assert(!first.every((byte, index) => byte === second[index]));
 });
 
-/// A service that cannot read a blob could still move it to another bucket or
-/// relabel its range. Binding both into the tag makes that fail loudly.
-Deno.test("a blob cannot be relabelled with another range", async () => {
+/// A service that cannot read a day could still answer one date with another
+/// date's object. Binding the day into the tag makes that fail loudly instead
+/// of handing back Tuesday for Monday.
+Deno.test("a day cannot be passed off as another day", async () => {
   const { privateKey, publicRaw } = await readingKeys();
   const bucket = "d".repeat(26);
-  const blob = await seal(publicRaw, encoder.encode("batch"), associatedData(bucket, 1, 3));
-
-  await assertRejects(() => open(privateKey, publicRaw, blob, associatedData(bucket, 4, 6)));
-});
-
-Deno.test("a blob cannot be moved to another bucket", async () => {
-  const { privateKey, publicRaw } = await readingKeys();
-  const blob = await seal(publicRaw, encoder.encode("batch"), associatedData("d".repeat(26), 1, 3));
+  const blob = await seal(publicRaw, encoder.encode("a day"), associatedData(bucket, "2026-08-07"));
 
   await assertRejects(() =>
-    open(privateKey, publicRaw, blob, associatedData("e".repeat(26), 1, 3))
+    open(privateKey, publicRaw, blob, associatedData(bucket, "2026-08-08"))
+  );
+});
+
+Deno.test("a day cannot be moved to another bucket", async () => {
+  const { privateKey, publicRaw } = await readingKeys();
+  const day = associatedData("d".repeat(26), "2026-08-07");
+  const blob = await seal(publicRaw, encoder.encode("a day"), day);
+
+  await assertRejects(() =>
+    open(privateKey, publicRaw, blob, associatedData("e".repeat(26), "2026-08-07"))
   );
 });
 
 Deno.test("another reading key cannot open the blob", async () => {
   const mine = await readingKeys();
   const theirs = await readingKeys();
-  const aad = associatedData("f".repeat(26), 1, 1);
+  const aad = associatedData("f".repeat(26), "2026-08-07");
   const blob = await seal(mine.publicRaw, encoder.encode("batch"), aad);
 
   await assertRejects(() => open(theirs.privateKey, theirs.publicRaw, blob, aad));
@@ -161,7 +189,7 @@ Deno.test("another reading key cannot open the blob", async () => {
 
 Deno.test("a flipped byte in the ciphertext is refused, not returned", async () => {
   const { privateKey, publicRaw } = await readingKeys();
-  const aad = associatedData("g".repeat(26), 1, 1);
+  const aad = associatedData("g".repeat(26), "2026-08-07");
   const blob = await seal(publicRaw, encoder.encode("batch"), aad);
   blob[blob.length - 1] ^= 0x01;
 
@@ -171,7 +199,7 @@ Deno.test("a flipped byte in the ciphertext is refused, not returned", async () 
 Deno.test("NDJSON survives the compression it travels under", async () => {
   const lines = Array.from(
     { length: 200 },
-    (_, index) => `{"id":"agg:steps:${index}:h","seq":${index},"v":1,"type":"health.agg"}`,
+    (_, index) => `{"id":"agg:steps:${index}:h","v":1,"metric":"steps","bucket":"hour"}`,
   ).join("\n");
   const original = encoder.encode(lines);
 

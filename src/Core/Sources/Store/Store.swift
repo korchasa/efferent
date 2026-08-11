@@ -1,14 +1,6 @@
 import Foundation
 import GRDB
 
-/// An event that has been recorded but not yet confirmed by the server.
-public struct PendingEvent: Equatable, Sendable {
-    public let id: String
-    public let seq: Int64
-    public let kind: Event.Kind
-    public let payload: Data
-}
-
 /// Where a HealthKit reader stopped, as HealthKit itself describes it.
 ///
 /// The value is an archived `HKQueryAnchor`; this layer never looks inside it.
@@ -22,36 +14,21 @@ public struct Anchor: Equatable, Sendable {
     }
 }
 
-public struct CommitResult: Equatable, Sendable {
-    /// Events that were new or had changed, and therefore got a sequence number.
-    public let enqueued: Int
-    /// Events already in the outbox with byte-identical contents. Re-reading a
-    /// week of daily totals normally lands here, and costs nothing.
-    public let unchanged: Int
-    public let highestSeq: Int64?
-}
-
 public struct Stats: Equatable, Sendable {
-    public let pending: Int
-    public let retained: Int
-    public let acknowledgedSeq: Int64
-    public let nextSeq: Int64
-    /// When the confirmation mark last moved. `nil` before anything has ever
-    /// been confirmed, which is a different state from "confirmed long ago" and
-    /// the screen says so differently.
-    public let acknowledgedAt: Date?
+    /// Days waiting to be built and sent.
+    public let pendingDays: Int
+    /// Days this device has ever put in the archive.
+    public let sentDays: Int
+    /// When the service last accepted a day. `nil` before it ever has, which is
+    /// a different state from "accepted one long ago" and the screen says so
+    /// differently.
+    public let lastUploadAt: Date?
+    /// How far back the first export has walked, if it has started.
+    public let backfillReached: String?
 }
 
-public enum StoreError: Error, Equatable {
-    /// The server confirmed a sequence number this device never issued.
-    case acknowledgementAheadOfOutbox(acknowledged: Int64, nextSeq: Int64)
-    /// A stored row names a kind this build does not know — a downgrade, or a
-    /// database written by a newer version of the app.
-    case unknownEventKind(id: String, kind: String)
-}
-
-/// The device's durable state: what still has to be sent, and where each reader
-/// stopped.
+/// The device's durable state: which days still have to go, and where each
+/// reader stopped.
 public final class Store {
     private let dbQueue: DatabaseQueue
 
@@ -69,160 +46,138 @@ public final class Store {
         try Database.migrator().migrate(dbQueue)
     }
 
-    // MARK: - Recording
+    // MARK: - Noticing what changed
 
-    /// Record `events` and move `anchor` forward, both or neither.
+    /// Mark `days` as needing to be built and sent, and move `anchor` forward.
     ///
     /// One transaction, and that is the whole point. The anchor is HealthKit's
-    /// "you have seen everything up to here"; if it were saved separately and
-    /// the app died in between, the events it stands for would be lost and
-    /// HealthKit would never offer them again. Data loss with no error anywhere.
+    /// "you have seen everything up to here"; saved on its own, with the app
+    /// dying before the marks landed, the days it stands for would never be
+    /// offered again. Data loss with no error anywhere.
     ///
-    /// An event whose payload is byte-for-byte what is already stored is left
-    /// alone. That is what keeps the daily re-scan cheap: recomputing the last
-    /// seven days of totals enqueues only the days that actually moved.
+    /// A day already waiting stays waiting — marking is idempotent, which is
+    /// what lets every path that notices a change call this without checking
+    /// whether some other path noticed first.
     @discardableResult
-    public func commit(events: [Event], anchor: Anchor? = nil) throws -> CommitResult {
+    public func markDirty(_ days: some Collection<String>, anchor: Anchor? = nil) throws -> Int {
         try dbQueue.write { db in
-            var nextSeq = try Self.int(db, MetaKey.nextSeq.rawValue) ?? 1
-            var enqueued = 0
-            var unchanged = 0
-            var highestSeq: Int64?
             let now = Date().timeIntervalSince1970
-
-            for event in events {
-                let stored = try Data.fetchOne(
-                    db, sql: "SELECT payload FROM outbox WHERE id = ?", arguments: [event.id]
-                )
-                if stored == event.payload {
-                    unchanged += 1
-                    continue
-                }
-
+            var marked = 0
+            for day in Set(days) {
                 try db.execute(
                     sql: """
-                    INSERT INTO outbox (id, seq, kind, payload, updatedAt)
-                    VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET
-                        seq = excluded.seq,
-                        kind = excluded.kind,
-                        payload = excluded.payload,
-                        updatedAt = excluded.updatedAt
+                    INSERT INTO day (day, digest, dirty, updatedAt) VALUES (?, NULL, 1, ?)
+                    ON CONFLICT(day) DO UPDATE SET dirty = 1, updatedAt = excluded.updatedAt
+                    WHERE day.dirty = 0
                     """,
-                    arguments: [event.id, nextSeq, event.kind.rawValue, event.payload, now]
+                    arguments: [day, now]
                 )
-                highestSeq = nextSeq
-                nextSeq += 1
-                enqueued += 1
+                marked += db.changesCount
             }
-
-            try Self.setInt(db, MetaKey.nextSeq.rawValue, nextSeq)
 
             if let anchor {
                 try db.execute(
                     sql: """
-                    INSERT INTO anchor (typeIdentifier, value, updatedAt)
-                    VALUES (?, ?, ?)
+                    INSERT INTO anchor (typeIdentifier, value, updatedAt) VALUES (?, ?, ?)
                     ON CONFLICT(typeIdentifier) DO UPDATE SET
-                        value = excluded.value,
-                        updatedAt = excluded.updatedAt
+                        value = excluded.value, updatedAt = excluded.updatedAt
                     """,
                     arguments: [anchor.typeIdentifier, anchor.value, now]
                 )
             }
+            return marked
+        }
+    }
 
-            return CommitResult(enqueued: enqueued, unchanged: unchanged, highestSeq: highestSeq)
+    /// Which days a set of removed records belonged to.
+    ///
+    /// HealthKit hands over an identifier and nothing else when something is
+    /// deleted, and the record it names is already gone from the store — so this
+    /// table is the only way left to know which day has to be rebuilt without it.
+    public func days(ofRemoved identifiers: some Collection<UUID>) throws -> Set<String> {
+        guard !identifiers.isEmpty else { return [] }
+        return try dbQueue.read { db in
+            var days: Set<String> = []
+            // In chunks: SQLite has a ceiling on how many values one statement
+            // may bind, and a person who cleared a year of workouts at once
+            // would otherwise crash the app that was trying to keep up.
+            for chunk in Array(identifiers).chunked(into: 500) {
+                let blobs: [any DatabaseValueConvertible] = chunk.map(Self.blob)
+                let placeholders = Array(repeating: "?", count: blobs.count).joined(separator: ",")
+                let rows = try String.fetchAll(
+                    db,
+                    sql: "SELECT day FROM sample WHERE uuid IN (\(placeholders))",
+                    arguments: StatementArguments(blobs)
+                )
+                days.formUnion(rows)
+            }
+            return days
         }
     }
 
     // MARK: - Sending
 
-    /// The oldest unconfirmed events, in order.
-    public func pending(limit: Int) throws -> [PendingEvent] {
+    /// The days waiting to go, most recent first.
+    ///
+    /// Recent first because today is what anyone reading this actually wants,
+    /// and the first export walks backwards anyway — so newest-first keeps the
+    /// two in the same order instead of making the fresh data queue behind a
+    /// decade of history.
+    public func pendingDays(limit: Int) throws -> [String] {
         try dbQueue.read { db in
-            let acknowledged = try Self.int(db, MetaKey.acknowledgedSeq.rawValue) ?? 0
-            let rows = try Row.fetchAll(
+            try String.fetchAll(
                 db,
-                sql: """
-                SELECT id, seq, kind, payload FROM outbox
-                WHERE seq > ? ORDER BY seq LIMIT ?
-                """,
-                arguments: [acknowledged, limit]
+                sql: "SELECT day FROM day WHERE dirty = 1 ORDER BY day DESC LIMIT ?",
+                arguments: [limit]
             )
-            return try rows.map { row in
-                let raw: String = row["kind"]
-                guard let kind = Event.Kind(rawValue: raw) else {
-                    throw StoreError.unknownEventKind(id: row["id"], kind: raw)
-                }
-                return PendingEvent(id: row["id"], seq: row["seq"], kind: kind, payload: row["payload"])
-            }
         }
     }
 
-    /// Move the confirmation mark forward to `seq`.
-    ///
-    /// Only ever forward: a background upload that finishes out of order must
-    /// not walk the mark back and cause everything after it to be sent again.
-    public func acknowledge(through seq: Int64) throws {
-        try dbQueue.write { db in
-            let nextSeq = try Self.int(db, MetaKey.nextSeq.rawValue) ?? 1
-            guard seq < nextSeq else {
-                throw StoreError.acknowledgementAheadOfOutbox(acknowledged: seq, nextSeq: nextSeq)
-            }
-            let current = try Self.int(db, MetaKey.acknowledgedSeq.rawValue) ?? 0
-            try Self.setInt(db, MetaKey.acknowledgedSeq.rawValue, max(current, seq))
-            // Stamped even when the mark did not move: the useful question on
-            // screen is "when did the service last answer", and an answer that
-            // confirmed nothing new still answered.
-            try Self.setInt(db, MetaKey.acknowledgedAt.rawValue, Int64(Date().timeIntervalSince1970))
+    /// The fingerprint of the body the service last accepted for `day`.
+    public func digest(for day: String) throws -> Data? {
+        try dbQueue.read { db in
+            try Data.fetchOne(db, sql: "SELECT digest FROM day WHERE day = ?", arguments: [day])
         }
     }
 
-    /// Continue numbering above what the archive already holds.
+    /// Record that `day` is now in the archive with these contents.
     ///
-    /// Sequence numbers are this device's own counter, and a reinstall resets it
-    /// to 1 — but the service names a stored batch by its sequence range and
-    /// refuses to rewrite one it already has. So a fresh install's first batches
-    /// claim ranges that exist, get acknowledged, and never land. Shifting the
-    /// whole outbox past the archive's highest number keeps the two in step, and
-    /// costs one request before the first send.
-    ///
-    /// Only before the first confirmation. After that these are the numbers the
-    /// service is answering about, and moving them would strand the mark.
-    public func adoptNumbering(after highest: Int64) throws {
+    /// The records that made it up are written down at the same moment, because
+    /// they are what a later deletion will be looked up in. Old rows for the day
+    /// go first: a record that moved to another day, or was removed, must not
+    /// leave a row behind pointing at a day it is no longer in.
+    public func recordSent(day: String, digest: Data, sampleIdentifiers: some Collection<UUID>) throws {
         try dbQueue.write { db in
-            guard try Self.int(db, MetaKey.acknowledgedSeq.rawValue) ?? 0 == 0 else { return }
-            let nextSeq = try Self.int(db, MetaKey.nextSeq.rawValue) ?? 1
-            let lowest = try Int64.fetchOne(db, sql: "SELECT MIN(seq) FROM outbox") ?? nextSeq
-            let offset = highest + 1 - lowest
-            // Already past the archive: a repeated call, or a bucket with
-            // nothing in it yet.
-            guard offset > 0 else { return }
-
-            // Through negative numbers, because the index on seq is unique and a
-            // single "add the offset" can land a row on a number another row
-            // still holds. Nothing positive collides with a negative.
-            try db.execute(sql: "UPDATE outbox SET seq = -seq")
-            try db.execute(sql: "UPDATE outbox SET seq = -seq + ?", arguments: [offset])
-            try Self.setInt(db, MetaKey.nextSeq.rawValue, nextSeq + offset)
-        }
-    }
-
-    /// Drop confirmed events last touched before `cutoff`, returning how many went.
-    ///
-    /// Confirmed rows are not deleted straight away on purpose: they are what
-    /// ``commit(events:anchor:)`` compares against to notice that a recomputed
-    /// day is unchanged. Keep them for longer than the re-scan window — a month
-    /// against a week — and the comparison always has something to compare to.
-    @discardableResult
-    public func prune(confirmedBefore cutoff: Date) throws -> Int {
-        try dbQueue.write { db in
-            let acknowledged = try Self.int(db, MetaKey.acknowledgedSeq.rawValue) ?? 0
+            let now = Date().timeIntervalSince1970
             try db.execute(
-                sql: "DELETE FROM outbox WHERE seq <= ? AND updatedAt < ?",
-                arguments: [acknowledged, cutoff.timeIntervalSince1970]
+                sql: """
+                INSERT INTO day (day, digest, dirty, updatedAt) VALUES (?, ?, 0, ?)
+                ON CONFLICT(day) DO UPDATE SET
+                    digest = excluded.digest, dirty = 0, updatedAt = excluded.updatedAt
+                """,
+                arguments: [day, digest, now]
             )
-            return db.changesCount
+
+            try db.execute(sql: "DELETE FROM sample WHERE day = ?", arguments: [day])
+            for identifier in sampleIdentifiers {
+                try db.execute(
+                    sql: "INSERT OR REPLACE INTO sample (uuid, day) VALUES (?, ?)",
+                    arguments: [Self.blob(identifier), day]
+                )
+            }
+
+            try Self.setInt(db, MetaKey.lastUploadAt.rawValue, Int64(now))
+        }
+    }
+
+    /// A day was rebuilt and came out exactly as it was sent. Nothing to upload,
+    /// and nothing owed.
+    public func markClean(day: String) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE day SET dirty = 0, updatedAt = ? WHERE day = ?",
+                arguments: [Date().timeIntervalSince1970, day]
+            )
         }
     }
 
@@ -237,46 +192,49 @@ public final class Store {
         }
     }
 
-    /// How far back the first full export has reached for `metric`, if started.
-    public func backfillProgress(for metric: String) throws -> Date? {
-        try dbQueue.read { db in
-            try Double.fetchOne(
-                db, sql: "SELECT value FROM meta WHERE key = ?",
-                arguments: [MetaKey.backfillProgress(metric: metric)]
-            ).map(Date.init(timeIntervalSince1970:))
-        }
+    /// The oldest day the first export has reached, if it has started.
+    public func backfillReached() throws -> String? {
+        try dbQueue.read { db in try Self.string(db, MetaKey.backfillReached.rawValue) }
     }
 
-    public func recordBackfillProgress(_ date: Date, for metric: String) throws {
+    public func recordBackfillReached(_ day: String) throws {
+        try dbQueue.write { db in try Self.setString(db, MetaKey.backfillReached.rawValue, day) }
+    }
+
+    /// The day this app first ran, remembered the first time it is asked for.
+    /// Hourly totals begin here and history before it is daily only.
+    public func installedDay(defaultingTo today: String) throws -> String {
         try dbQueue.write { db in
-            try db.execute(
-                sql: """
-                INSERT INTO meta (key, value) VALUES (?, ?)
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value
-                """,
-                arguments: [MetaKey.backfillProgress(metric: metric), date.timeIntervalSince1970]
-            )
+            if let stored = try Self.string(db, MetaKey.installedDay.rawValue) { return stored }
+            try Self.setString(db, MetaKey.installedDay.rawValue, today)
+            return today
         }
     }
 
     public func stats() throws -> Stats {
         try dbQueue.read { db in
-            let acknowledged = try Self.int(db, MetaKey.acknowledgedSeq.rawValue) ?? 0
-            let nextSeq = try Self.int(db, MetaKey.nextSeq.rawValue) ?? 1
-            let pending = try Int.fetchOne(
-                db, sql: "SELECT COUNT(*) FROM outbox WHERE seq > ?", arguments: [acknowledged]
-            ) ?? 0
-            let retained = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM outbox") ?? 0
-            let stamp = try Self.int(db, MetaKey.acknowledgedAt.rawValue)
-            return Stats(
-                pending: pending, retained: retained,
-                acknowledgedSeq: acknowledged, nextSeq: nextSeq,
-                acknowledgedAt: stamp.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+            Stats(
+                pendingDays: try Int.fetchOne(
+                    db, sql: "SELECT COUNT(*) FROM day WHERE dirty = 1"
+                ) ?? 0,
+                sentDays: try Int.fetchOne(
+                    db, sql: "SELECT COUNT(*) FROM day WHERE digest IS NOT NULL"
+                ) ?? 0,
+                lastUploadAt: try Self.int(db, MetaKey.lastUploadAt.rawValue)
+                    .map { Date(timeIntervalSince1970: TimeInterval($0)) },
+                backfillReached: try Self.string(db, MetaKey.backfillReached.rawValue)
             )
         }
     }
 
     // MARK: - meta helpers
+
+    /// The sixteen bytes of a UUID. Stored as bytes rather than as the
+    /// thirty-six character text: this table has a row per record in Health, so
+    /// the difference is megabytes on a phone that has been running for years.
+    private static func blob(_ identifier: UUID) -> Data {
+        withUnsafeBytes(of: identifier.uuid) { Data($0) }
+    }
 
     private static func int(_ db: GRDB.Database, _ key: String) throws -> Int64? {
         try Int64.fetchOne(db, sql: "SELECT value FROM meta WHERE key = ?", arguments: [key])
@@ -290,5 +248,25 @@ public final class Store {
             """,
             arguments: [key, value]
         )
+    }
+
+    private static func string(_ db: GRDB.Database, _ key: String) throws -> String? {
+        try String.fetchOne(db, sql: "SELECT value FROM meta WHERE key = ?", arguments: [key])
+    }
+
+    private static func setString(_ db: GRDB.Database, _ key: String, _ value: String) throws {
+        try db.execute(
+            sql: """
+            INSERT INTO meta (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            arguments: [key, value]
+        )
+    }
+}
+
+private extension Array {
+    func chunked(into size: Int) -> [[Element]] {
+        stride(from: 0, to: count, by: size).map { Array(self[$0 ..< Swift.min($0 + size, count)]) }
     }
 }

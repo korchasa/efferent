@@ -10,7 +10,7 @@ import SwiftUI
 /// app whether read access was granted, on purpose, so an app cannot work out
 /// what is being hidden from it. A "no access" indicator here could only ever be
 /// a guess, and a confident wrong one. The honest substitute is the count of
-/// readings sent: if it stays at zero, access is the thing to check.
+/// days sent: if it stays at zero, access is the thing to check.
 struct StatusView: View {
     @EnvironmentObject private var services: Services
     @State private var scanning = false
@@ -124,7 +124,7 @@ struct StatusView: View {
     private var paired: some View {
         List {
             Section { headline }
-            readingsSection
+            daysSection
             actionsSection
             historySection
             readerSection
@@ -148,21 +148,21 @@ struct StatusView: View {
         .padding(.vertical, 4)
     }
 
-    private var readingsSection: some View {
-        Section("Readings") {
-            LabeledContent("Sent") {
-                Text(Int(services.stats?.acknowledgedSeq ?? 0), format: .number)
+    private var daysSection: some View {
+        Section("Days") {
+            LabeledContent("On your server") {
+                Text(services.stats?.sentDays ?? 0, format: .number)
                     .monospacedDigit()
                     .contentTransition(.numericText())
             }
             LabeledContent("Waiting") {
-                Text(services.stats?.pending ?? 0, format: .number)
+                Text(services.stats?.pendingDays ?? 0, format: .number)
                     .monospacedDigit()
                     .contentTransition(.numericText())
             }
-            if let confirmed = services.stats?.acknowledgedAt {
+            if let sent = services.stats?.lastUploadAt {
                 LabeledContent("Last sent") {
-                    Text(confirmed, style: .relative).monospacedDigit()
+                    Text(sent, style: .relative).monospacedDigit()
                 }
             }
         }
@@ -172,11 +172,11 @@ struct StatusView: View {
         Section {
             Button {
                 run {
-                    await services.collectNow()
+                    await services.refreshNow()
                     await services.sendNow()
                 }
             } label: {
-                LabeledContent("Collect and send now") {
+                LabeledContent("Re-read and send now") {
                     if working {
                         ProgressView()
                     }
@@ -200,18 +200,19 @@ struct StatusView: View {
     private var historySection: some View {
         Section {
             Button("Export everything Health has") {
-                run { await services.runFirstExport() }
+                run { await services.exportEverything() }
             }
             .disabled(working)
-            if let backfill = services.backfill {
-                LabeledContent("Progress") {
-                    Text(backfill).foregroundStyle(.secondary)
-                }
+            if let reached = services.stats?.backfillReached {
+                LabeledContent("Back to", value: reached)
             }
         } header: {
             Text("History")
         } footer: {
-            Text("Walks back a month at a time. Keep this screen open; it continues where it stopped.")
+            Text(
+                "Takes a moment to work out how far Health goes back, then sends a day at a time in "
+                    + "the background. Safe to leave: a day is either sent or still waiting."
+            )
         }
     }
 
@@ -261,21 +262,21 @@ private struct Health {
             symbol = "ellipsis.circle"
             tint = .secondary
             title = "Looking"
-            detail = Text("Reading the outbox.")
+            detail = Text("Counting the days.")
             return
         }
-        if stats.pending > 0 {
+        if stats.pendingDays > 0 {
             symbol = "arrow.up.circle.fill"
             tint = .blue
             title = "Sending"
-            detail = Text("\(stats.pending, format: .number) readings still to go.")
+            detail = Text("\(stats.pendingDays, format: .number) days still to go.")
             return
         }
-        if stats.acknowledgedSeq == 0 {
+        if stats.sentDays == 0 {
             symbol = "circle.dashed"
             tint = .secondary
             title = "Nothing sent yet"
-            detail = Text("Allow access to Health, then collect once to get started.")
+            detail = Text("Allow access to Health, then re-read once to get started.")
             return
         }
         symbol = "checkmark.circle.fill"

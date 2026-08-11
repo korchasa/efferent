@@ -1,83 +1,55 @@
 /**
  * The service, against an R2 that lives in memory.
  *
- * What is worth testing here is not the happy path — a batch goes up, a batch
- * comes back — but the two properties that make this an archive instead of a
- * letterbox, because both fail silently. A listing that cannot page past its
- * first page reports the end of the world as an empty answer, and a write that
- * replaces an existing object loses history without anything going wrong at the
- * time.
+ * What is worth testing here is not the happy path — a day goes up, a day comes
+ * back — but the properties that fail silently. A listing that cannot page past
+ * its own page size reports the end of the world as an empty answer. A range
+ * that quietly drops its first day loses exactly the day that was asked about.
+ * And a second write of a day has to replace the first, because the whole
+ * design leans on it.
  */
 
 import { assert, assertEquals } from "@std/assert";
-import { DatabaseSync } from "node:sqlite";
 import worker from "./src/index.ts";
-import { objectKey, signingKeyObject } from "../protocol/ids.ts";
+import { dayKey, signingKeyObject } from "../protocol/ids.ts";
 import { base64url, signUpload, type UploadHeader } from "../protocol/signing.ts";
-import { frame, type ManifestEntry } from "../protocol/manifest.ts";
 
 const BUCKET = "flgs7wibu26oz5lcrnuc5ftuuk";
 
-/**
- * The index, on real SQLite rather than something that pretends to read SQL.
- *
- * What is worth testing about the index is the query itself — overlap at the
- * edges of a window, one row per batch, `json_each` unrolling five hundred
- * events from one bound value. A hand-rolled fake would only ever prove that
- * the fake agrees with itself.
- */
-class MemoryIndex {
-  readonly db = new DatabaseSync(":memory:");
-
-  constructor() {
-    this.db.exec(Deno.readTextFileSync(`${import.meta.dirname}/schema.sql`));
-  }
-
-  prepare(sql: string) {
-    const db = this.db;
-    let bound: unknown[] = [];
-    const statement = {
-      bind(...values: unknown[]) {
-        bound = values;
-        return statement;
-      },
-      // deno-lint-ignore require-await
-      async all<T>() {
-        return { results: db.prepare(sql).all(...bound as never[]) as T[] };
-      },
-      // deno-lint-ignore require-await
-      async run() {
-        return db.prepare(sql).run(...bound as never[]);
-      },
-    };
-    return statement;
-  }
-}
-
 class MemoryBucket {
-  readonly store = new Map<string, Uint8Array>();
+  readonly store = new Map<string, { body: Uint8Array; uploaded: Date }>();
+  /** Distinct write times without a clock: a day written later must be
+   * distinguishable from one written earlier, and a test that ran fast enough
+   * would otherwise stamp both the same. */
+  private writes = 0;
+
+  private object(key: string) {
+    const stored = this.store.get(key)!;
+    return {
+      key,
+      size: stored.body.length,
+      uploaded: stored.uploaded,
+      // deno-lint-ignore require-await
+      arrayBuffer: async () => stored.body.buffer.slice(0) as ArrayBuffer,
+    };
+  }
 
   // deno-lint-ignore require-await
   async head(key: string) {
-    const value = this.store.get(key);
-    return value ? { key, size: value.length } : null;
+    return this.store.has(key) ? this.object(key) : null;
   }
 
   // deno-lint-ignore require-await
   async get(key: string) {
-    const value = this.store.get(key);
-    if (!value) return null;
-    return {
-      key,
-      size: value.length,
-      // deno-lint-ignore require-await
-      arrayBuffer: async () => value.buffer.slice(0) as ArrayBuffer,
-    };
+    return this.store.has(key) ? this.object(key) : null;
   }
 
   // deno-lint-ignore require-await
   async put(key: string, value: ArrayBuffer | Uint8Array) {
-    this.store.set(key, value instanceof Uint8Array ? value : new Uint8Array(value));
+    this.store.set(key, {
+      body: value instanceof Uint8Array ? value : new Uint8Array(value),
+      uploaded: new Date(1_760_000_000_000 + this.writes++ * 1000),
+    });
   }
 
   // deno-lint-ignore require-await
@@ -88,7 +60,7 @@ class MemoryBucket {
       .sort();
     const limit = options.limit ?? 1000;
     return {
-      objects: keys.slice(0, limit).map((key) => ({ key, size: this.store.get(key)!.length })),
+      objects: keys.slice(0, limit).map((key) => this.object(key)),
       truncated: keys.length > limit,
     };
   }
@@ -105,42 +77,35 @@ async function writerKey() {
   };
 }
 
-type Environment = { BLOBS: MemoryBucket; INDEX?: MemoryIndex };
+type Writer = { privateKey: CryptoKey; publicKey: string };
+type Environment = { BLOBS: MemoryBucket };
 
-/** The worker only ever touches the parts of R2 and D1 its interfaces name. */
+/** The worker only ever touches the parts of R2 its interface names. */
 function bindings(env: Environment): Parameters<typeof worker.fetch>[1] {
   return env as unknown as Parameters<typeof worker.fetch>[1];
 }
 
-function environment(): { BLOBS: MemoryBucket; INDEX: MemoryIndex } {
-  return { BLOBS: new MemoryBucket(), INDEX: new MemoryIndex() };
+function environment(): Environment {
+  return { BLOBS: new MemoryBucket() };
 }
 
-/** Stand-in for the sealed blob. The service never opens one, so its contents
- * only ever need to be recognisable. */
+/** Stand-in for a sealed day. The service never opens one, so its contents only
+ * ever need to be recognisable. */
 function sealedBody(...rest: number[]): Uint8Array {
   return new Uint8Array([1, ...rest]);
 }
 
-async function post(
+async function put(
   env: Environment,
-  writer: { privateKey: CryptoKey; publicKey: string },
-  seqFrom: number,
-  seqTo: number,
-  body: Uint8Array,
+  writer: Writer,
+  day: string,
+  body: Uint8Array = sealedBody(7, 7, 7),
 ): Promise<Response> {
-  const header: UploadHeader = {
-    bucket: BUCKET,
-    seqFrom,
-    seqTo,
-    timestamp: Math.floor(Date.now() / 1000),
-  };
+  const header: UploadHeader = { bucket: BUCKET, day, timestamp: Math.floor(Date.now() / 1000) };
   return await worker.fetch(
-    new Request(`https://example.invalid/b/${BUCKET}`, {
-      method: "POST",
+    new Request(`https://example.invalid/b/${BUCKET}/d/${day}`, {
+      method: "PUT",
       headers: {
-        "x-efferent-seq-from": String(seqFrom),
-        "x-efferent-seq-to": String(seqTo),
         "x-efferent-timestamp": String(header.timestamp),
         "x-efferent-writer": writer.publicKey,
         "x-efferent-signature": base64url(await signUpload(writer.privateKey, header, body)),
@@ -151,93 +116,117 @@ async function post(
   );
 }
 
-async function postWithManifest(
-  env: Environment,
-  writer: { privateKey: CryptoKey; publicKey: string },
-  seqFrom: number,
-  seqTo: number,
-  manifest: ManifestEntry[],
-): Promise<Response> {
-  return await post(env, writer, seqFrom, seqTo, await frame(manifest, sealedBody(7, 7, 7)));
-}
-
-/** One ordinary entry, for tests that care about the archive rather than the
- * index. */
-function entry(seq: number): ManifestEntry[] {
-  return [{ seq, type: "health.agg", metric: "steps", start: 1_760_000_000, end: null }];
-}
-
-function at(iso: string): number {
-  return Math.floor(Date.parse(iso) / 1000);
-}
-
-async function find(env: Environment, query: string) {
+async function days(env: Environment, query: string) {
   const response = await worker.fetch(
-    new Request(`https://example.invalid/b/${BUCKET}/find?${query}`),
+    new Request(`https://example.invalid/b/${BUCKET}/days?${query}`),
     bindings(env),
   );
   assertEquals(response.status, 200);
   return await response.json() as {
-    objects: { name: string; seqFrom: number; seqTo: number; count: number }[];
-    events: number;
-    truncated: boolean;
+    days: { day: string; bytes: number; uploaded: string }[];
+    next: string | null;
   };
 }
 
-Deno.test("a stored batch is never replaced by a later one claiming its range", async () => {
+/// The premise of the whole design: the device re-reads a day and sends it
+/// again, so the second write has to win. Keeping the first would mean keeping
+/// a workout the person has since deleted.
+Deno.test("writing a day again replaces it", async () => {
   const env = environment();
   const writer = await writerKey();
 
-  const first = await frame(entry(1), sealedBody(2, 3));
-  assertEquals((await post(env, writer, 1, 10, first)).status, 200);
-  const answer = await post(env, writer, 1, 10, await frame(entry(1), sealedBody(9, 9, 9)));
+  assertEquals((await put(env, writer, "2026-08-07", sealedBody(2, 3))).status, 200);
+  const second = await put(env, writer, "2026-08-07", sealedBody(9, 9, 9, 9));
 
-  // Acknowledged, so a device that missed the first answer stops retrying…
-  assertEquals(answer.status, 200);
-  assertEquals(await answer.json(), { ack: 10 });
-  // …but what was written first is what is still there.
-  assertEquals([...env.BLOBS.store.get(objectKey(BUCKET, 1, 10))!], [...first]);
+  assertEquals(second.status, 200);
+  assertEquals(await second.json(), { stored: "2026-08-07", bytes: 5 });
+  assertEquals([...env.BLOBS.store.get(dayKey(BUCKET, "2026-08-07"))!.body], [1, 9, 9, 9, 9]);
+});
+
+Deno.test("a day comes back exactly as it went in", async () => {
+  const env = environment();
+  const writer = await writerKey();
+  await put(env, writer, "2026-08-07", sealedBody(4, 5, 6));
+
+  const response = await worker.fetch(
+    new Request(`https://example.invalid/b/${BUCKET}/d/2026-08-07`),
+    bindings(env),
+  );
+
+  assertEquals(response.status, 200);
+  assertEquals([...new Uint8Array(await response.arrayBuffer())], [1, 4, 5, 6]);
+});
+
+/// `from` is what a person means by it. Listings skip *past* a key, so an
+/// implementation that passed `from` straight through would drop the first day
+/// of every range — the one most likely to be the point of the question.
+Deno.test("a range includes both of its ends", async () => {
+  const env = environment();
+  const writer = await writerKey();
+  for (const day of ["2026-07-31", "2026-08-01", "2026-08-02", "2026-08-03", "2026-08-04"]) {
+    await put(env, writer, day);
+  }
+
+  const range = await days(env, "from=2026-08-01&to=2026-08-03");
+
+  assertEquals(range.days.map((entry) => entry.day), ["2026-08-01", "2026-08-02", "2026-08-03"]);
+  assertEquals(range.next, null);
 });
 
 Deno.test("the listing walks past its own page size", async () => {
   const env = environment();
   const writer = await writerKey();
 
-  // 250 batches: more than one page, which is exactly where a listing that
-  // filters after fetching stops being able to see anything.
-  for (let index = 0; index < 250; index++) {
-    const from = index * 10 + 1;
-    await postWithManifest(env, writer, from, from + 9, [
-      { seq: from, type: "health.agg", metric: "steps", start: 1_760_000_000 + index, end: null },
-    ]);
+  // 120 days across a year boundary: more than one page at the size asked for,
+  // which is exactly where a listing that filters after fetching goes blind.
+  const written: string[] = [];
+  const cursor = new Date("2025-11-01T00:00:00Z");
+  for (let index = 0; index < 120; index++) {
+    const day = cursor.toISOString().slice(0, 10);
+    written.push(day);
+    await put(env, writer, day);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
 
-  const seen: number[] = [];
-  let after = 0;
+  const seen: string[] = [];
+  let after: string | null = null;
   for (let page = 0; page < 10; page++) {
-    const response = await worker.fetch(
-      new Request(`https://example.invalid/b/${BUCKET}/objects?after=${after}`),
-      bindings(env),
+    const body: { days: { day: string }[]; next: string | null } = await days(
+      env,
+      `limit=25${after ? `&after=${after}` : ""}`,
     );
-    const body = await response.json() as {
-      objects: { seqFrom: number; seqTo: number }[];
-      next: number | null;
-    };
-    for (const object of body.objects) seen.push(object.seqFrom);
+    for (const entry of body.days) seen.push(entry.day);
     if (body.next === null) break;
     after = body.next;
   }
 
-  assertEquals(seen.length, 250, "the walk did not reach every batch");
-  assertEquals(seen[0], 1);
-  assertEquals(seen[seen.length - 1], 2491);
+  assertEquals(seen.length, 120, "the walk did not reach every day");
+  assertEquals(seen[0], written[0]);
+  assertEquals(seen[seen.length - 1], written[written.length - 1]);
+});
+
+/// A day can be rewritten at any time, so "everything after where I stopped" is
+/// no longer a question a mirror can ask. `uploaded` is the replacement, and a
+/// listing that did not move it on a rewrite would leave mirrors stale with
+/// nothing to notice.
+Deno.test("a rewritten day reports a later upload time", async () => {
+  const env = environment();
+  const writer = await writerKey();
+  await put(env, writer, "2026-08-07", sealedBody(1));
+  const first = (await days(env, "")).days[0].uploaded;
+
+  await put(env, writer, "2026-08-07", sealedBody(2, 2));
+  const second = (await days(env, "")).days[0];
+
+  assertEquals(second.bytes, 3);
+  assert(second.uploaded > first, `upload time did not move: ${first} then ${second.uploaded}`);
 });
 
 Deno.test("stats says what is in the archive without handing any of it over", async () => {
   const env = environment();
   const writer = await writerKey();
-  await postWithManifest(env, writer, 1, 10, entry(1));
-  await postWithManifest(env, writer, 11, 20, entry(11));
+  await put(env, writer, "2026-08-06", sealedBody(1, 2));
+  await put(env, writer, "2026-08-07", sealedBody(3));
 
   const response = await worker.fetch(
     new Request(`https://example.invalid/b/${BUCKET}/stats`),
@@ -245,9 +234,10 @@ Deno.test("stats says what is in the archive without handing any of it over", as
   );
   const body = await response.json() as Record<string, unknown>;
 
-  assertEquals(body.objects, 2);
-  assertEquals(body.lowestSeq, 1);
-  assertEquals(body.highestSeq, 20);
+  assertEquals(body.days, 2);
+  assertEquals(body.bytes, 5);
+  assertEquals(body.firstDay, "2026-08-06");
+  assertEquals(body.lastDay, "2026-08-07");
   assertEquals(body.complete, true);
   assert(env.BLOBS.store.has(signingKeyObject(BUCKET)), "the writer never got registered");
 });
@@ -260,111 +250,62 @@ Deno.test("an unknown bucket is empty rather than an error", async () => {
   );
   assertEquals(await response.json(), {
     exists: false,
-    objects: 0,
+    days: 0,
     bytes: 0,
-    lowestSeq: null,
-    highestSeq: 0,
+    firstDay: null,
+    lastDay: null,
     complete: true,
   });
 });
 
-Deno.test("find names the batches holding a metric in a window, and no others", async () => {
+/// The bucket belongs to whoever wrote into it first. Without this, anyone who
+/// learned a bucket id could overwrite a day with rubbish — and overwriting is
+/// now the ordinary operation, so the check carries more weight than it did.
+Deno.test("a second writer cannot touch a claimed bucket", async () => {
   const env = environment();
-  const writer = await writerKey();
+  const owner = await writerKey();
+  await put(env, owner, "2026-08-07", sealedBody(1));
 
-  await postWithManifest(env, writer, 1, 2, [
-    {
-      seq: 1,
-      type: "health.sample",
-      metric: "sleep",
-      start: at("2026-07-05T22:00:00Z"),
-      end: at("2026-07-06T05:00:00Z"),
-    },
-    {
-      seq: 2,
-      type: "health.sample",
-      metric: "heartRate",
-      start: at("2026-07-05T22:10:00Z"),
-      end: at("2026-07-05T22:10:00Z"),
-    },
-  ]);
-  await postWithManifest(env, writer, 3, 4, [
-    {
-      seq: 3,
-      type: "health.sample",
-      metric: "sleep",
-      start: at("2026-08-10T22:00:00Z"),
-      end: at("2026-08-11T06:00:00Z"),
-    },
-    {
-      seq: 4,
-      type: "health.agg",
-      metric: "steps",
-      start: at("2026-08-11T00:00:00Z"),
-      end: at("2026-08-12T00:00:00Z"),
-    },
-  ]);
+  const stranger = await put(env, await writerKey(), "2026-08-07", sealedBody(6, 6, 6));
 
-  const august = await find(env, "metric=sleep&from=2026-08-01T00:00:00Z&to=2026-09-01T00:00:00Z");
-
-  assertEquals(august.objects.length, 1, "July's batch was named for an August question");
-  assertEquals(august.objects[0].seqFrom, 3);
-  assertEquals(august.events, 1, "the steps total in the same batch was counted as sleep");
-  assertEquals(august.truncated, false);
+  assertEquals(stranger.status, 403);
+  assertEquals([...env.BLOBS.store.get(dayKey(BUCKET, "2026-08-07"))!.body], [1, 1]);
 });
 
-/// A night starts before midnight and ends after it. Filtering on the start
-/// alone would drop it from a query for that day, silently and plausibly.
-Deno.test("find keeps an event that straddles the edge of the window", async () => {
+Deno.test("a signature over another day is refused", async () => {
   const env = environment();
   const writer = await writerKey();
+  const body = sealedBody(1, 2);
+  const header: UploadHeader = {
+    bucket: BUCKET,
+    day: "2026-08-06",
+    timestamp: Math.floor(Date.now() / 1000),
+  };
 
-  await postWithManifest(env, writer, 1, 1, [
-    {
-      seq: 1,
-      type: "health.sample",
-      metric: "sleep",
-      start: at("2026-08-10T21:50:00Z"),
-      end: at("2026-08-11T05:30:00Z"),
-    },
-  ]);
+  const response = await worker.fetch(
+    new Request(`https://example.invalid/b/${BUCKET}/d/2026-08-07`, {
+      method: "PUT",
+      headers: {
+        "x-efferent-timestamp": String(header.timestamp),
+        "x-efferent-writer": writer.publicKey,
+        "x-efferent-signature": base64url(await signUpload(writer.privateKey, header, body)),
+      },
+      body: body as BodyInit,
+    }),
+    bindings(env),
+  );
 
-  const eleventh = await find(env, "from=2026-08-11T00:00:00Z&to=2026-08-12T00:00:00Z");
-
-  assertEquals(eleventh.objects.length, 1);
-  assertEquals(eleventh.events, 1);
+  assertEquals(response.status, 403);
+  assertEquals(env.BLOBS.store.has(dayKey(BUCKET, "2026-08-07")), false);
 });
 
-/// The whole point of the index is to save the download, not to become one.
-Deno.test("find answers with batch names and never with data", async () => {
+/// The 31st of February parses in some readings and not others. A day that can
+/// be written but never asked for again would be data lost in plain sight.
+Deno.test("a date that does not exist is refused", async () => {
   const env = environment();
-  const writer = await writerKey();
-  await postWithManifest(env, writer, 1, 1, [
-    {
-      seq: 1,
-      type: "health.sample",
-      metric: "sleep",
-      start: at("2026-08-10T22:00:00Z"),
-      end: at("2026-08-11T06:00:00Z"),
-    },
-  ]);
-
-  const answer = await find(env, "from=&to=");
-  const text = JSON.stringify(answer);
-
-  assertEquals(answer.objects[0].name, "00000000000000001-00000000000000001");
-  assert(!text.includes("7"), `the answer carried payload bytes: ${text}`);
-});
-
-/// A batch with no manifest would be data the index cannot see, and an index
-/// with holes in it answers "nothing here" for events that are. Refusing the
-/// body is the only version of that failure anyone notices.
-Deno.test("a body with no manifest is refused rather than archived", async () => {
-  const env = environment();
-  const writer = await writerKey();
-
-  const answer = await post(env, writer, 1, 500, sealedBody(2, 3));
-
-  assertEquals(answer.status, 400);
-  assertEquals(env.BLOBS.store.has(objectKey(BUCKET, 1, 500)), false);
+  const response = await worker.fetch(
+    new Request(`https://example.invalid/b/${BUCKET}/d/2026-02-31`),
+    bindings(env),
+  );
+  assertEquals(response.status, 400);
 });

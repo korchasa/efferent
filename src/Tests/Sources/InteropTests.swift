@@ -6,21 +6,18 @@ import XCTest
 ///
 /// The phone's sealing and signing have to match `protocol/` byte for byte, and
 /// nothing on this side can prove that — Swift agreeing with Swift proves only
-/// that Swift is consistent. So this test produces a real batch with the real
-/// code path and prints it; `scripts/interop.ts` then opens it with the matching
+/// that Swift is consistent. So this test produces a real day with the real code
+/// path and prints it; `scripts/interop.ts` then opens it with the matching
 /// private key and checks the signature. If the two implementations ever drift,
 /// that is where it shows.
 final class InteropTests: XCTestCase {
     static let bucket = "4kaszsqxorn5h6jpgqq25zomnv"
-    static let seqFrom: Int64 = 1
-    static let seqTo: Int64 = 2
+    static let day = "2026-08-07"
 
-    func testEmitABatchForTheReaderToOpen() throws {
-        let store = try Store.inMemory()
-        try store.commit(events: [
-            Event(
+    func testEmitADayForTheReaderToOpen() throws {
+        let events = [
+            try Event(
                 id: "agg:steps:2026-08-07T09:00:00Z:h",
-                kind: .aggregate,
                 payload: Event.payload(AggregatePayload(
                     metric: "steps",
                     bucket: "hour",
@@ -30,27 +27,24 @@ final class InteropTests: XCTestCase {
                     unit: "count"
                 ))
             ),
-            Event(
+            try Event(
                 id: "hk:sleep:9A2C",
-                kind: .deletion,
-                payload: Event.payload(DeletionPayload(metric: "sleep"))
+                payload: Event.payload(SleepPayload(
+                    metric: "sleep",
+                    start: Date(timeIntervalSince1970: 1_754_517_600),
+                    end: Date(timeIntervalSince1970: 1_754_542_800),
+                    stage: "asleepCore",
+                    source: "Watch"
+                ))
             ),
-        ])
+        ]
 
-        let batch = try store.pending(limit: 10)
-        let lines = try NDJSON.body(batch)
-        let associatedData = CanonicalRequest.associatedData(
-            bucket: Self.bucket, seqFrom: Self.seqFrom, seqTo: Self.seqTo
-        )
-        let sealed = try SealedBox.seal(
+        let lines = try NDJSON.body(events)
+        let blob = try SealedBox.seal(
             readingPublicKey: WireTests.readingPublicKey,
             plaintext: Deflate.compress(lines),
-            associatedData: associatedData
+            associatedData: CanonicalRequest.associatedData(bucket: Self.bucket, day: Self.day)
         )
-        // The framed body, not the bare sealed blob: the manifest in front of it
-        // is what the service reads and what the signature has to cover, so it
-        // is part of what the two languages must agree about.
-        let blob = try Manifest.body(entries: Manifest.entries(for: batch), sealed: sealed)
 
         // A key made here rather than fetched from the Keychain: the point is
         // the algorithm and the canonical string, not where the key is kept.
@@ -58,25 +52,17 @@ final class InteropTests: XCTestCase {
         let timestamp: Int64 = 1_700_000_000
         let signature = try writer.signature(
             for: CanonicalRequest.bytes(
-                bucket: Self.bucket,
-                seqFrom: Self.seqFrom,
-                seqTo: Self.seqTo,
-                timestamp: timestamp,
-                body: blob
+                bucket: Self.bucket, day: Self.day, timestamp: timestamp, body: blob
             )
         )
 
-        // A second signature over the same batch, stamped now. The fixed one
-        // above keeps the check reproducible; this one can actually be posted,
-        // because a real service refuses anything far from its own clock.
+        // A second signature over the same day, stamped now. The fixed one above
+        // keeps the check reproducible; this one can actually be sent, because a
+        // real service refuses anything far from its own clock.
         let liveTimestamp = Int64(Date().timeIntervalSince1970)
         let liveSignature = try writer.signature(
             for: CanonicalRequest.bytes(
-                bucket: Self.bucket,
-                seqFrom: Self.seqFrom,
-                seqTo: Self.seqTo,
-                timestamp: liveTimestamp,
-                body: blob
+                bucket: Self.bucket, day: Self.day, timestamp: liveTimestamp, body: blob
             )
         )
 
