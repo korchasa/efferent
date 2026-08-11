@@ -205,7 +205,9 @@ public final class Store {
     /// Hourly totals begin here and history before it is daily only.
     public func installedDay(defaultingTo today: String) throws -> String {
         try dbQueue.write { db in
-            if let stored = try Self.string(db, MetaKey.installedDay.rawValue) { return stored }
+            if let stored = try Self.string(db, MetaKey.installedDay.rawValue) {
+                return stored
+            }
             try Self.setString(db, MetaKey.installedDay.rawValue, today)
             return today
         }
@@ -213,16 +215,16 @@ public final class Store {
 
     public func stats() throws -> Stats {
         try dbQueue.read { db in
-            Stats(
-                pendingDays: try Int.fetchOne(
+            try Stats(
+                pendingDays: Int.fetchOne(
                     db, sql: "SELECT COUNT(*) FROM day WHERE dirty = 1"
                 ) ?? 0,
-                sentDays: try Int.fetchOne(
+                sentDays: Int.fetchOne(
                     db, sql: "SELECT COUNT(*) FROM day WHERE digest IS NOT NULL"
                 ) ?? 0,
-                lastUploadAt: try Self.int(db, MetaKey.lastUploadAt.rawValue)
+                lastUploadAt: Self.int(db, MetaKey.lastUploadAt.rawValue)
                     .map { Date(timeIntervalSince1970: TimeInterval($0)) },
-                backfillReached: try Self.string(db, MetaKey.backfillReached.rawValue)
+                backfillReached: Self.string(db, MetaKey.backfillReached.rawValue)
             )
         }
     }

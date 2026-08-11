@@ -214,8 +214,8 @@ public final class HealthCoordinator {
     /// are what people actually look at.
     public func build(days: [String]) async throws -> [String: DayContents] {
         guard let first = days.min(), let last = days.max() else { return [:] }
-        let span = (start: try Day.bounds(first, in: calendar).start,
-                    end: try Day.bounds(last, in: calendar).end)
+        let span = try (start: Day.bounds(first, in: calendar).start,
+                        end: Day.bounds(last, in: calendar).end)
         let wanted = Set(days)
         let hourlyFrom = try store.installedDay(defaultingTo: today)
 

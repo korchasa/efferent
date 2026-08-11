@@ -131,7 +131,6 @@ public struct HealthReader {
 
     // MARK: - Samples
 
-
     /// Every record of `metric` that starts within the interval.
     ///
     /// By start rather than by overlap, and that is a decision worth naming: a
@@ -152,8 +151,8 @@ public struct HealthReader {
         )
 
         return try await descriptor.result(for: healthStore).map { sample in
-            Reading(
-                event: try Event(
+            try Reading(
+                event: Event(
                     id: Self.sampleID(metric: metric.name, uuid: sample.uuid),
                     payload: metric.encode(sample)
                 ),

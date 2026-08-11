@@ -74,7 +74,7 @@ final class StoreTests: XCTestCase {
         let store = try Store.inMemory()
         let workout = try uuid("01")
         try store.recordSent(
-            day: "2026-08-07", digest: Data([0x01]), sampleIdentifiers: [workout, try uuid("02")]
+            day: "2026-08-07", digest: Data([0x01]), sampleIdentifiers: [workout, uuid("02")]
         )
 
         XCTAssertEqual(try store.days(ofRemoved: [workout]), ["2026-08-07"])
@@ -82,9 +82,9 @@ final class StoreTests: XCTestCase {
 
     func testAnUnknownRecordNamesNoDay() throws {
         let store = try Store.inMemory()
-        try store.recordSent(day: "2026-08-07", digest: Data([0x01]), sampleIdentifiers: [try uuid("01")])
+        try store.recordSent(day: "2026-08-07", digest: Data([0x01]), sampleIdentifiers: [uuid("01")])
 
-        XCTAssertTrue(try store.days(ofRemoved: [try uuid("99")]).isEmpty)
+        XCTAssertTrue(try store.days(ofRemoved: [uuid("99")]).isEmpty)
     }
 
     /// A record that is no longer in a day must not leave a row pointing at it.
