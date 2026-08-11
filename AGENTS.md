@@ -43,6 +43,23 @@ This file is the rulebook.
   history nobody is looking at.
 - **A day that Health has nothing for still gets an entry.** Without one it stays marked forever and
   is rebuilt on every pass.
+- **A batch is a way of travelling and ends at the door.** Days share a request because the request
+  is what costs, but each one is sealed to its own date and stored as its own object. Nothing below
+  the unpacking may learn that a batch happened — a stored frame, a summary of one, or a day whose
+  contents depend on what it travelled with would all put a second shape into an archive that reads
+  only one.
+- **A day is written down as sent only if the answer names it.** The service replies with the days
+  it stored; a batch is not a promise that all of them landed. Marking a day clean that never
+  arrived loses it for good, and loses it invisibly — nothing later goes looking for a day that is
+  no longer marked.
+- **The frame ascends and never repeats, and a bad one is refused whole.** Ordering is what makes
+  the same days pack to the same bytes, which the signature over the body depends on, and it removes
+  the question of which of two copies of a day wins. A frame that unpacked to whatever parsed before
+  it went wrong would store part of a batch and answer as though it stored all of it. Tests on both
+  sides enforce this.
+- **A day too large for a batch travels alone.** There is no size at which a day stops being owed. A
+  limit that held one back would leave it marked for good, with the counters saying forever that
+  something is waiting.
 - **The service must not learn more than which days exist.** It sees a date, a size and a write
   time. Anything that would tell it what happened inside a day — a summary, a count, a metric name
   in the path — hands over what the encryption exists to keep, and nothing would fail to make that
@@ -71,9 +88,12 @@ is the only thing that catches drift before a phone does.
   device, the design has gone wrong.
 - **The signing key and the reading key are separate on purpose.** One writes, one reads. Merging
   them would mean an agent's config file grants the right to forge uploads.
-- **Bucket, day and body hash are all bound into what gets signed and into the encryption tag.**
-  Dropping any of them from either place lets a day be replayed, moved to another bucket, or handed
-  back as a different date, silently.
+- **Bucket, days and body hash are all bound into what gets signed, and bucket and day into the
+  encryption tag.** Dropping any of them from either place lets a day be replayed, moved to another
+  bucket, or handed back as a different date, silently. The days are named in the signed string as
+  well as hashed inside the body on purpose: the service verifies against the days it unpacked, so a
+  frame read differently from how it was packed fails there rather than storing a day under a date
+  nobody meant.
 - **Compress before sealing, never after.** Ciphertext does not compress, and a round trip that only
   works one way tends to be discovered on a phone.
 - The service must never gain a way to read a day. If a feature seems to need one, it belongs in the

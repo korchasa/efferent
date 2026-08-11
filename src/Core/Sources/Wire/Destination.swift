@@ -38,10 +38,17 @@ public struct Destination: Equatable, Codable, Sendable {
         endpoint.appendingPathComponent("b").appendingPathComponent(bucket)
     }
 
-    /// Where one day is written and read. The same address for both, because a
-    /// day has one place and writing it again is the ordinary case.
+    /// Where one day is read back.
     public func dayURL(_ day: String) -> URL {
         bucketURL.appendingPathComponent("d").appendingPathComponent(day)
+    }
+
+    /// Where days are written, however many of them share the request. Writing
+    /// is addressed by the batch and reading by the day because that is what
+    /// each side actually asks for: the phone has days to hand over and no
+    /// interest in which, a reader wants one date.
+    public var daysURL: URL {
+        bucketURL.appendingPathComponent("days")
     }
 
     /// What the archive holds, in counts rather than contents.
@@ -97,14 +104,20 @@ public enum Pairing {
 public enum CanonicalRequest {
     public static let protocolName = "efferent/v1"
 
+    /// The days are named as well as hashed, which looks like a belt over
+    /// braces since they are inside the body the hash covers. What it buys is
+    /// that the service has to prove its own reading of the frame: it verifies
+    /// against the days it unpacked, so a parse that came out differently from
+    /// what this packed fails there rather than storing a day under a date
+    /// nobody meant.
     public static func bytes(
-        bucket: String, day: String, timestamp: Int64, body: Data
+        bucket: String, days: [String], timestamp: Int64, body: Data
     ) -> Data {
         let digest = Data(SHA256.hash(data: body))
         let line = [
             protocolName,
             bucket,
-            day,
+            days.joined(separator: ","),
             String(timestamp),
             Base64URL.encode(digest),
         ].joined(separator: "\n")

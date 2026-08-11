@@ -15,6 +15,11 @@
  * this service needs no notion of what changed, no acknowledgement to get
  * right, and no way for a reinstalled phone to collide with its own past.
  *
+ * Days arrive several at a time, because a phone exporting a decade would
+ * otherwise spend its whole waking life on round trips. Each one is still its
+ * own sealed blob and its own object; the batch is a way of travelling, and
+ * ends at the door.
+ *
  * What it learns is which days exist and how big they are. Not what happened in
  * them, not at what time, not of what kind.
  */
@@ -27,6 +32,7 @@ import {
   isDay,
   signingKeyObject,
 } from "../../protocol/ids.ts";
+import { MAX_DAYS_PER_REQUEST, type SealedDay, unpackDays } from "../../protocol/batch.ts";
 import {
   fromBase64url,
   TIMESTAMP_TOLERANCE_SECONDS,
@@ -34,8 +40,8 @@ import {
   verifyUpload,
 } from "../../protocol/signing.ts";
 
-/** Room for a busy day; well under what a Worker can hold in memory. */
-const MAX_BODY_BYTES = 4 * 1024 * 1024;
+/** A month of busy days over; well under what a Worker can hold in memory. */
+const MAX_BODY_BYTES = 16 * 1024 * 1024;
 /** Days per listing page. A year and a half in one answer, so an ordinary
  * question never pages at all. */
 const MAX_DAYS_PER_PAGE = 500;
@@ -84,31 +90,40 @@ export default {
     const bucket = segments[1];
     if (!isBucketId(bucket)) return problem(400, "malformed bucket id");
 
-    if (segments.length === 3 && segments[2] === "days" && request.method === "GET") {
-      return await listDays(env, bucket, url);
+    if (segments.length === 3 && segments[2] === "days") {
+      if (request.method === "GET") return await listDays(env, bucket, url);
+      if (request.method === "PUT") return await putDays(request, env, bucket);
     }
     if (segments.length === 3 && segments[2] === "stats" && request.method === "GET") {
       return await describe(env, bucket);
     }
-    if (segments.length === 4 && segments[2] === "d") {
+    if (segments.length === 4 && segments[2] === "d" && request.method === "GET") {
       const day = segments[3];
       if (!isDay(day)) return problem(400, "day must be YYYY-MM-DD and a date that exists");
-      if (request.method === "PUT") return await putDay(request, env, bucket, day);
-      if (request.method === "GET") return await getDay(env, bucket, day);
+      return await getDay(env, bucket, day);
     }
     return problem(405, `${request.method} is not allowed here`);
   },
 };
 
 /**
- * Store one day, replacing whatever was there.
+ * Store the days a request carries, each replacing whatever was there.
  *
- * Replacing is the point rather than a compromise. The body is the whole of
+ * Replacing is the point rather than a compromise. A day's body is the whole of
  * that day as Health has it now, so a second write is a correction — a workout
  * deleted, a watch that synced late — and keeping the older version would mean
  * keeping something the person has already changed.
+ *
+ * Several days share a request only to save round trips. They are unpacked and
+ * stored as they came, still sealed, still one object each, so nothing further
+ * down knows a batch happened.
+ *
+ * The answer names every day that landed. It is the sender's licence to stop
+ * marking them, and there is no partial success to interpret: if a write fails
+ * the request fails, and days already written are simply written again next
+ * time. That is what idempotence is for.
  */
-async function putDay(request: Request, env: Env, bucket: string, day: string): Promise<Response> {
+async function putDays(request: Request, env: Env, bucket: string): Promise<Response> {
   const signature = request.headers.get("x-efferent-signature");
   const writerKey = request.headers.get("x-efferent-writer");
   if (!signature || !writerKey) return problem(400, "missing writer key or signature");
@@ -124,7 +139,20 @@ async function putDay(request: Request, env: Env, bucket: string, day: string): 
 
   const body = new Uint8Array(await request.arrayBuffer());
   if (body.length === 0) return problem(400, "empty body");
-  if (body.length > MAX_BODY_BYTES) return problem(413, "a day larger than 4 MiB");
+  if (body.length > MAX_BODY_BYTES) return problem(413, `a request over ${MAX_BODY_BYTES} bytes`);
+
+  let entries: SealedDay[];
+  try {
+    entries = unpackDays(body);
+  } catch (error) {
+    return problem(400, `malformed batch: ${(error as Error).message}`);
+  }
+  if (entries.length > MAX_DAYS_PER_REQUEST) {
+    return problem(
+      413,
+      `${entries.length} days in one request, and ${MAX_DAYS_PER_REQUEST} is all`,
+    );
+  }
 
   const claimed = fromBase64url(writerKey);
   const registered = await env.BLOBS.get(signingKeyObject(bucket));
@@ -135,7 +163,9 @@ async function putDay(request: Request, env: Env, bucket: string, day: string): 
     }
   }
 
-  const header: UploadHeader = { bucket, day, timestamp };
+  // Signed over the days as unpacked here, not as the URL claims them: this is
+  // where a frame read differently from how it was packed stops.
+  const header: UploadHeader = { bucket, days: entries.map((entry) => entry.day), timestamp };
   if (!await verifyUpload(claimed, fromBase64url(signature), header, body)) {
     return problem(403, "signature does not match the request");
   }
@@ -144,8 +174,10 @@ async function putDay(request: Request, env: Env, bucket: string, day: string): 
   // an unused bucket by presenting a key they do not hold.
   if (!registered) await env.BLOBS.put(signingKeyObject(bucket), claimed);
 
-  await env.BLOBS.put(dayKey(bucket, day), body);
-  return json({ stored: day, bytes: body.length });
+  await Promise.all(
+    entries.map((entry) => env.BLOBS.put(dayKey(bucket, entry.day), entry.blob)),
+  );
+  return json({ stored: entries.map((entry) => entry.day), bytes: body.length });
 }
 
 async function getDay(env: Env, bucket: string, day: string): Promise<Response> {

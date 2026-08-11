@@ -104,8 +104,10 @@ Everything, for good. The service is not a letterbox that empties when the reade
 where the history lives, so an agent can ask a question months later without the phone being awake,
 reachable, or still owned by the same person.
 
-- **`PUT /b/<bucket>/d/<YYYY-MM-DD>`** stores that day, replacing what was there. The day is in the
-  signed request, so a stored day cannot be passed off as another date by anyone in between.
+- **`PUT /b/<bucket>/days`** stores the days the request carries, each replacing what was there.
+  Every date is in what was signed, so a stored day cannot be passed off as another date by anyone
+  in between. The answer names the days that landed, and that is what lets the phone stop marking
+  them; a day it does not name simply goes again.
 - **`GET /b/<bucket>/days?from=…&to=…`** names the days in a range, with the size of each and when
   it was last written. Both ends are inclusive; both are optional. It pages, and `next` has to be
   followed until it comes back null — a listing that stopped at its first page would report the rest
@@ -126,6 +128,10 @@ time, not of what kind. A day is one sealed blob and the service has no way insi
 That is as coarse as it can be while still answering a question: the date is the address, and
 without it there would be nothing to ask for. Everything finer — which readings, at what hour, of
 what metric — happens after decryption, on the machine holding the reading key.
+
+Batching adds one thing to that list and it is worth naming rather than glossing over: the service
+sees which days arrived together. It already knew as much from their write times landing in the same
+second, so nothing new is given away, but the frame says it outright.
 
 Encryption hides contents, not the fact of them, and the privacy copy should say so plainly.
 
@@ -175,14 +181,24 @@ the tag, so a blob cannot be moved to another bucket, or offered back as a diffe
 the decryption failing. The building blocks are X25519, HKDF-SHA256 and AES-256-GCM, all of which
 CryptoKit and WebCrypto already ship. No crypto library is vendored anywhere.
 
+Days travel a month at a time, because the request is what costs rather than what is in it: a day is
+a few kilobytes and the first export is thousands of them, so a request each would be a phone
+spending its whole waking life on round trips. What goes up is a plain frame — a date, a length, a
+sealed blob, repeated — and the signature covers the whole of it along with the dates it names, so
+the service has to prove its own reading of the frame before it can store anything. Each day inside
+is still sealed to its own date, so a batch binds nothing and ends at the door: the archive never
+learns that days arrived together.
+
 Pairing is therefore a scan, not a careful transfer. The reader prints a code holding its address
 and its public key — `deno task efferent pair --url …` — and the phone's camera reads it. Nothing
 worth protecting travels that way.
 
 `protocol/` describes these bytes in TypeScript and `src/Core` describes them again in Swift, so
-`deno task interop` exists to prove the two still agree: a Swift test seals and signs a real day,
-and the reader opens it and checks the signature. With `--post <url>` it also puts that day through
-a running service and reads it back out.
+`deno task interop` exists to prove the two still agree: a Swift test packs, seals and signs a real
+request of two days, and the reader unpacks it, opens each day and checks the signature. Two days
+rather than one, because a batch of one would never cross the boundary where a framing disagreement
+would live. With `--post <url>` it also puts that request through a running service and reads both
+days back out separately.
 
 The service itself is a Cloudflare Worker over an R2 bucket, deployed with `deno task server:deploy`
 and answering on a `workers.dev` address. It is open to the internet by design — there are no
@@ -205,7 +221,8 @@ deno task check
 - `server:dev` / `server:deploy` — the bucket service, locally or to Cloudflare.
 - `interop` — check that the Swift and TypeScript sides still make the same bytes.
 - `efferent` — the reading side: `keygen`, `pair` (prints the code to scan), `ask`, `sync`,
-  `status`, `query`, plus `send` and `read` for poking at a single day by hand.
+  `status`, `query`, plus `send` and `read` for poking at days by hand. `send --day` takes a list,
+  which is the only way to reach the batching path without a phone.
 
 Trying the whole path without a phone:
 
@@ -218,7 +235,7 @@ Then, in another shell: `deno task efferent keygen`,
 --url http://127.0.0.1:8787` to get a code the phone can scan, and
 `deno task
 efferent read --url http://127.0.0.1:8787` to see what arrived. `send` stands in for a
-phone when you have no device to hand.
+phone when you have no device to hand, and writes as many days in one request as you name.
 
 In the simulator there is no camera, so scanning cannot be reached and neither can any screen behind
 it. Debug builds therefore also take the code as text — put it on the device's pasteboard with
@@ -235,11 +252,11 @@ certificate, and the archive path above is the whole of the agreement with whate
 ## Layout
 
 - `src/Core/Sources/Health` — the metric catalogue, the readers, the day builder.
-- `src/Core/Sources/Wire` — the event type, the day, NDJSON assembly.
+- `src/Core/Sources/Wire` — the event type, the day, NDJSON assembly, the request frame.
 - `src/Core/Sources/Store` — schema, day ledger, anchors.
 - `src/Core/Sources/Upload` — Keychain, background upload.
 - `src/App/Sources` — the SwiftUI screen and the composition root.
 - `src/Tests/Sources` — unit tests.
-- `protocol/` — bucket and day names, signing, sealed envelopes.
+- `protocol/` — bucket and day names, the request frame, signing, sealed envelopes.
 - `server/` — the bucket service, a Cloudflare Worker over R2.
 - `tools/` — the reading side as a command line tool.

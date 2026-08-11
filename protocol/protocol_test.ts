@@ -1,9 +1,10 @@
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 
 import { base32, bucketId, dayBefore, dayKey, isBucketId, isDay } from "./ids.ts";
 import { canonicalRequest, signUpload, verifyUpload } from "./signing.ts";
 import { associatedData, open, seal } from "./sealedbox.ts";
 import { compress, decompress } from "./framing.ts";
+import { packDays, type SealedDay, unpackDays } from "./batch.ts";
 
 const encoder = new TextEncoder();
 
@@ -88,7 +89,7 @@ Deno.test("the day before a boundary crosses months and years", () => {
 
 Deno.test("a signature covers the body, not just the headers", async () => {
   const { privateKey, publicRaw } = await writerKeys();
-  const header = { bucket: "a".repeat(26), day: "2026-08-07", timestamp: 1_700_000_000 };
+  const header = { bucket: "a".repeat(26), days: ["2026-08-07"], timestamp: 1_700_000_000 };
   const body = encoder.encode("the batch as sent");
 
   const signature = await signUpload(privateKey, header, body);
@@ -99,18 +100,32 @@ Deno.test("a signature covers the body, not just the headers", async () => {
 
 Deno.test("a signature does not carry over to another day", async () => {
   const { privateKey, publicRaw } = await writerKeys();
-  const header = { bucket: "a".repeat(26), day: "2026-08-07", timestamp: 1_700_000_000 };
+  const header = { bucket: "a".repeat(26), days: ["2026-08-07"], timestamp: 1_700_000_000 };
   const body = encoder.encode("batch");
 
   const signature = await signUpload(privateKey, header, body);
 
-  assert(!await verifyUpload(publicRaw, signature, { ...header, day: "2026-08-08" }, body));
+  assert(!await verifyUpload(publicRaw, signature, { ...header, days: ["2026-08-08"] }, body));
+});
+
+/// A batch is authorised as a whole. Dropping one day out of it must not leave
+/// the rest signed, or a service could store the part of a batch it preferred.
+Deno.test("a signature over a batch does not verify for part of it", async () => {
+  const { privateKey, publicRaw } = await writerKeys();
+  const days = ["2026-08-06", "2026-08-07", "2026-08-08"];
+  const header = { bucket: "a".repeat(26), days, timestamp: 1_700_000_000 };
+  const body = encoder.encode("three days");
+
+  const signature = await signUpload(privateKey, header, body);
+
+  assert(!await verifyUpload(publicRaw, signature, { ...header, days: days.slice(0, 2) }, body));
+  assert(!await verifyUpload(publicRaw, signature, { ...header, days: days.toReversed() }, body));
 });
 
 Deno.test("someone else's key does not verify the signature", async () => {
   const mine = await writerKeys();
   const theirs = await writerKeys();
-  const header = { bucket: "a".repeat(26), day: "2026-08-07", timestamp: 1_700_000_000 };
+  const header = { bucket: "a".repeat(26), days: ["2026-08-07"], timestamp: 1_700_000_000 };
   const body = encoder.encode("batch");
 
   const signature = await signUpload(mine.privateKey, header, body);
@@ -120,16 +135,88 @@ Deno.test("someone else's key does not verify the signature", async () => {
 
 Deno.test("the canonical request names every field the server acts on", async () => {
   const line = await canonicalRequest(
-    { bucket: "b".repeat(26), day: "2026-08-07", timestamp: 1_700_000_000 },
+    { bucket: "b".repeat(26), days: ["2026-08-06", "2026-08-07"], timestamp: 1_700_000_000 },
     encoder.encode("x"),
   );
 
   assertEquals(line.split("\n").slice(0, 4), [
     "efferent/v1",
     "b".repeat(26),
-    "2026-08-07",
+    "2026-08-06,2026-08-07",
     "1700000000",
   ]);
+});
+
+// MARK: - Batching
+
+/// The one thing framing has to get right: what came out is what went in, byte
+/// for byte and under the right date. Everything else in this file is about
+/// refusing frames that are wrong.
+Deno.test("days survive a round trip through a frame", () => {
+  const batch: SealedDay[] = [
+    { day: "2025-12-31", blob: new Uint8Array([1, 2, 3]) },
+    { day: "2026-01-01", blob: new Uint8Array(300).fill(9) },
+    { day: "2026-01-02", blob: new Uint8Array([7]) },
+  ];
+
+  const unpacked = unpackDays(packDays(batch));
+
+  assertEquals(unpacked.map((entry) => entry.day), batch.map((entry) => entry.day));
+  for (let index = 0; index < batch.length; index++) {
+    assertEquals([...unpacked[index].blob], [...batch[index].blob]);
+  }
+});
+
+/// The same days in the same versions have to pack to the same bytes, because
+/// the body's hash is what the signature covers.
+Deno.test("the same days always pack to the same bytes", () => {
+  const batch: SealedDay[] = [
+    { day: "2026-08-06", blob: new Uint8Array([1]) },
+    { day: "2026-08-07", blob: new Uint8Array([2, 2]) },
+  ];
+
+  assertEquals([...packDays(batch)], [...packDays(batch)]);
+});
+
+/// Two copies of a day in one batch would ask which one wins — a question with
+/// no answer the sender could predict. Ordering removes it rather than
+/// resolving it.
+Deno.test("a batch refuses repeated or out-of-order days", () => {
+  const blob = new Uint8Array([1]);
+
+  assertThrows(() => packDays([{ day: "2026-08-07", blob }, { day: "2026-08-07", blob }]));
+  assertThrows(() => packDays([{ day: "2026-08-07", blob }, { day: "2026-08-06", blob }]));
+  assertThrows(() => packDays([{ day: "not a day", blob }]));
+  assertThrows(() => packDays([]));
+});
+
+/// A frame that unpacked to whatever parsed before it went wrong would have the
+/// service store part of a batch and answer as though it stored all of it. The
+/// sender would then stop marking the days that never arrived.
+Deno.test("a truncated frame is refused rather than salvaged", () => {
+  const whole = packDays([
+    { day: "2026-08-06", blob: new Uint8Array([1, 2]) },
+    { day: "2026-08-07", blob: new Uint8Array([3, 4, 5, 6]) },
+  ]);
+
+  assertThrows(() => unpackDays(whole.slice(0, whole.length - 1)), Error, "and only");
+  // Cut inside the second day's header, where there is not even a date to name.
+  assertThrows(() => unpackDays(whole.slice(0, 16 + 4)), Error, "left over");
+  assertThrows(() => unpackDays(new Uint8Array(0)));
+});
+
+/// Frames are unpacked out of a request body that owns a larger buffer, and a
+/// reader working from `buffer` rather than from the view would silently unpack
+/// the bytes on either side of it.
+Deno.test("a frame is read within its own bounds", () => {
+  const frame = packDays([{ day: "2026-08-07", blob: new Uint8Array([4, 5]) }]);
+  const padded = new Uint8Array(frame.length + 8);
+  padded.set(frame, 4);
+
+  const unpacked = unpackDays(padded.subarray(4, 4 + frame.length));
+
+  assertEquals(unpacked.length, 1);
+  assertEquals([...unpacked[0].blob], [4, 5]);
 });
 
 Deno.test("what the phone seals, the reading key opens", async () => {

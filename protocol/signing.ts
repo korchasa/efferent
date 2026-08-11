@@ -19,8 +19,8 @@ export const TIMESTAMP_TOLERANCE_SECONDS = 300;
 
 export interface UploadHeader {
   bucket: string;
-  /** `YYYY-MM-DD`. The day this body is the whole contents of. */
-  day: string;
+  /** The days packed into this body, in the order they are packed in it. */
+  days: string[];
   /** Unix seconds. Bounds how long a captured request stays replayable. */
   timestamp: number;
 }
@@ -31,13 +31,19 @@ export interface UploadHeader {
  * Every field that the server acts on is in here, including the hash of the
  * body. A signature over the headers alone would let anyone swap the payload
  * for another one.
+ *
+ * The days are named as well as hashed, which looks like a belt over braces
+ * since they are inside the body the hash covers. What it actually buys is that
+ * the server has to prove its own reading of the frame: it signs the days it
+ * unpacked, so a parse that came out differently from what the phone packed
+ * fails here instead of storing a day under a date nobody meant.
  */
 export async function canonicalRequest(header: UploadHeader, body: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", body as BufferSource);
   return [
     PROTOCOL,
     header.bucket,
-    header.day,
+    header.days.join(","),
     String(header.timestamp),
     base64url(new Uint8Array(digest)),
   ].join("\n");
