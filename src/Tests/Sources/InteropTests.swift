@@ -4,19 +4,24 @@ import XCTest
 
 /// Half of the cross-language check.
 ///
-/// The phone's sealing and signing have to match `protocol/` byte for byte, and
-/// nothing on this side can prove that — Swift agreeing with Swift proves only
-/// that Swift is consistent. So this test produces a real day with the real code
-/// path and prints it; `scripts/interop.ts` then opens it with the matching
-/// private key and checks the signature. If the two implementations ever drift,
-/// that is where it shows.
+/// The phone's framing, sealing and signing have to match `protocol/` byte for
+/// byte, and nothing on this side can prove that — Swift agreeing with Swift
+/// proves only that Swift is consistent. So this test produces a real request
+/// with the real code path and prints it; `scripts/interop.ts` then unpacks it,
+/// opens each day with the matching private key and checks the signature. If
+/// the two implementations ever drift, that is where it shows.
+///
+/// Two days rather than one, because a batch of one would leave the part that
+/// carries most of the risk — where one day ends and the next begins — untested
+/// across the two languages.
 final class InteropTests: XCTestCase {
     static let bucket = "4kaszsqxorn5h6jpgqq25zomnv"
     static let day = "2026-08-07"
+    static let secondDay = "2026-08-08"
 
-    func testEmitADayForTheReaderToOpen() throws {
-        let events = [
-            try Event(
+    func testEmitARequestForTheReaderToOpen() throws {
+        let firstDay = try [
+            Event(
                 id: "agg:steps:2026-08-07T09:00:00Z:h",
                 payload: Event.payload(AggregatePayload(
                     metric: "steps",
@@ -27,7 +32,7 @@ final class InteropTests: XCTestCase {
                     unit: "count"
                 ))
             ),
-            try Event(
+            Event(
                 id: "hk:sleep:9A2C",
                 payload: Event.payload(SleepPayload(
                     metric: "sleep",
@@ -38,39 +43,59 @@ final class InteropTests: XCTestCase {
                 ))
             ),
         ]
+        let secondDay = try [
+            Event(
+                id: "agg:steps:2026-08-08T09:00:00Z:h",
+                payload: Event.payload(AggregatePayload(
+                    metric: "steps",
+                    bucket: "hour",
+                    start: Date(timeIntervalSince1970: 1_754_643_600),
+                    end: Date(timeIntervalSince1970: 1_754_647_200),
+                    value: 1201,
+                    unit: "count"
+                ))
+            ),
+        ]
 
-        let lines = try NDJSON.body(events)
-        let blob = try SealedBox.seal(
-            readingPublicKey: WireTests.readingPublicKey,
-            plaintext: Deflate.compress(lines),
-            associatedData: CanonicalRequest.associatedData(bucket: Self.bucket, day: Self.day)
-        )
+        let frame = try Batch.pack([
+            Batch.SealedDay(day: Self.day, blob: seal(firstDay, on: Self.day)),
+            Batch.SealedDay(day: Self.secondDay, blob: seal(secondDay, on: Self.secondDay)),
+        ])
 
         // A key made here rather than fetched from the Keychain: the point is
         // the algorithm and the canonical string, not where the key is kept.
         let writer = Curve25519.Signing.PrivateKey()
+        let days = [Self.day, Self.secondDay]
         let timestamp: Int64 = 1_700_000_000
         let signature = try writer.signature(
             for: CanonicalRequest.bytes(
-                bucket: Self.bucket, day: Self.day, timestamp: timestamp, body: blob
+                bucket: Self.bucket, days: days, timestamp: timestamp, body: frame
             )
         )
 
-        // A second signature over the same day, stamped now. The fixed one above
-        // keeps the check reproducible; this one can actually be sent, because a
-        // real service refuses anything far from its own clock.
+        // A second signature over the same request, stamped now. The fixed one
+        // above keeps the check reproducible; this one can actually be sent,
+        // because a real service refuses anything far from its own clock.
         let liveTimestamp = Int64(Date().timeIntervalSince1970)
         let liveSignature = try writer.signature(
             for: CanonicalRequest.bytes(
-                bucket: Self.bucket, day: Self.day, timestamp: liveTimestamp, body: blob
+                bucket: Self.bucket, days: days, timestamp: liveTimestamp, body: frame
             )
         )
 
-        print("EFFERENT_INTEROP_BLOB=\(Base64URL.encode(blob))")
+        print("EFFERENT_INTEROP_FRAME=\(Base64URL.encode(frame))")
         print("EFFERENT_INTEROP_WRITER=\(Base64URL.encode(writer.publicKey.rawRepresentation))")
         print("EFFERENT_INTEROP_SIGNATURE=\(Base64URL.encode(Data(signature)))")
         print("EFFERENT_INTEROP_TIMESTAMP=\(timestamp)")
         print("EFFERENT_INTEROP_LIVESIGNATURE=\(Base64URL.encode(Data(liveSignature)))")
         print("EFFERENT_INTEROP_LIVETIMESTAMP=\(liveTimestamp)")
+    }
+
+    private func seal(_ events: [Event], on day: String) throws -> Data {
+        try SealedBox.seal(
+            readingPublicKey: WireTests.readingPublicKey,
+            plaintext: Deflate.compress(NDJSON.body(events)),
+            associatedData: CanonicalRequest.associatedData(bucket: Self.bucket, day: day)
+        )
     }
 }

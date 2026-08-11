@@ -59,13 +59,68 @@ final class WireTests: XCTestCase {
     /// reordered field here means every upload is refused.
     func testTheCanonicalRequestIsTheOneTheServiceRebuilds() {
         let bytes = CanonicalRequest.bytes(
-            bucket: "b", day: "2026-08-07", timestamp: 1_700_000_000, body: Data("x".utf8)
+            bucket: "b", days: ["2026-08-06", "2026-08-07"],
+            timestamp: 1_700_000_000, body: Data("x".utf8)
         )
 
         let lines = String(decoding: bytes, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false)
-        XCTAssertEqual(Array(lines.prefix(4)), ["efferent/v1", "b", "2026-08-07", "1700000000"])
+        XCTAssertEqual(
+            Array(lines.prefix(4)),
+            ["efferent/v1", "b", "2026-08-06,2026-08-07", "1700000000"]
+        )
         // base64url of SHA-256("x"), as the reader computes it.
         XCTAssertEqual(lines[4], "LXEWQrcmsEQBYnyp-6wy9chTD7GQPMTbAiWHF5IaSIE")
+    }
+
+    // MARK: - Batching
+
+    /// The layout the reader parses, spelled out here so a change to it fails
+    /// on this side too rather than only in the cross-language check.
+    func testAFrameIsDayThenLengthThenBlob() throws {
+        let frame = try Batch.pack([
+            Batch.SealedDay(day: "2026-08-06", blob: Data([0xAA, 0xBB])),
+            Batch.SealedDay(day: "2026-08-07", blob: Data([0xCC])),
+        ])
+
+        XCTAssertEqual(frame.count, (10 + 4 + 2) + (10 + 4 + 1))
+        XCTAssertEqual(String(decoding: frame[0 ..< 10], as: UTF8.self), "2026-08-06")
+        XCTAssertEqual(Array(frame[10 ..< 14]), [0, 0, 0, 2], "the length is four bytes, big-endian")
+        XCTAssertEqual(Array(frame[14 ..< 16]), [0xAA, 0xBB])
+        XCTAssertEqual(String(decoding: frame[16 ..< 26], as: UTF8.self), "2026-08-07")
+        XCTAssertEqual(Array(frame[26 ..< 30]), [0, 0, 0, 1])
+        XCTAssertEqual(Array(frame[30 ..< 31]), [0xCC])
+    }
+
+    /// The same days have to pack to the same bytes: the body's hash is what
+    /// the signature covers, so anything that varied would be unverifiable.
+    func testTheSameDaysAlwaysPackToTheSameBytes() throws {
+        let days = [
+            Batch.SealedDay(day: "2026-08-06", blob: Data([1])),
+            Batch.SealedDay(day: "2026-08-07", blob: Data([2, 2])),
+        ]
+
+        XCTAssertEqual(try Batch.pack(days), try Batch.pack(days))
+    }
+
+    /// Two copies of a day in one request would ask which one wins — a question
+    /// with no answer the phone could predict. The frame refuses to pose it.
+    func testAFrameRefusesRepeatedOrOutOfOrderDays() {
+        let blob = Data([1])
+
+        XCTAssertThrowsError(try Batch.pack([
+            Batch.SealedDay(day: "2026-08-07", blob: blob),
+            Batch.SealedDay(day: "2026-08-07", blob: blob),
+        ])) { error in
+            XCTAssertEqual(
+                error as? Batch.BatchError, .outOfOrder(previous: "2026-08-07", next: "2026-08-07")
+            )
+        }
+        XCTAssertThrowsError(try Batch.pack([
+            Batch.SealedDay(day: "2026-08-07", blob: blob),
+            Batch.SealedDay(day: "2026-08-06", blob: blob),
+        ]))
+        XCTAssertThrowsError(try Batch.pack([Batch.SealedDay(day: "2026-02-31", blob: blob)]))
+        XCTAssertThrowsError(try Batch.pack([]))
     }
 
     func testAssociatedDataBindsTheBucketAndTheDay() {

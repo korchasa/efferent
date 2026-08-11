@@ -48,8 +48,8 @@ final class UploaderTests: XCTestCase {
     /// otherwise the phone re-uploads a week of unchanged history every hour.
     func testARebuiltDayThatDidNotChangeIsNotSentAgain() async throws {
         let store = try Store.inMemory()
-        let events = [try Event(id: "a", payload: Event.payload(["v": "1"]))]
-        let digest = Data(SHA256.hash(data: try NDJSON.body(events)))
+        let events = try [Event(id: "a", payload: Event.payload(["v": "1"]))]
+        let digest = try Data(SHA256.hash(data: NDJSON.body(events)))
         try store.recordSent(day: "2026-08-07", digest: digest, sampleIdentifiers: [])
         try store.markDirty(["2026-08-07"])
 
@@ -78,5 +78,75 @@ final class UploaderTests: XCTestCase {
         // Scheduled rather than skipped: an empty day that was never sent has no
         // fingerprint to match, so it goes up as an empty day and says so.
         XCTAssertEqual(outcome, .scheduled(days: 1, unchanged: 0))
+    }
+
+    // MARK: - Cutting a pass into requests
+
+    private func sending(_ day: String, bytes: Int = 1) -> Uploader.Sending {
+        Uploader.Sending(
+            day: day, digest: Data(), identifiers: [], blob: Data(repeating: 0xAB, count: bytes)
+        )
+    }
+
+    private func days(_ count: Int, from: String = "2026-01-01") throws -> [String] {
+        var days: [String] = []
+        var current = from
+        while days.count < count {
+            days.append(current)
+            current = try Day.next(current, in: Day.calendar())
+        }
+        return days
+    }
+
+    /// The whole point of a batch: a pass that used to be a request per day is
+    /// now one request, and every day is still in exactly one of them.
+    func testAPassGoesAsWholeRequestsAndLosesNoDay() throws {
+        let pending = try days(40).map { sending($0) }
+
+        let batches = Uploader.batches(pending, configuration: .init())
+
+        XCTAssertEqual(batches.map(\.count), [31, 9])
+        XCTAssertEqual(
+            batches.flatMap { $0 }.map(\.day).sorted(),
+            pending.map(\.day).sorted(),
+            "a day fell out between two requests"
+        )
+    }
+
+    /// Days ascend inside a frame, and a frame that did not would be refused
+    /// outright — the phone would stop sending with a 400 it cannot fix.
+    func testDaysAreOrderedWithinARequest() throws {
+        let pending = ["2026-03-01", "2026-01-05", "2026-02-09"].map { sending($0) }
+
+        let batch = try XCTUnwrap(Uploader.batches(pending, configuration: .init()).first)
+
+        XCTAssertEqual(batch.map(\.day), ["2026-01-05", "2026-02-09", "2026-03-01"])
+    }
+
+    func testABatchIsCutShortWhenItGetsTooLarge() throws {
+        let pending = try days(6).map { sending($0, bytes: 400) }
+
+        let batches = Uploader.batches(
+            pending, configuration: .init(bytesPerRequest: 1000)
+        )
+
+        XCTAssertEqual(batches.map(\.count), [2, 2, 2])
+    }
+
+    /// There is no size at which a day stops being owed. A limit that held one
+    /// back would leave it marked for good, and the counters would keep saying
+    /// there is something waiting without ever getting rid of it.
+    func testADayLargerThanTheLimitTravelsOnItsOwnRatherThanNotAtAll() {
+        let pending = [
+            sending("2026-01-01", bytes: 10),
+            sending("2026-01-02", bytes: 5000),
+            sending("2026-01-03", bytes: 10),
+        ]
+
+        let batches = Uploader.batches(pending, configuration: .init(bytesPerRequest: 1000))
+
+        XCTAssertEqual(batches.map { $0.map(\.day) }, [
+            ["2026-01-01"], ["2026-01-02"], ["2026-01-03"],
+        ])
     }
 }

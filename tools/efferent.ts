@@ -16,6 +16,7 @@ import { bucketId, dayBefore, isDay } from "../protocol/ids.ts";
 import { base64url, fromBase64url, signUpload, type UploadHeader } from "../protocol/signing.ts";
 import { associatedData, open, seal } from "../protocol/sealedbox.ts";
 import { compress, decompress } from "../protocol/framing.ts";
+import { packDays, type SealedDay } from "../protocol/batch.ts";
 import qrcode from "qrcode-terminal";
 
 interface ReadingKey {
@@ -90,7 +91,8 @@ async function main(args: string[]): Promise<void> {
           "usage:",
           "  efferent keygen                       create the reading key pair",
           "  efferent pair --url <endpoint>        print what the phone needs",
-          "  efferent send --url <endpoint>        pretend to be a phone, write one day",
+          "  efferent send --url <endpoint>        pretend to be a phone, write days",
+          "                [--day <d>[,<d>…]]      one request, however many days",
           "  efferent read --url <endpoint>        fetch and decrypt, straight to stdout",
           "  efferent sync [--url <endpoint>]      copy every day that changed since last time",
           "  efferent status [--url <endpoint>]    what the archive holds, and what the mirror does",
@@ -142,32 +144,55 @@ async function pair(url: string): Promise<void> {
   console.log(payload);
 }
 
-/** Stand in for a phone: build one day and write it exactly as a device would. */
-async function send(url: string, day: string): Promise<void> {
-  if (!isDay(day)) fail(`--day must be YYYY-MM-DD, got ${day}`);
+/**
+ * Stand in for a phone: build some days and write them exactly as a device
+ * would — sealed one by one, packed into a single request, signed as a whole.
+ *
+ * `--day` takes a list so the batching path can be reached by hand. A phone
+ * sends a month at a time and this is the only other thing that ever writes.
+ */
+async function send(url: string, dayList: string): Promise<void> {
+  const wanted = dayList.split(",").map((part) => part.trim()).filter(Boolean).sort();
+  for (const day of wanted) if (!isDay(day)) fail(`--day must be YYYY-MM-DD, got ${day}`);
+
   const reading = await load<ReadingKey>("reading-key.json");
   const writer = await loadOrCreateWriter();
   const bucket = await bucketId(fromBase64url(reading.readingPublic));
 
-  const events = Array.from({ length: 3 }, (_, hour) => ({
-    id: `agg:steps:${day}T${String(9 + hour).padStart(2, "0")}:00:00Z:h`,
-    v: 1,
-    metric: "steps",
-    bucket: "hour",
-    start: `${day}T${String(9 + hour).padStart(2, "0")}:00:00Z`,
-    end: `${day}T${String(10 + hour).padStart(2, "0")}:00:00Z`,
-    value: 100 + hour,
-    unit: "count",
-  }));
-  const lines = events.map((event) => JSON.stringify(event)).join("\n") + "\n";
+  const batch: SealedDay[] = [];
+  for (const day of wanted) {
+    const events = Array.from({ length: 3 }, (_, hour) => ({
+      id: `agg:steps:${day}T${String(9 + hour).padStart(2, "0")}:00:00Z:h`,
+      v: 1,
+      metric: "steps",
+      bucket: "hour",
+      start: `${day}T${String(9 + hour).padStart(2, "0")}:00:00Z`,
+      end: `${day}T${String(10 + hour).padStart(2, "0")}:00:00Z`,
+      value: 100 + hour,
+      unit: "count",
+    }));
+    const lines = events.map((event) => JSON.stringify(event)).join("\n") + "\n";
 
-  const body = await seal(
-    fromBase64url(reading.readingPublic),
-    await compress(new TextEncoder().encode(lines)),
-    associatedData(bucket, day),
-  );
+    batch.push({
+      day,
+      // Each day is sealed to its own date, so a day cannot be moved or handed
+      // back as another one. The batch around them binds nothing.
+      blob: await seal(
+        fromBase64url(reading.readingPublic),
+        await compress(new TextEncoder().encode(lines)),
+        associatedData(bucket, day),
+      ),
+    });
+  }
 
-  const header: UploadHeader = { bucket, day, timestamp: Math.floor(Date.now() / 1000) };
+  let body: Uint8Array;
+  try {
+    body = packDays(batch);
+  } catch (error) {
+    return fail(`those days do not make a request: ${(error as Error).message}`);
+  }
+
+  const header: UploadHeader = { bucket, days: wanted, timestamp: Math.floor(Date.now() / 1000) };
   const privateKey = await crypto.subtle.importKey(
     "pkcs8",
     fromBase64url(writer.writerPrivate) as BufferSource,
@@ -176,7 +201,7 @@ async function send(url: string, day: string): Promise<void> {
     ["sign"],
   );
 
-  const response = await fetch(`${url}/b/${bucket}/d/${day}`, {
+  const response = await fetch(`${url}/b/${bucket}/days`, {
     method: "PUT",
     headers: {
       "content-type": "application/octet-stream",
