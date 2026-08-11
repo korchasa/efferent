@@ -20,7 +20,6 @@
  */
 
 import { compress, decompress } from "./framing.ts";
-import { SEALED_VERSION } from "./sealedbox.ts";
 
 /** `[2][uint32 manifest length][deflated manifest][sealed blob]`. */
 export const FRAMED_VERSION = 2;
@@ -56,16 +55,13 @@ export async function frame(entries: ManifestEntry[], sealed: Uint8Array): Promi
 /**
  * Split a body back into what the service reads and what only the reader can.
  *
- * A body written before manifests existed is a bare sealed blob, and its first
- * byte is the sealed-box version. Telling the two apart by that byte is what
- * lets an archive hold both without a flag day.
+ * Every batch is framed. There was briefly an archive of bare sealed blobs from
+ * before the manifest existed, and the code to read both shapes came out with
+ * them — one accepted format is one fewer thing to be wrong about.
  */
-export function unframe(body: Uint8Array): { manifest: Uint8Array | null; sealed: Uint8Array } {
-  if (body.length > 0 && body[0] === SEALED_VERSION) {
-    return { manifest: null, sealed: body };
-  }
+export function unframe(body: Uint8Array): { manifest: Uint8Array; sealed: Uint8Array } {
   if (body.length < PREFIX_BYTES || body[0] !== FRAMED_VERSION) {
-    throw new Error(`body starts with ${body[0]}, which is neither a sealed blob nor a framed one`);
+    throw new Error(`body starts with ${body[0]}, which is not a framed batch`);
   }
   const length = new DataView(body.buffer, body.byteOffset).getUint32(1, false);
   if (PREFIX_BYTES + length > body.length) {

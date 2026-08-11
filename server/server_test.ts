@@ -116,9 +116,8 @@ function environment(): { BLOBS: MemoryBucket; INDEX: MemoryIndex } {
   return { BLOBS: new MemoryBucket(), INDEX: new MemoryIndex() };
 }
 
-/** A body with no manifest: what every device wrote before the index existed,
- * and still a valid batch. The leading byte is the sealed-box version, which is
- * how the service tells the two shapes apart. */
+/** Stand-in for the sealed blob. The service never opens one, so its contents
+ * only ever need to be recognisable. */
 function sealedBody(...rest: number[]): Uint8Array {
   return new Uint8Array([1, ...rest]);
 }
@@ -162,6 +161,12 @@ async function postWithManifest(
   return await post(env, writer, seqFrom, seqTo, await frame(manifest, sealedBody(7, 7, 7)));
 }
 
+/** One ordinary entry, for tests that care about the archive rather than the
+ * index. */
+function entry(seq: number): ManifestEntry[] {
+  return [{ seq, type: "health.agg", metric: "steps", start: 1_760_000_000, end: null }];
+}
+
 function at(iso: string): number {
   return Math.floor(Date.parse(iso) / 1000);
 }
@@ -183,14 +188,15 @@ Deno.test("a stored batch is never replaced by a later one claiming its range", 
   const env = environment();
   const writer = await writerKey();
 
-  assertEquals((await post(env, writer, 1, 10, sealedBody(2, 3))).status, 200);
-  const answer = await post(env, writer, 1, 10, sealedBody(9, 9, 9));
+  const first = await frame(entry(1), sealedBody(2, 3));
+  assertEquals((await post(env, writer, 1, 10, first)).status, 200);
+  const answer = await post(env, writer, 1, 10, await frame(entry(1), sealedBody(9, 9, 9)));
 
   // Acknowledged, so a device that missed the first answer stops retrying…
   assertEquals(answer.status, 200);
   assertEquals(await answer.json(), { ack: 10 });
   // …but what was written first is what is still there.
-  assertEquals([...env.BLOBS.store.get(objectKey(BUCKET, 1, 10))!], [1, 2, 3]);
+  assertEquals([...env.BLOBS.store.get(objectKey(BUCKET, 1, 10))!], [...first]);
 });
 
 Deno.test("the listing walks past its own page size", async () => {
@@ -201,7 +207,9 @@ Deno.test("the listing walks past its own page size", async () => {
   // filters after fetching stops being able to see anything.
   for (let index = 0; index < 250; index++) {
     const from = index * 10 + 1;
-    await post(env, writer, from, from + 9, sealedBody(index & 0xff));
+    await postWithManifest(env, writer, from, from + 9, [
+      { seq: from, type: "health.agg", metric: "steps", start: 1_760_000_000 + index, end: null },
+    ]);
   }
 
   const seen: number[] = [];
@@ -228,8 +236,8 @@ Deno.test("the listing walks past its own page size", async () => {
 Deno.test("stats says what is in the archive without handing any of it over", async () => {
   const env = environment();
   const writer = await writerKey();
-  await post(env, writer, 1, 10, sealedBody(2, 3));
-  await post(env, writer, 11, 20, sealedBody(4));
+  await postWithManifest(env, writer, 1, 10, entry(1));
+  await postWithManifest(env, writer, 11, 20, entry(11));
 
   const response = await worker.fetch(
     new Request(`https://example.invalid/b/${BUCKET}/stats`),
@@ -238,7 +246,6 @@ Deno.test("stats says what is in the archive without handing any of it over", as
   const body = await response.json() as Record<string, unknown>;
 
   assertEquals(body.objects, 2);
-  assertEquals(body.bytes, 5);
   assertEquals(body.lowestSeq, 1);
   assertEquals(body.highestSeq, 20);
   assertEquals(body.complete, true);
@@ -349,25 +356,15 @@ Deno.test("find answers with batch names and never with data", async () => {
   assert(!text.includes("7"), `the answer carried payload bytes: ${text}`);
 });
 
-/// Every batch already in the archive was written before manifests existed.
-/// They have to keep working, and they have to stay out of the index rather
-/// than appear in it as events with no time.
-Deno.test("a batch without a manifest is stored and left out of the index", async () => {
+/// A batch with no manifest would be data the index cannot see, and an index
+/// with holes in it answers "nothing here" for events that are. Refusing the
+/// body is the only version of that failure anyone notices.
+Deno.test("a body with no manifest is refused rather than archived", async () => {
   const env = environment();
   const writer = await writerKey();
 
-  assertEquals((await post(env, writer, 1, 500, sealedBody(2, 3))).status, 200);
-
-  assert(env.BLOBS.store.has(objectKey(BUCKET, 1, 500)), "the batch was not archived");
-  assertEquals((await find(env, "from=&to=")).objects.length, 0);
-});
-
-Deno.test("a body that is neither sealed nor framed is refused rather than archived", async () => {
-  const env = environment();
-  const writer = await writerKey();
-
-  const answer = await post(env, writer, 1, 1, new Uint8Array([9, 9, 9]));
+  const answer = await post(env, writer, 1, 500, sealedBody(2, 3));
 
   assertEquals(answer.status, 400);
-  assertEquals(env.BLOBS.store.has(objectKey(BUCKET, 1, 1)), false);
+  assertEquals(env.BLOBS.store.has(objectKey(BUCKET, 1, 500)), false);
 });

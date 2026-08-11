@@ -67,8 +67,7 @@ const blob = fromBase64url(emitted.blob);
 // The body is framed: a manifest the service reads, then the sealed blob only
 // this side can. Both halves are inside what was signed.
 const parts = unframe(blob);
-expect(parts.manifest !== null, "the phone sent a body with no manifest in front of it");
-const manifest = await readManifest(parts.manifest!);
+const manifest = await readManifest(parts.manifest);
 expect(manifest.length === 2, `the manifest describes ${manifest.length} events, expected 2`);
 expect(
   manifest[0].metric === "steps" && manifest[0].start === 1_754_557_200,

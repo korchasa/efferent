@@ -113,9 +113,9 @@ alone a reader of the service can tell when you sleep, when you train and when t
 What it cannot tell is any number — how far you walked, how fast your heart went. Values stay sealed.
 
 The manifest travels inside the signed body rather than beside it, so the signature that protects the
-ciphertext protects it too, and the index only ever points at objects the archive actually holds.
-Batches written before manifests existed are still valid: they begin with the sealed-box version
-byte, which is how a reader tells the two shapes apart.
+ciphertext protects it too, and the index only ever points at objects the archive actually holds. A
+body without one is refused: a batch the index cannot see would make the index answer "nothing here"
+for events that are, which is the kind of wrong nobody notices.
 
 That the past cannot be rewritten has a consequence on the other end. Sequence numbers are the
 device's own counter, and a reinstalled app starts it at 1 again while the archive still holds

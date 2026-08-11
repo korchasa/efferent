@@ -148,10 +148,9 @@ async function append(request: Request, env: Env, bucket: string): Promise<Respo
   // Split before storing, so a malformed body is refused rather than archived.
   // The whole body goes to R2 all the same: it is what was signed, and the
   // reader checks the signature against exactly these bytes.
-  let manifest: ManifestEntry[] = [];
+  let manifest: ManifestEntry[];
   try {
-    const parts = unframe(body);
-    if (parts.manifest) manifest = await readManifest(parts.manifest);
+    manifest = await readManifest(unframe(body).manifest);
   } catch (cause) {
     return problem(400, `body is not a batch this service understands: ${cause}`);
   }
