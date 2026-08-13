@@ -42,9 +42,11 @@ import {
 
 /** A month of busy days over; well under what a Worker can hold in memory. */
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
-/** Days per listing page. A year and a half in one answer, so an ordinary
- * question never pages at all. */
-const MAX_DAYS_PER_PAGE = 500;
+/** Days per listing page — R2's own ceiling for one listing, so asking for more
+ * would page underneath anyway. Nearly three years in one answer: an ordinary
+ * question never pages, and a device checking a decade against the archive does
+ * it in three round trips. */
+const MAX_DAYS_PER_PAGE = 1000;
 /** How far `stats` will walk before it answers "at least this much". Bounded so
  * that asking what is in an archive never costs more than a moment. */
 const STATS_PAGE_LIMIT = 20;

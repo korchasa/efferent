@@ -13,19 +13,22 @@ final class UploaderTests: XCTestCase {
     private func makeUploader(
         store: Store,
         identifier: String,
-        build: @escaping ([String]) async throws -> [String: DayContents] = { _ in [:] }
+        reconcileEvery: TimeInterval = 24 * 60 * 60,
+        build: @escaping ([String]) async throws -> [String: DayContents] = { _ in [:] },
+        reconcile: @escaping () async throws -> Int = { 0 }
     ) throws -> Uploader {
         try Uploader(
             // A session identifier per test: background sessions are global to
             // the process, and two tests sharing one would share its tasks.
-            configuration: .init(sessionIdentifier: identifier),
+            configuration: .init(reconcileEvery: reconcileEvery, sessionIdentifier: identifier),
             destination: Destination(
                 endpoint: URL(string: "https://example.invalid")!,
                 readingPublicKey: WireTests.readingPublicKey
             ),
             store: store,
             identity: DeviceIdentity(),
-            build: build
+            build: build,
+            reconcile: reconcile
         )
     }
 
@@ -77,6 +80,108 @@ final class UploaderTests: XCTestCase {
 
         // Scheduled rather than skipped: an empty day that was never sent has no
         // fingerprint to match, so it goes up as an empty day and says so.
+        XCTAssertEqual(outcome, .scheduled(days: 1, unchanged: 0))
+    }
+
+    // MARK: - Checking the archive before trusting the ledger
+
+    /// The check runs before the pass decides there is nothing to do, because
+    /// "nothing waiting" is precisely the answer it exists to distrust: a day
+    /// whose fingerprint matches an archive that has since lost it looks exactly
+    /// like a day that is safely stored.
+    func testTheArchiveIsCheckedEvenWhenNothingIsWaiting() async throws {
+        let store = try Store.inMemory()
+        let checks = Counted()
+        let uploader = try makeUploader(
+            store: store, identifier: "test.check.\(UUID().uuidString)", reconcile: {
+                checks.bump()
+                return 0
+            }
+        )
+
+        _ = try await uploader.send()
+
+        XCTAssertEqual(checks.value, 1)
+        XCTAssertNotNil(try store.lastReconciledAt())
+    }
+
+    /// Once a day, not once a pass. Passes run on every HealthKit delivery, and
+    /// a listing walk on each of them would be hundreds of kilobytes an hour
+    /// for an answer that almost never changes.
+    func testTheArchiveIsNotCheckedAgainUntilItIsDue() async throws {
+        let store = try Store.inMemory()
+        let checks = Counted()
+        let uploader = try makeUploader(
+            store: store, identifier: "test.due.\(UUID().uuidString)", reconcile: {
+                checks.bump()
+                return 0
+            }
+        )
+
+        _ = try await uploader.send()
+        _ = try await uploader.send()
+        _ = try await uploader.send()
+
+        XCTAssertEqual(checks.value, 1, "the archive was walked on every pass")
+    }
+
+    func testTheArchiveIsCheckedAgainOnceItIsDue() async throws {
+        let store = try Store.inMemory()
+        let checks = Counted()
+        let uploader = try makeUploader(
+            store: store, identifier: "test.overdue.\(UUID().uuidString)", reconcileEvery: 0,
+            reconcile: {
+                checks.bump()
+                return 0
+            }
+        )
+
+        _ = try await uploader.send()
+        _ = try await uploader.send()
+
+        XCTAssertEqual(checks.value, 2)
+    }
+
+    /// The listing can be unreachable in exactly the conditions where sending
+    /// still works. A failed check must not stop the pass, and must not be
+    /// stamped as done — otherwise one bad moment buys a whole day of not
+    /// looking.
+    func testAFailedCheckNeitherStopsTheSendNorCountsAsDone() async throws {
+        let store = try Store.inMemory()
+        try store.markDirty(["2026-08-07"])
+        let uploader = try makeUploader(
+            store: store, identifier: "test.checkfail.\(UUID().uuidString)",
+            build: { days in
+                Dictionary(uniqueKeysWithValues: days.map {
+                    ($0, DayContents(events: [], sampleIdentifiers: []))
+                })
+            },
+            reconcile: { throw Archive.ArchiveError.refused(status: 503) }
+        )
+
+        let outcome = try await uploader.send()
+
+        XCTAssertEqual(outcome, .scheduled(days: 1, unchanged: 0), "a failed check stopped the send")
+        XCTAssertNil(try store.lastReconciledAt(), "a check that failed was recorded as done")
+    }
+
+    /// A day the archive turns out to have lost is owed again, and the pass it
+    /// was found in is the pass that sends it.
+    func testADayTheArchiveLostGoesInTheSamePass() async throws {
+        let store = try Store.inMemory()
+        let events = try [Event(id: "a", payload: Event.payload(["v": "1"]))]
+        let digest = try Data(SHA256.hash(data: NDJSON.body(events)))
+        try store.recordSent(day: "2026-08-07", digest: digest, sampleIdentifiers: [])
+
+        let uploader = try makeUploader(
+            store: store, identifier: "test.lost.\(UUID().uuidString)",
+            build: { _ in ["2026-08-07": DayContents(events: events, sampleIdentifiers: [])] },
+            reconcile: { try store.markMissing(["2026-08-07"]) }
+        )
+        let outcome = try await uploader.send()
+
+        // Without the fingerprint being dropped this is `unchanged: 1` — the day
+        // rebuilds identically and is quietly written off as already stored.
         XCTAssertEqual(outcome, .scheduled(days: 1, unchanged: 0))
     }
 
@@ -148,5 +253,24 @@ final class UploaderTests: XCTestCase {
         XCTAssertEqual(batches.map { $0.map(\.day) }, [
             ["2026-01-01"], ["2026-01-02"], ["2026-01-03"],
         ])
+    }
+}
+
+/// Counts calls from inside a `@Sendable` closure without tripping concurrency
+/// checking.
+private final class Counted: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func bump() {
+        lock.lock()
+        count += 1
+        lock.unlock()
+    }
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
     }
 }

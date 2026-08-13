@@ -170,6 +170,38 @@ public final class Store {
         }
     }
 
+    /// Mark `days` as owed *and forget what was sent for them*.
+    ///
+    /// This is the one place a fingerprint is thrown away, and it exists because
+    /// a fingerprint is a claim about the archive rather than about Health. It
+    /// says "the archive already holds exactly this", and when the archive does
+    /// not — a bucket recreated, objects deleted, a move that lost some — the
+    /// claim is false and the ordinary path cannot recover from it: the day
+    /// would be rebuilt, come out identical, match the fingerprint and never be
+    /// sent. Silently, and for history nobody is looking at.
+    ///
+    /// So `markDirty` keeps the fingerprint and this does not. Both are
+    /// idempotent; what differs is the evidence that prompted them.
+    @discardableResult
+    public func markMissing(_ days: some Collection<String>) throws -> Int {
+        try dbQueue.write { db in
+            let now = Date().timeIntervalSince1970
+            var marked = 0
+            for day in Set(days) {
+                try db.execute(
+                    sql: """
+                    INSERT INTO day (day, digest, dirty, updatedAt) VALUES (?, NULL, 1, ?)
+                    ON CONFLICT(day) DO UPDATE SET
+                        digest = NULL, dirty = 1, updatedAt = excluded.updatedAt
+                    """,
+                    arguments: [day, now]
+                )
+                marked += db.changesCount
+            }
+            return marked
+        }
+    }
+
     /// A day was rebuilt and came out exactly as it was sent. Nothing to upload,
     /// and nothing owed.
     public func markClean(day: String) throws {
@@ -199,6 +231,22 @@ public final class Store {
 
     public func recordBackfillReached(_ day: String) throws {
         try dbQueue.write { db in try Self.setString(db, MetaKey.backfillReached.rawValue, day) }
+    }
+
+    /// When this device last checked the archive against its own ledger, or nil
+    /// if it never has — which is why a fresh install checks before it trusts a
+    /// ledger it has not yet tested against anything.
+    public func lastReconciledAt() throws -> Date? {
+        try dbQueue.read { db in
+            try Self.int(db, MetaKey.lastReconciledAt.rawValue)
+                .map { Date(timeIntervalSince1970: TimeInterval($0)) }
+        }
+    }
+
+    public func recordReconciled(at moment: Date = Date()) throws {
+        try dbQueue.write { db in
+            try Self.setInt(db, MetaKey.lastReconciledAt.rawValue, Int64(moment.timeIntervalSince1970))
+        }
     }
 
     /// The day this app first ran, remembered the first time it is asked for.

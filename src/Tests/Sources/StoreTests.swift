@@ -100,6 +100,57 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(try store.days(ofRemoved: [moved]).isEmpty)
     }
 
+    // MARK: - When the archive turns out not to hold it
+
+    /// The difference between the two ways of owing a day, and the reason there
+    /// are two. A fingerprint is a claim about the archive; when the archive
+    /// turns out not to hold the day, the claim has to go with it, or the day
+    /// rebuilds identically, matches, and is never sent again.
+    func testADayTheArchiveLostLosesItsFingerprintToo() throws {
+        let store = try Store.inMemory()
+        try store.recordSent(day: "2026-08-07", digest: Data([0xAB]), sampleIdentifiers: [])
+
+        try store.markMissing(["2026-08-07"])
+
+        XCTAssertEqual(try store.pendingDays(limit: 10), ["2026-08-07"])
+        XCTAssertNil(
+            try store.digest(for: "2026-08-07"),
+            "the fingerprint outlived the day it was a claim about"
+        )
+    }
+
+    func testMarkingADayMissingTwiceStillOwesItOnce() throws {
+        let store = try Store.inMemory()
+        try store.recordSent(day: "2026-08-07", digest: Data([0xAB]), sampleIdentifiers: [])
+
+        try store.markMissing(["2026-08-07"])
+        try store.markMissing(["2026-08-07"])
+
+        XCTAssertEqual(try store.pendingDays(limit: 10), ["2026-08-07"])
+        XCTAssertEqual(try store.stats().pendingDays, 1)
+    }
+
+    /// A day nobody ever heard of is owed just the same. The comparison is
+    /// against what the archive *should* hold rather than against what was
+    /// sent, so it also picks up days a backfill never reached.
+    func testADayNeverSeenBeforeCanBeOwed() throws {
+        let store = try Store.inMemory()
+
+        XCTAssertEqual(try store.markMissing(["2026-08-07", "2026-08-08"]), 2)
+
+        XCTAssertEqual(try store.pendingDays(limit: 10), ["2026-08-08", "2026-08-07"])
+    }
+
+    func testWhenTheArchiveWasLastCheckedSurvivesAReadBack() throws {
+        let store = try Store.inMemory()
+        XCTAssertNil(try store.lastReconciledAt(), "a fresh install has never checked")
+
+        let moment = Date(timeIntervalSince1970: 1_700_000_000)
+        try store.recordReconciled(at: moment)
+
+        XCTAssertEqual(try store.lastReconciledAt(), moment)
+    }
+
     // MARK: - Reader state
 
     /// The anchor is HealthKit's "you have seen everything up to here". Saved

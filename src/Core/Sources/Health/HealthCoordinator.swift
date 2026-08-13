@@ -199,6 +199,45 @@ public final class HealthCoordinator {
         return marked
     }
 
+    // MARK: - Checking the archive
+
+    /// Find the days the archive should hold and does not, and owe them again.
+    ///
+    /// This is the only thing that ever tests the device's own bookkeeping. A
+    /// fingerprint says "the archive already holds exactly this day", and until
+    /// something asks the archive, that is a belief rather than a fact. When it
+    /// turns out false — a bucket recreated, objects deleted, a move that
+    /// dropped some — nothing else in the design recovers from it: the day
+    /// rebuilds identically, matches the fingerprint, and is never sent again.
+    ///
+    /// The comparison is against what *should* be there rather than against
+    /// what this device remembers sending, so it also catches days that were
+    /// never sent at all — a backfill cut short, a batch that failed while
+    /// nobody was watching.
+    ///
+    /// A listing that cannot be read throws, and nothing is marked. That matters
+    /// more than it looks: a half-read listing would name most of the archive as
+    /// missing and set a decade re-uploading.
+    @discardableResult
+    public func reconcile(with archive: Archive) async throws -> Int {
+        guard let earliest = try await reader.earliestDay() else { return 0 }
+
+        let expected = try Day.range(from: earliest, to: today, in: calendar)
+        let held = try await archive.days()
+        let missing = expected.filter { !held.contains($0) }
+        guard !missing.isEmpty else {
+            log.info("archive agrees: all \(expected.count) days are there")
+            return 0
+        }
+
+        let marked = try store.markMissing(missing)
+        log.error(
+            "archive is missing \(missing.count) of \(expected.count) days (\(missing.first ?? "", privacy: .public) … \(missing.last ?? "", privacy: .public)); \(marked) owed again"
+        )
+        onNewData?()
+        return marked
+    }
+
     // MARK: - Building
 
     /// Read `days` out of Health, whole.
