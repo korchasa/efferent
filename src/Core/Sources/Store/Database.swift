@@ -96,4 +96,8 @@ enum MetaKey: String {
     /// for a decade would be several hundred thousand readings at a resolution
     /// nobody asks of last decade.
     case installedDay = "install.day"
+    /// When the archive was last compared against what this device believes it
+    /// sent, in seconds since 1970. Absent until the first comparison, which is
+    /// what makes a device check before it trusts a ledger it has never tested.
+    case lastReconciledAt = "reconcile.lastAt"
 }

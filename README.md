@@ -35,7 +35,8 @@ buy nothing. What survives a relaunch is bookkeeping:
 - one row per day — whether it still has to go, and the fingerprint of what was sent last time;
 - one row per HealthKit record, holding only which day it is in;
 - one anchor per HealthKit sample type — where each reader stopped;
-- when a day was last accepted, and how far back the first export has reached.
+- when a day was last accepted, how far back the first export has reached, and when the archive was
+  last checked against all this.
 
 The fingerprint is what keeps re-reading cheap: a day rebuilt from Health that comes out byte for
 byte as it was sent is not uploaded at all.
@@ -48,6 +49,30 @@ know which day to rebuild without it.
 Days and the anchor are marked in a single transaction. If the anchor could move without them,
 HealthKit would consider that data delivered and never offer it again — data loss with no error
 anywhere.
+
+## Why the phone checks the archive
+
+A fingerprint is not a fact about Health. It is a claim about the _archive_ — "it already holds
+exactly this" — and nothing on the phone could ever test it. So an archive that lost a day left the
+device certain of something untrue, and certain of it for good: the day is re-read, comes out
+identical, matches the fingerprint, and is never sent again. Silently, for history nobody is looking
+at. That is not a hypothetical; it is how three hundred days went missing here in one afternoon,
+with every counter on the phone reading zero pending.
+
+So a pass now begins by reading the listing and comparing it against the days that ought to exist —
+the first day Health knows about through today, not the days the phone believes it sent, because the
+ledger is the thing under suspicion. Whatever the archive does not have loses its fingerprint and
+goes again in that same pass. Sending was already idempotent — a day is written whole and replaced
+whole — so re-sending one costs bytes and nothing else, and there is no state anywhere that a
+duplicate could corrupt.
+
+It is cheap enough to do without thinking about it, but not free, so it runs at most once a day. A
+page is a thousand days, which makes a decade three round trips and about two hundred kilobytes —
+under two seconds. The failure behaviour is the part that matters: a walk that cannot finish throws
+rather than answering with the pages that did arrive, because a partial listing would name the rest
+of the archive as lost and the phone would dutifully re-upload years. A check that fails neither
+stops the send behind it nor counts as done, so one bad moment does not buy a whole day of not
+looking.
 
 ## What it collects
 
@@ -254,7 +279,7 @@ certificate, and the archive path above is the whole of the agreement with whate
 - `src/Core/Sources/Health` — the metric catalogue, the readers, the day builder.
 - `src/Core/Sources/Wire` — the event type, the day, NDJSON assembly, the request frame.
 - `src/Core/Sources/Store` — schema, day ledger, anchors.
-- `src/Core/Sources/Upload` — Keychain, background upload.
+- `src/Core/Sources/Upload` — Keychain, background upload, reading the archive's listing.
 - `src/App/Sources` — the SwiftUI screen and the composition root.
 - `src/Tests/Sources` — unit tests.
 - `protocol/` — bucket and day names, the request frame, signing, sealed envelopes.

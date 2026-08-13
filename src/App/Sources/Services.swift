@@ -82,7 +82,12 @@ final class Services: ObservableObject {
             // The uploader decides *when* a day goes; Health decides what is in
             // it. Handing the reading in rather than the coordinator keeps the
             // uploader testable without a phone.
-            build: { [health] days in try await health.build(days: days) }
+            build: { [health] days in try await health.build(days: days) },
+            // The same split for the check: the uploader decides how often to
+            // ask, Health works out which days should exist and compares.
+            reconcile: { [health] in
+                try await health.reconcile(with: Archive(destination: destination))
+            }
         )
         // Days land on the upload session's own queue, with no view in sight.
         // Without this the counters only change when the screen reappears,

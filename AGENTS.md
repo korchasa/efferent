@@ -27,6 +27,20 @@ This file is the rulebook.
 - **A day that came back unchanged must not be uploaded.** The fingerprint is of the _plaintext_,
   never of what goes on the wire: sealing uses a fresh throwaway key every time, so identical days
   never produce identical bytes and a comparison of those would re-upload a week every hour.
+- **A fingerprint is a claim about the archive, so the archive is what tests it.** It says "the
+  archive already holds exactly this", and when that is false the ordinary path cannot recover: the
+  day rebuilds identically, matches, and is never sent again. A pass therefore reads the listing
+  first — at most once a day — and compares it against the days that _ought_ to exist, from the
+  first day Health knows about through today. Never against the days the ledger says were sent: the
+  ledger is the thing under suspicion. `Store.markMissing` is the one place a fingerprint is thrown
+  away, and `markDirty` deliberately keeps it; do not merge the two.
+- **The check runs before the pass decides there is nothing to do.** "Nothing waiting" is precisely
+  the answer it exists to distrust — a day whose fingerprint matches an archive that has since lost
+  it looks exactly like a day that is safely stored.
+- **A listing walk answers in full or throws.** Returning the pages that did arrive names the rest
+  of the archive as lost, and the caller believes it — a phone re-uploading a decade, or worse if
+  the comparison ever runs the other way. A check that fails must neither stop the send behind it
+  nor be stamped as done, or one bad moment buys a whole day of not looking.
 - **Payload bytes must be canonical, and the body is sorted by id.** Build payloads with
   `Event.payload(_:)`. The comparison above is over the whole body, and HealthKit does not promise
   to hand samples back in the same order twice.
@@ -154,3 +168,9 @@ healthy.
   machine's own. Post to `server:dev`; its storage lives in `server/.wrangler/state` and can be
   deleted outright. A real bucket that is already claimed is released by deleting `<bucket>/key`
   from R2.
+- **Deleting objects from a live bucket takes days out of Health's reach, not just the archive's.**
+  Health keeps the readings, but the phone's ledger says those days are already stored, so nothing
+  would ever send them again — and no button in the app rebuilds a day it believes is safe. That is
+  what the listing check now repairs, and it repairs it a day later at the earliest. Before clearing
+  a prefix, list it and see whose days are in it; on 2026-08-12 a cleanup of retired keys took 321
+  real days with it.

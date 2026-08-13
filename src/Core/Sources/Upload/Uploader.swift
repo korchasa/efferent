@@ -49,6 +49,14 @@ public final class Uploader: NSObject {
         public let bytesPerRequest: Int
         /// Requests in the air at once.
         public let concurrentUploads: Int
+        /// How often the archive is asked what it actually holds.
+        ///
+        /// Once a day, because the check is worth what it costs at that rate
+        /// and not at a higher one: a decade of days is six requests and about
+        /// two hundred kilobytes, which is nothing daily and real hourly. It
+        /// never runs mid-backfill either — the first pass does it and the next
+        /// twenty-four hours of passes go straight to sending.
+        public let reconcileEvery: TimeInterval
         public let sessionIdentifier: String
 
         public init(
@@ -56,12 +64,14 @@ public final class Uploader: NSObject {
             daysPerRequest: Int = Batch.maxDaysPerRequest,
             bytesPerRequest: Int = 4 * 1024 * 1024,
             concurrentUploads: Int = 4,
+            reconcileEvery: TimeInterval = 24 * 60 * 60,
             sessionIdentifier: String = "dev.korchasa.efferent.upload"
         ) {
             self.daysPerPass = daysPerPass
             self.daysPerRequest = min(daysPerRequest, Batch.maxDaysPerRequest)
             self.bytesPerRequest = bytesPerRequest
             self.concurrentUploads = concurrentUploads
+            self.reconcileEvery = reconcileEvery
             self.sessionIdentifier = sessionIdentifier
         }
     }
@@ -98,6 +108,11 @@ public final class Uploader: NSObject {
     private let store: Store
     private let identity: DeviceIdentity
     private let build: ([String]) async throws -> [String: DayContents]
+    /// Compares the archive with what should be in it and owes back whatever is
+    /// missing, answering how many days that was. Injected rather than done here
+    /// because working out which days *should* exist is a question for Health,
+    /// and this type knows only about sending.
+    private let reconcile: () async throws -> Int
     private let log = Logger(subsystem: "dev.korchasa.efferent", category: "upload")
 
     /// Touched only on `delegateQueue`, which is serial.
@@ -139,13 +154,15 @@ public final class Uploader: NSObject {
         destination: Destination,
         store: Store,
         identity: DeviceIdentity = DeviceIdentity(),
-        build: @escaping ([String]) async throws -> [String: DayContents]
+        build: @escaping ([String]) async throws -> [String: DayContents],
+        reconcile: @escaping () async throws -> Int = { 0 }
     ) {
         self.configuration = configuration
         self.destination = destination
         self.store = store
         self.identity = identity
         self.build = build
+        self.reconcile = reconcile
         super.init()
     }
 
@@ -153,6 +170,8 @@ public final class Uploader: NSObject {
     public func send() async throws -> Outcome {
         guard claimPass() else { return .alreadyInFlight }
         defer { releasePass() }
+
+        await checkTheArchive()
 
         let days = try store.pendingDays(limit: configuration.daysPerPass)
         guard !days.isEmpty else { return .nothingToSend }
@@ -197,6 +216,33 @@ public final class Uploader: NSObject {
         return pending.isEmpty && unchanged == 0
             ? .nothingToSend
             : .scheduled(days: pending.count, unchanged: unchanged)
+    }
+
+    /// Ask the archive what it holds before deciding there is nothing to send.
+    ///
+    /// Before, not after, because "nothing waiting" is the answer this is meant
+    /// to distrust: a day whose fingerprint matches an archive that has since
+    /// lost it looks exactly like a day that is safely stored.
+    ///
+    /// Failing is not a reason to stop. The listing may be unreachable in
+    /// exactly the conditions where sending still works, and the day is only
+    /// stamped when the check actually completed — so a run that failed is
+    /// simply due again next pass rather than skipped for a day.
+    private func checkTheArchive() async {
+        do {
+            if let last = try store.lastReconciledAt(),
+               Date().timeIntervalSince(last) < configuration.reconcileEvery
+            {
+                return
+            }
+            let owed = try await reconcile()
+            try store.recordReconciled()
+            if owed > 0 {
+                log.error("the archive was missing \(owed) days; they go again now")
+            }
+        } catch {
+            log.error("could not check the archive: \(String(describing: error), privacy: .public)")
+        }
     }
 
     /// Cut the days into requests.
