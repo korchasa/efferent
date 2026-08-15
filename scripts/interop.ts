@@ -23,6 +23,21 @@ import { unpackDays } from "../protocol/batch.ts";
 import { canonicalRequest, fromBase64url, verifyUpload } from "../protocol/signing.ts";
 import { bucketId } from "../protocol/ids.ts";
 
+/**
+ * A throwaway key pair, generated for this check and used nowhere else.
+ *
+ * It is committed on purpose: the check has to open what Swift sealed, so both
+ * halves must be identical on every machine, and a key that must be identical
+ * everywhere cannot be a secret. It guards nothing — the bucket it addresses
+ * holds two days of made-up steps.
+ *
+ * The scanner flags keys of exactly this shape, and `.gitleaks.toml` excuses
+ * this one by naming both the file and the value, so pasting a different key
+ * here still fails the check. That narrowness is the point: the risk is not the
+ * fixture, it is the day somebody replaces it with a real reading key — which
+ * would be published the moment it was committed, and decrypts everything the
+ * archive has ever held.
+ */
 const READING_PRIVATE = "MC4CAQAwBQYDK2VuBCIEIB-BUIZTXqbNIR0MFd8VXE2BPlP2ohi2pcpCd_FksGD6";
 const READING_PUBLIC = "YAvPaXBsGTnyrLF6FcE1oI2EjHmIeKAg07zRX51nI2w";
 const DAY = "2026-08-07";

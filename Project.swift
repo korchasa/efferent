@@ -13,7 +13,12 @@ public let project = Project(
     ],
     settings: .settings(
         base: [
-            "DEVELOPMENT_TEAM": "78M3ZDR5UH",
+            // No DEVELOPMENT_TEAM here on purpose. It identifies the account
+            // rather than the app, this repository is public, and nothing built
+            // from it needs one: the archive is unsigned and signing happens
+            // elsewhere. Running on a device from Xcode does need it, so it
+            // lives in the ignored `Configs/Local.xcconfig` — see the example
+            // beside it.
             "SWIFT_VERSION": "5.9",
             "CODE_SIGN_STYLE": "Automatic",
             "SWIFT_TREAT_WARNINGS_AS_ERRORS": "YES",

@@ -1,0 +1,10 @@
+// Settings that belong to one machine and must never be committed.
+//
+// Copy this to `Local.xcconfig` — which is ignored — and fill it in. Both
+// Debug.xcconfig and Release.xcconfig include it with `#include?`, the optional
+// form, so a clone without it builds fine: the archive this repository produces
+// is unsigned, and signing happens outside it.
+
+// Your Apple Developer Team ID, needed only to run the app on a device from
+// Xcode. Membership page of developer.apple.com, top right.
+DEVELOPMENT_TEAM =

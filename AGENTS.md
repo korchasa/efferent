@@ -9,7 +9,8 @@ This file is the rulebook.
   `deno task dist` produces an _unsigned_ `build/Efferent.xcarchive` and stops. Never add a
   certificate, a provisioning profile, or a workflow that uploads anywhere.
 - **A push is not a release.** Anything that reaches real users starts from a version tag or a
-  manual dispatch, never from a branch push.
+  manual dispatch, never from a branch push. The only workflow here is the secret scan, and it is
+  the only kind that belongs: it reads and reports, and reaches nothing.
 - Every command is a `deno task`. When you need a new one, add a task and a typed script under
   `scripts/` — never a shell script or a Makefile target.
 
@@ -102,6 +103,11 @@ is the only thing that catches drift before a phone does.
   device, the design has gone wrong.
 - **The signing key and the reading key are separate on purpose.** One writes, one reads. Merging
   them would mean an agent's config file grants the right to forge uploads.
+- **Both keys are bare base64 pkcs8, which is why the scanner carries a rule of its own.** A stock
+  secret scanner looks for the PEM armour these keys do not have, so it reads a committed reading
+  key as ordinary text — checked, and it did. `.gitleaks.toml` matches the pkcs8 prefix instead, and
+  excuses the interop fixture by file *and* value, so replacing that fixture with a real key still
+  fails. Never widen that exception to the file alone.
 - **Bucket, days and body hash are all bound into what gets signed, and bucket and day into the
   encryption tag.** Dropping any of them from either place lets a day be replayed, moved to another
   bucket, or handed back as a different date, silently. The days are named in the signed string as
@@ -202,5 +208,5 @@ healthy.
   Health keeps the readings, but the phone's ledger says those days are already stored, so nothing
   would ever send them again — and no button in the app rebuilds a day it believes is safe. That is
   what the listing check now repairs, and it repairs it a day later at the earliest. Before clearing
-  a prefix, list it and see whose days are in it; on 2026-08-12 a cleanup of retired keys took 321
-  real days with it.
+  a prefix, list it and see what is in it: a cleanup of keys left over from an older protocol has
+  already taken most of a year of real days with it, because they shared the prefix.
