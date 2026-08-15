@@ -112,6 +112,36 @@ is the only thing that catches drift before a phone does.
   works one way tends to be discovered on a phone.
 - The service must never gain a way to read a day. If a feature seems to need one, it belongs in the
   reading tool instead.
+- **Anything that answers a question runs on the reader's machine.** The MCP server is the standing
+  example: it decrypts, so it lives beside the key. A request to "put it on the server" is a request
+  to give the service the reading key, and the answer is that the server is already where it can be —
+  the service holds ciphertext and the agent connects to a process here.
+
+## Answering on behalf of a reader
+
+`tools/analysis.ts` is where a day stops being events and becomes an answer, and every correction in
+it exists because the wrong version fails quietly.
+
+- **Sleep is merged, never summed.** Stretches overlap — two sources, or a stage boundary that laps
+  its neighbour — so adding their lengths invents hours of sleep. A test breaks if anybody adds them.
+- **A night is noon to noon, named by the evening it began in.** A night is stored across two day
+  files, because a record belongs to the day it started on. Grouping by that day reports two short
+  nights instead of one whole one.
+- **Daily and hourly totals never meet.** Both live in the same day and mean the same thing at
+  different resolutions, so a reader that takes whichever it finds first doubles the day.
+- **A unit that lies is corrected in the label, not in the value.** Blood oxygen leaves the phone as
+  0.97 with "%" written on it. Rewriting the value would put two meanings of one field into a single
+  history, so the note travels with the answer instead.
+- **A tool refuses rather than truncates.** An answer cut down to what fitted is a question quietly
+  replaced by a smaller one, and nothing in it says so.
+- **An answer from a stale local copy says it is stale.** The archive being unreachable is not a
+  reason to fail, and it is not a reason to keep quiet either.
+- **A tool description is the whole of the agent's briefing.** No prompt is written anywhere, so
+  anything a reader has to know to not misread the data belongs in the description of the tool that
+  hands it over.
+- **The server's `serve()` call stays the last line of `tools/mcp.ts`.** It never returns, so
+  anything below it never initialises; importing the module hides this entirely, and only the test
+  that spawns the server as a process catches it.
 
 ## HealthKit facts that shape the code
 

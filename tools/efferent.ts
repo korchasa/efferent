@@ -12,18 +12,27 @@
  * archive says which by when it was last written.
  */
 
-import { bucketId, dayBefore, isDay } from "../protocol/ids.ts";
+import { bucketId } from "../protocol/ids.ts";
 import { base64url, fromBase64url, signUpload, type UploadHeader } from "../protocol/signing.ts";
-import { associatedData, open, seal } from "../protocol/sealedbox.ts";
-import { compress, decompress } from "../protocol/framing.ts";
+import { associatedData, seal } from "../protocol/sealedbox.ts";
+import { compress } from "../protocol/framing.ts";
 import { packDays, type SealedDay } from "../protocol/batch.ts";
+import {
+  dayBefore,
+  type Event,
+  HOME,
+  isDay,
+  load,
+  loadState,
+  mirroredDays,
+  openArchive,
+  readDay,
+  type ReadingKey,
+  saveState,
+  write,
+  writeDay,
+} from "./archive.ts";
 import qrcode from "qrcode-terminal";
-
-interface ReadingKey {
-  /** X25519 private key, pkcs8. The whole secret of the system. */
-  readingPrivate: string;
-  readingPublic: string;
-}
 
 interface WriterKey {
   /** Ed25519 private key, pkcs8. Stands in for the one a phone would make. */
@@ -31,38 +40,16 @@ interface WriterKey {
   writerPublic: string;
 }
 
-/**
- * What the mirror has, and when each day was written when it took its copy.
- *
- * The upload time is the whole of the bookkeeping. A day can be rewritten at any
- * moment — the phone re-reads it from Health and puts it up again — so "I have
- * everything up to here" is not a thing that can be known. "I have this version
- * of this day" is.
- */
-interface MirrorState {
-  endpoint: string;
-  days: Record<string, string>;
-  syncedAt: string;
+if (import.meta.main) {
+  // The reading layer throws where this tool used to exit, and a stack trace is
+  // not an error message. One place turns it back into a line a person can act
+  // on, which is what `fail` has always printed.
+  try {
+    await main(Deno.args);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
 }
-
-/** One fact, as it left the phone. */
-interface Event {
-  id: string;
-  v: number;
-  metric?: string;
-  /** Present on a total, absent on a record — which is the only difference
-   * between the two now that nothing carries a kind. */
-  bucket?: string;
-  start?: string;
-  end?: string;
-  [key: string]: unknown;
-}
-
-const HOME = Deno.env.get("EFFERENT_HOME") ?? ".efferent";
-const DAYS = "days";
-const STATE = "mirror.json";
-
-if (import.meta.main) await main(Deno.args);
 
 async function main(args: string[]): Promise<void> {
   const [command, ...rest] = args;
@@ -256,9 +243,9 @@ async function sync(options: Record<string, string>): Promise<void> {
     // Every eight, which is one window of fetches. Often enough that an
     // interrupted sync loses almost nothing, rarely enough that a long run is
     // not mostly writing a file about itself.
-    if (taken % 8 === 0) await write(STATE, { ...state, syncedAt: new Date().toISOString() });
+    if (taken % 8 === 0) await saveState(state);
   }
-  await write(STATE, { ...state, syncedAt: new Date().toISOString() });
+  await saveState(state);
 
   console.log(
     `${taken} day${taken === 1 ? "" : "s"} copied, ${Object.keys(state.days).length} mirrored`,
@@ -268,20 +255,11 @@ async function sync(options: Record<string, string>): Promise<void> {
 /** What the archive holds and what the mirror has of it. */
 async function status(url?: string): Promise<void> {
   const state = await loadState(url);
-  const reading = await load<ReadingKey>("reading-key.json");
-  const bucket = await bucketId(fromBase64url(reading.readingPublic));
-
-  const remote = await fetchJSON<{
-    exists: boolean;
-    days: number;
-    bytes: number;
-    firstDay: string | null;
-    lastDay: string | null;
-    complete: boolean;
-  }>(`${state.endpoint}/b/${bucket}/stats`);
+  const archive = await openArchive(state.endpoint);
+  const remote = await archive.stats();
 
   const mirrored = Object.keys(state.days).sort();
-  console.log(`bucket   ${bucket}`);
+  console.log(`bucket   ${archive.bucket}`);
   console.log(
     `archive  ${remote.days}${remote.complete ? "" : "+"} days, ` +
       `${(remote.bytes / 1024 / 1024).toFixed(1)} MiB` +
@@ -422,145 +400,7 @@ function report(events: Event[], options: Record<string, string>): void {
   if (out) console.log(out);
 }
 
-// MARK: - The archive, as something to read from
-
-async function openArchive(endpoint: string) {
-  const reading = await load<ReadingKey>("reading-key.json");
-  const readingPublic = fromBase64url(reading.readingPublic);
-  const bucket = await bucketId(readingPublic);
-  const privateKey = await crypto.subtle.importKey(
-    "pkcs8",
-    fromBase64url(reading.readingPrivate) as BufferSource,
-    { name: "X25519" },
-    false,
-    ["deriveBits"],
-  );
-
-  async function day(name: string): Promise<{ day: string; events: Event[] }> {
-    const response = await fetch(`${endpoint}/b/${bucket}/d/${name}`);
-    if (!response.ok) {
-      throw new Error(`${name}: ${response.status} ${await response.text()}`);
-    }
-
-    const plaintext = await decompress(
-      await open(
-        privateKey,
-        readingPublic,
-        new Uint8Array(await response.arrayBuffer()),
-        associatedData(bucket, name),
-      ),
-    );
-    const events = new TextDecoder().decode(plaintext).trim().split("\n")
-      .filter((line) => line.length > 0)
-      .map((line) => JSON.parse(line) as Event);
-    return { day: name, events };
-  }
-
-  /**
-   * Which days the archive has in a range.
-   *
-   * Following `next` until it comes back null is not optional. A listing that
-   * stopped at its first page would report the rest of a decade as nothing at
-   * all, and would do it without an error.
-   */
-  async function list(
-    range: { from?: string; to?: string },
-  ): Promise<{ day: string; uploaded: string }[]> {
-    const entries: { day: string; uploaded: string }[] = [];
-    let after: string | undefined;
-    for (;;) {
-      const parameters = new URLSearchParams();
-      if (after) parameters.set("after", after);
-      else if (range.from) parameters.set("from", range.from);
-      if (range.to) parameters.set("to", range.to);
-
-      const page = await fetchJSON<
-        { days: { day: string; uploaded: string }[]; next: string | null }
-      >(`${endpoint}/b/${bucket}/days?${parameters}`);
-      entries.push(...page.days);
-      if (page.next === null) return entries;
-      after = page.next;
-    }
-  }
-
-  /**
-   * Named days, several at a time, in the order they were asked for.
-   *
-   * One at a time is what makes a long history slow: the cost is a round trip
-   * per day and almost nothing else, so waiting for each before starting the
-   * next spends the whole time idle. The window is small on purpose — enough to
-   * fill the link, not enough to look like an attack on it.
-   */
-  async function* several(names: string[], width = 8) {
-    for (let start = 0; start < names.length; start += width) {
-      const window = await Promise.all(names.slice(start, start + width).map(day));
-      for (const fetched of window) yield fetched;
-    }
-  }
-
-  return { bucket, day, list, several };
-}
-
-// MARK: - The mirror, one file per day
-
-async function writeDay(day: string, events: Event[]): Promise<void> {
-  await Deno.mkdir(`${HOME}/${DAYS}`, { recursive: true });
-  // Through a temporary file: a day truncated by an interrupted write would look
-  // like a day on which almost nothing happened.
-  const temporary = `${HOME}/${DAYS}/${day}.partial`;
-  await Deno.writeTextFile(
-    temporary,
-    events.map((event) => JSON.stringify(event)).join("\n") + "\n",
-  );
-  await Deno.rename(temporary, `${HOME}/${DAYS}/${day}.ndjson`);
-}
-
-async function readDay(day: string): Promise<Event[]> {
-  try {
-    const text = await Deno.readTextFile(`${HOME}/${DAYS}/${day}.ndjson`);
-    return text.split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line) as Event);
-  } catch {
-    return [];
-  }
-}
-
-/** The mirrored days inside a range, in order. */
-async function mirroredDays(range: { from?: string; to?: string }): Promise<string[]> {
-  const days: string[] = [];
-  try {
-    for await (const entry of Deno.readDir(`${HOME}/${DAYS}`)) {
-      const day = entry.name.replace(/\.ndjson$/, "");
-      if (!entry.isFile || day === entry.name || !isDay(day)) continue;
-      if (range.from && day < range.from) continue;
-      if (range.to && day > range.to) continue;
-      days.push(day);
-    }
-  } catch {
-    return [];
-  }
-  return days.sort();
-}
-
-// MARK: - Storage
-
-async function loadState(url?: string): Promise<MirrorState> {
-  let stored: MirrorState | null = null;
-  try {
-    stored = await load<MirrorState>(STATE);
-  } catch {
-    stored = null;
-  }
-  const endpoint = url ?? stored?.endpoint;
-  if (!endpoint) {
-    fail("--url is required the first time; after that it is remembered");
-  }
-  const state = { endpoint, days: stored?.days ?? {}, syncedAt: stored?.syncedAt ?? "" };
-  // Written here rather than by whichever command happens to save afterwards.
-  // "After that it is remembered" has to be true of the first command a person
-  // runs, not only of the ones that keep a mirror.
-  if (endpoint !== stored?.endpoint) await write(STATE, state);
-  return state;
-}
+// MARK: - The stand-in phone's own key
 
 async function loadOrCreateWriter(): Promise<WriterKey> {
   try {
@@ -581,26 +421,10 @@ async function loadOrCreateWriter(): Promise<WriterKey> {
   }
 }
 
-async function load<T>(name: string): Promise<T> {
-  return JSON.parse(await Deno.readTextFile(`${HOME}/${name}`)) as T;
-}
-
-async function write(name: string, value: unknown): Promise<void> {
-  await Deno.mkdir(HOME, { recursive: true });
-  await Deno.writeTextFile(`${HOME}/${name}`, JSON.stringify(value, null, 2) + "\n");
-  await Deno.chmod(`${HOME}/${name}`, 0o600);
-}
-
 // MARK: - Plumbing
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
-}
-
-async function fetchJSON<T>(url: string): Promise<T> {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`${url}: ${response.status} ${await response.text()}`);
-  return await response.json() as T;
 }
 
 function parseOptions(args: string[]): Record<string, string> {
