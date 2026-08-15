@@ -182,6 +182,64 @@ comparing the two as strings would put every reading of the 6th after the 6th.
 `sync` is safe to interrupt. Each day is its own file and what was taken is written down as it goes,
 so a run that stops costs the days it had not reached and nothing else.
 
+## Letting an agent ask
+
+The same archive is an MCP server, so any agent that speaks MCP can read it with no prompt written
+anywhere:
+
+```bash
+deno task mcp
+```
+
+It speaks JSON-RPC over stdin and stdout, which is how an agent expects to find it. Registering it
+looks the same in every client that takes the usual configuration file:
+
+```json
+{
+  "mcpServers": {
+    "efferent": {
+      "command": "deno",
+      "args": ["run", "-A", "/path/to/efferent/tools/mcp.ts"],
+      "env": { "EFFERENT_HOME": "/path/to/efferent/.efferent" }
+    }
+  }
+}
+```
+
+`EFFERENT_HOME` is not optional there. It defaults to `.efferent` beside the working directory, and
+an agent starts its servers from wherever it happens to be — so without it the server looks for the
+key somewhere else entirely and says so.
+
+**It runs here, next to the reading key, and it has to.** Answering anything means decrypting days,
+and the private half of the reading key never leaves this machine. A version of this living on the
+bucket service would need that key, which would hand the service the one thing the whole design
+exists to keep from it. So the agent talks to a process on the reader's own machine, and the service
+stays somewhere that holds ciphertext it cannot open.
+
+Seven tools, and they answer questions rather than run queries:
+
+- **`health_overview`** — what the archive covers and when each metric starts. A metric begins on the
+  day the device that measures it arrived, which is the first thing anyone needs and the last thing
+  they guess.
+- **`health_daily`** — a day per row: steps, distance, flights, energy, exercise and stand minutes.
+- **`health_statistics`** — one metric grouped by day, week, month or year, as count, median, mean,
+  percentiles and sum. This is what answers a question about a decade without moving a decade.
+- **`health_sleep`** — nights, merged and whole.
+- **`health_workouts`** — what was recorded, by activity rather than by Apple's activity number.
+- **`health_samples`** — the raw readings, capped, for the questions the others do not shape.
+- **`health_sync`** — bring the local copy up to date. The other tools refresh what they need on
+  their own; this is only for making the whole history readable at once.
+
+The shapes are the point. Handing an agent a query language over a million events would make it
+responsible for the traps in this data, and every one of them fails quietly: overlapping stretches of
+sleep added together give nine hours to someone who slept six; hourly and daily totals live in the
+same day, so taking both doubles it; blood oxygen is a fraction with "%" written on it, so 0.97 reads
+as a tenth of what it is. Those are decided in `tools/analysis.ts`, once, with tests that fail if
+anybody undecides them.
+
+An answer that had to come from the local copy because the archive was unreachable says so in the
+answer itself. Health data quietly out of date is worse than an error.
+
 ## Who can read it
 
 Nobody but you, and the service holding the data least of all.
@@ -237,8 +295,8 @@ turnstile in front of the first write is the obvious next thing if the address e
 deno task check
 ```
 
-- `check` — lint and types on the scripts, protocol tests, then a simulator build.
-- `test` — protocol tests, then unit tests on any available iPhone simulator.
+- `check` — lint and types on the scripts, protocol and reading-tool tests, then a simulator build.
+- `test` — protocol and reading-tool tests, then unit tests on any available iPhone simulator.
 - `dist` — unsigned App Store archive at `build/Efferent.xcarchive`.
 - `fmt` — format task scripts, and Swift if swiftformat is installed.
 - `generate` — regenerate the Xcode project from `Project.swift`.
@@ -248,6 +306,7 @@ deno task check
 - `efferent` — the reading side: `keygen`, `pair` (prints the code to scan), `ask`, `sync`,
   `status`, `query`, plus `send` and `read` for poking at days by hand. `send --day` takes a list,
   which is the only way to reach the batching path without a phone.
+- `mcp` — the same archive as an MCP server on stdio, for an agent to read.
 
 Trying the whole path without a phone:
 
@@ -284,4 +343,7 @@ certificate, and the archive path above is the whole of the agreement with whate
 - `src/Tests/Sources` — unit tests.
 - `protocol/` — bucket and day names, the request frame, signing, sealed envelopes.
 - `server/` — the bucket service, a Cloudflare Worker over R2.
-- `tools/` — the reading side as a command line tool.
+- `tools/archive.ts` — where days come from: the reading key, the service, the mirror.
+- `tools/analysis.ts` — days turned into answers, and every correction that turning needs.
+- `tools/efferent.ts` — the reading side as a command line tool.
+- `tools/mcp.ts` — the reading side as an MCP server.

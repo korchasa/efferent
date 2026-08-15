@@ -6,8 +6,8 @@ import { generate } from "./generate.ts";
 
 await checkTooling();
 
-section("Testing the protocol and the service");
-await run("deno", { args: ["test", "-A", "protocol/", "server/"] });
+section("Testing the protocol, the service and the reading tools");
+await run("deno", { args: ["test", "-A", "protocol/", "server/", "tools/"] });
 await generate();
 
 section("Building for the simulator");
