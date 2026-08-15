@@ -1,0 +1,48 @@
+# What must never be committed here, and how a scanner recognises it.
+#
+# The default rules are kept — they cover the ordinary cloud tokens — but they
+# do not cover this project's own secret, and that is the whole reason this file
+# exists. Gitleaks' `private-key` rule looks for the PEM armour
+# ("-----BEGIN PRIVATE KEY-----"). Both keys here travel as bare base64url pkcs8
+# with no armour at all, so a real reading key pasted into a source file would
+# have sailed through a default scan. Verified: a history scan of this
+# repository with the stock ruleset reports nothing, while the fixture key in
+# `scripts/interop.ts` sits in it in plain sight.
+#
+# The reading key is the one that matters. It decrypts every day the archive has
+# ever held, it is generated once and never rotated, and publishing it cannot be
+# undone. The writer key only signs, but losing it lets a stranger overwrite
+# history rather than merely add to it.
+
+title = "Efferent"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "efferent-pkcs8-private-key"
+description = "Ed25519/X25519 private key in bare base64 pkcs8 — a reading or writer key"
+# The DER prefix of a pkcs8 Curve25519 private key, base64-encoded and therefore
+# constant: 302e020100300506032b65{6e,70} is X25519 and Ed25519 respectively, and
+# it lands on a byte boundary, so the encoding always begins "MC4CAQAwBQYDK2V"
+# followed by "u" for X25519 or "w" for Ed25519. Both base64 alphabets are
+# accepted after it, since this project writes base64url and other tools do not.
+regex = '''MC4CAQAwBQYDK2V[uw][A-Za-z0-9+/_-]{20,}'''
+keywords = ["MC4CAQAwBQYDK2V"]
+
+  # The one place such a key is committed on purpose. Scoped as narrowly as it
+  # can be: this file, and this exact value. A different key pasted into the
+  # same file still fails, which is the point — the danger is not the fixture,
+  # it is the day someone edits that line and pastes a real key over it.
+  [[rules.allowlists]]
+  description = "the interop check's throwaway key pair, which guards nothing"
+  condition = "AND"
+  paths = ['''^scripts/interop\.ts$''']
+  regexes = ['''MC4CAQAwBQYDK2VuBCIEIB-BUIZTXqbNIR0MFd8VXE2BPlP2ohi2pcpCd_FksGD6''']
+
+[[allowlists]]
+description = "the local mirror: decrypted days and the reading key itself"
+# Never committed — it is in .gitignore — but a scan of the working directory
+# walks it anyway, and a hundred false hits on health data teaches people to
+# ignore the scanner. Keeping this here makes a local `gitleaks dir .` usable.
+paths = ['''^\.efferent/''', '''^\.wrangler/''', '''^server/\.wrangler/''']

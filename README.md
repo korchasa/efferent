@@ -56,8 +56,8 @@ A fingerprint is not a fact about Health. It is a claim about the _archive_ — 
 exactly this" — and nothing on the phone could ever test it. So an archive that lost a day left the
 device certain of something untrue, and certain of it for good: the day is re-read, comes out
 identical, matches the fingerprint, and is never sent again. Silently, for history nobody is looking
-at. That is not a hypothetical; it is how three hundred days went missing here in one afternoon,
-with every counter on the phone reading zero pending.
+at. That is not a hypothetical: deleting objects from the bucket does exactly this, and afterwards
+every counter on the phone still reads zero pending.
 
 So a pass now begins by reading the listing and comparing it against the days that ought to exist —
 the first day Health knows about through today, not the days the phone believes it sent, because the
@@ -295,10 +295,13 @@ turnstile in front of the first write is the obvious next thing if the address e
 deno task check
 ```
 
-- `check` — lint and types on the scripts, protocol and reading-tool tests, then a simulator build.
+- `check` — the secret scan, then lint and types on the scripts, protocol and reading-tool tests,
+  then a simulator build.
 - `test` — protocol and reading-tool tests, then unit tests on any available iPhone simulator.
 - `dist` — unsigned App Store archive at `build/Efferent.xcarchive`.
 - `fmt` — format task scripts, and Swift if swiftformat is installed.
+- `secrets` — scan the working tree and the whole history for committed keys (`brew install
+  gitleaks`). Part of `check`, and the only thing GitHub runs on a push.
 - `generate` — regenerate the Xcode project from `Project.swift`.
 - `icons` — re-render the app icons from `documents/icon.svg`.
 - `server:dev` / `server:deploy` — the bucket service, locally or to Cloudflare.

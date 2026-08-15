@@ -13,6 +13,7 @@
     "mcp": "deno run -A tools/mcp.ts",
     "dist": "deno run -A scripts/dist.ts",
     "fmt": "deno run -A scripts/fmt.ts",
+    "secrets": "deno run -A scripts/secrets.ts",
     "generate": "deno run -A scripts/generate.ts",
     "server:dev": "wrangler dev --config server/wrangler.toml",
     "server:deploy": "wrangler deploy --config server/wrangler.toml",

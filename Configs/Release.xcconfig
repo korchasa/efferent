@@ -1,2 +1,5 @@
 OTHER_LDFLAGS = $(inherited) -dead_strip
 SWIFT_OPTIMIZATION_LEVEL = -O
+
+// Machine-local settings (team id). Optional: absent in a fresh clone and in CI.
+#include? "Local.xcconfig"

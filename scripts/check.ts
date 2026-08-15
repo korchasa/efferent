@@ -3,7 +3,10 @@
 import { checkTooling, run, section } from "./lib.ts";
 import { SCHEME, systemToolPath, WORKSPACE } from "./config.ts";
 import { generate } from "./generate.ts";
+import { scanForSecrets } from "./secrets.ts";
 
+// First, because it is the one failure a later commit cannot take back.
+await scanForSecrets();
 await checkTooling();
 
 section("Testing the protocol, the service and the reading tools");

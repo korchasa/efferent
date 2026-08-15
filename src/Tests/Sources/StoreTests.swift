@@ -192,8 +192,11 @@ final class StoreTests: XCTestCase {
         let store = try Store.inMemory()
         XCTAssertNil(try store.backfillReached())
 
-        try store.recordBackfillReached("2015-12-12")
+        // An invented day. A fixture taken from whoever's data was to hand puts
+        // a fact about that person into a public repository for no reason —
+        // when Health first has anything to say is not the test's business.
+        try store.recordBackfillReached("2011-03-04")
 
-        XCTAssertEqual(try store.stats().backfillReached, "2015-12-12")
+        XCTAssertEqual(try store.stats().backfillReached, "2011-03-04")
     }
 }
