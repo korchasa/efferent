@@ -184,8 +184,13 @@ so a run that stops costs the days it had not reached and nothing else.
 
 ## Letting an agent ask
 
-The same archive is an MCP server, so any agent that speaks MCP can read it with no prompt written
-anywhere:
+Decryption and analysis run on the agent's machine. The target connection model starts on the phone:
+the phone creates the archive and reading key, then hands an otherwise unprepared agent a public
+prompt URL, a keyless remote MCP URL containing the bucket id, and the reading key as a separate
+local secret. The remote MCP server returns ciphertext only. The complete decision and the boundary
+between phone, Cloudflare and agent are in [`documents/connection.md`](documents/connection.md).
+
+The current source tree has not migrated yet. It exposes the archive through a local MCP server:
 
 ```bash
 deno task mcp
@@ -210,11 +215,9 @@ looks the same in every client that takes the usual configuration file:
 an agent starts its servers from wherever it happens to be — so without it the server looks for the
 key somewhere else entirely and says so.
 
-**It runs here, next to the reading key, and it has to.** Answering anything means decrypting days,
-and the private half of the reading key never leaves this machine. A version of this living on the
-bucket service would need that key, which would hand the service the one thing the whole design
-exists to keep from it. So the agent talks to a process on the reader's own machine, and the service
-stays somewhere that holds ciphertext it cannot open.
+**The part that answers runs here, next to the reading key, and it has to.** The new remote MCP
+endpoint is discovery and ciphertext transport, not a remote version of these health tools. A tool
+that answers anything about Health runs locally; otherwise Cloudflare would need the reading key.
 
 Seven tools, and they answer questions rather than run queries:
 
@@ -244,11 +247,16 @@ answer itself. Health data quietly out of date is worse than an error.
 
 Nobody but you, and the service holding the data least of all.
 
-The reading key pair is made on the machine that will read — the one with a keyboard and a terminal.
-Its private half stays there and never travels. The phone is given only the public half, which it
-uses to seal every day, so a lost or seized phone gives up nothing about the history it already
-sent. The bucket is named by the hash of that public key, which is why there are no accounts here:
-knowing where to write follows from knowing who to write to.
+The phone creates the reading key pair and the archive before an agent is involved. It keeps the
+public half for sealing days and keeps the private half in its Keychain so the owner can hand it to
+an agent. The bucket is named by the hash of the public key, which is why there are no accounts here:
+knowing where to write follows from knowing which key seals the archive.
+
+The handoff gives the agent a public, versioned prompt URL; a remote MCP URL with the bucket id in
+its path; and the reading private key as a separate field. The key is stored on the agent's machine
+and never sent to the remote MCP endpoint, Cloudflare, an HTTP header or a tool argument. Cloudflare
+can list and return sealed days but cannot open one. The agent fetches ciphertext and decrypts and
+analyses it locally.
 
 Encryption says nothing about authorship, so the phone also makes a signing key on first launch and
 signs every upload. The first upload into an empty bucket registers that key and afterwards only it
@@ -272,9 +280,10 @@ the service has to prove its own reading of the frame before it can store anythi
 is still sealed to its own date, so a batch binds nothing and ends at the door: the archive never
 learns that days arrived together.
 
-Pairing is therefore a scan, not a careful transfer. The reader prints a code holding its address
-and its public key — `deno task efferent pair --url …` — and the phone's camera reads it. Nothing
-worth protecting travels that way.
+There is no server-side invitation or pairing session. The phone creates the bucket and gives the
+connection handoff directly to the agent. [`documents/connection.md`](documents/connection.md)
+defines its fields and responsibilities. The reader-first scan still present in the code is the
+superseded build-7 implementation, not a design to extend.
 
 `protocol/` describes these bytes in TypeScript and `src/Core` describes them again in Swift, so
 `deno task interop` exists to prove the two still agree: a Swift test packs, seals and signs a real
@@ -306,12 +315,12 @@ deno task check
 - `icons` — re-render the app icons from `documents/icon.svg`.
 - `server:dev` / `server:deploy` — the bucket service, locally or to Cloudflare.
 - `interop` — check that the Swift and TypeScript sides still make the same bytes.
-- `efferent` — the reading side: `keygen`, `pair` (prints the code to scan), `ask`, `sync`,
-  `status`, `query`, plus `send` and `read` for poking at days by hand. `send --day` takes a list,
-  which is the only way to reach the batching path without a phone.
+- `efferent` — the current reading side: `keygen`, legacy `pair` (prints the code build 7 scans),
+  `ask`, `sync`, `status`, `query`, plus `send` and `read` for poking at days by hand. `send --day`
+  takes a list, which is the only way to reach the batching path without a phone.
 - `mcp` — the same archive as an MCP server on stdio, for an agent to read.
 
-Trying the whole path without a phone:
+Trying the currently implemented, reader-first path without a phone:
 
 ```bash
 deno task server:dev
@@ -324,10 +333,10 @@ Then, in another shell: `deno task efferent keygen`,
 efferent read --url http://127.0.0.1:8787` to see what arrived. `send` stands in for a
 phone when you have no device to hand, and writes as many days in one request as you name.
 
-In the simulator there is no camera, so scanning cannot be reached and neither can any screen behind
-it. Debug builds therefore also take the code as text — put it on the device's pasteboard with
-`xcrun simctl pbcopy <udid>` and paste it in. It goes through the same pairing path as a scan, and
-is compiled out of what ships.
+In the simulator there is no camera, so the legacy scanner cannot be reached and neither can any
+screen behind it. Debug builds therefore also take the code as text — put it on the device's
+pasteboard with `xcrun simctl pbcopy <udid>` and paste it in. It goes through the same pairing path
+as a scan, and is compiled out of what ships.
 
 One thing to watch when writing into a service that keeps its data: the first writer owns a bucket
 for good, so a test upload claims it and the phone is refused afterwards. Release the claim by
