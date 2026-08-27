@@ -1,15 +1,18 @@
 # Connection architecture
 
-Status: **live since 2026-08-27 in TestFlight build 8 and Worker version
+Status: **live since 2026-08-27 in TestFlight build 9 and Worker version
 `9f7af515-652c-4391-917a-3aa406597f24`**. The live health check, immutable connection prompt and
-keyless remote MCP tool listing were verified after deployment. Build 7 still contains the
+keyless remote MCP tool listing were verified after deployment. Build 9 is `VALID`,
+`IN_BETA_TESTING` and available to the internal TestFlight group. Build 7 still contains the
 superseded reader-first scan described under [Migration state](#migration-state).
 
 The first real build-8 handoff was verified end to end on 2026-08-27: the local importer matched the
 reading key to the phone-created bucket, wrote owner-only files, and the local MCP answered
 `health_overview`. The new archive was still empty at that check, pending the phone's Health export.
 That check exposed one migration defect: build 8 left the old archive's fingerprints in the phone
-ledger, so the empty new archive looked complete. The fix is implemented in source for build 9.
+ledger, so the empty new archive looked complete. The fix shipped in TestFlight build 9: changing
+the archive resets only archive-specific delivery state, requeues every known day and preserves the
+HealthKit anchors and sample-to-day index needed to rebuild the archive locally.
 
 ## The boundary
 
