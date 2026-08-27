@@ -5,6 +5,10 @@ Status: **live since 2026-08-27 in TestFlight build 8 and Worker version
 keyless remote MCP tool listing were verified after deployment. Build 7 still contains the
 superseded reader-first scan described under [Migration state](#migration-state).
 
+The first real build-8 handoff was verified end to end on 2026-08-27: the local importer matched the
+reading key to the phone-created bucket, wrote owner-only files, and the local MCP answered
+`health_overview`. The new archive was still empty at that check, pending the phone's Health export.
+
 ## The boundary
 
 The phone creates the archive. An agent arrives with no prior knowledge of Efferent and receives a
