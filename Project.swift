@@ -59,9 +59,14 @@ public let project = Project(
                 "NSHealthUpdateUsageDescription": .string(
                     "Efferent never writes to your health data. It only reads what is already there."
                 ),
-                // Used once, to read the pairing code the reader displays.
-                "NSCameraUsageDescription": .string(
-                    "Efferent uses the camera once, to scan the pairing code shown by the reader you set up."
+                // Public deployment configuration. These are addresses, not
+                // credentials; the reading key never enters the plist.
+                "EfferentServiceURL": .string("https://efferent.korchasa.workers.dev"),
+                "EfferentPromptURL": .string(
+                    "https://efferent.korchasa.workers.dev/prompts/connect/v1"
+                ),
+                "EfferentMCPBaseURL": .string(
+                    "https://efferent.korchasa.workers.dev/mcp/b"
                 ),
                 // A reader on your own network is a normal way to run this, and
                 // it will not have a certificate. The batch is sealed either

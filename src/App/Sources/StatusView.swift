@@ -13,12 +13,8 @@ import SwiftUI
 /// days sent: if it stays at zero, access is the thing to check.
 struct StatusView: View {
     @EnvironmentObject private var services: Services
-    @State private var scanning = false
     @State private var confirmingDisconnect = false
     @State private var working = false
-    #if DEBUG
-        @State private var typedCode = ""
-    #endif
 
     var body: some View {
         NavigationStack {
@@ -30,14 +26,14 @@ struct StatusView: View {
                 }
             }
             .navigationTitle("Efferent")
-            .sheet(isPresented: $scanning) { scanner }
             .alert("Disconnect?", isPresented: $confirmingDisconnect) {
                 Button("Disconnect", role: .destructive) { services.disconnect() }
                 Button("Keep", role: .cancel) {}
             } message: {
                 Text(
-                    "This phone forgets its signing key, so it can never write to that bucket again. "
-                        + "Data already sent stays where it is."
+                    "This phone forgets its signing and reading keys. It can never write to this "
+                        + "archive again, and the archive can be read only if its connection was "
+                        + "already saved on another machine."
                 )
             }
             // Counters move on the upload session's own queue while this screen
@@ -58,65 +54,34 @@ struct StatusView: View {
         List {
             Section {
                 ContentUnavailableView {
-                    Label("No reader yet", systemImage: "qrcode.viewfinder")
+                    Label("No archive yet", systemImage: "lock.doc")
                 } description: {
                     Text(
-                        "Your reader shows a code holding its address and its public key. "
-                            + "Nothing secret travels this way — the key that decrypts never leaves it."
+                        "This phone creates its encrypted archive first. You can connect an agent "
+                            + "afterwards, without waiting for the agent to know anything about Efferent."
                     )
                 } actions: {
-                    Button("Scan the pairing code") { scanning = true }
-                        .buttonStyle(.borderedProminent)
+                    Button {
+                        run { await services.createArchive() }
+                    } label: {
+                        if working {
+                            ProgressView()
+                        } else {
+                            Text("Create encrypted archive")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(working || services.deployment == nil)
                 }
                 .listRowBackground(Color.clear)
             }
-            typedCodeSection
-        }
-    }
-
-    private var scanner: some View {
-        NavigationStack {
-            ScannerView { code in
-                scanning = false
-                services.pair(withScannedCode: code)
-            }
-            .ignoresSafeArea()
-            .navigationTitle("Scan the code")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { scanning = false }
+            if let deploymentError = services.deploymentError {
+                Section("Configuration") {
+                    Label(deploymentError, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
                 }
             }
         }
-    }
-
-    /// The way in when there is no camera.
-    ///
-    /// The simulator has none, so scanning — the only way to pair — cannot be
-    /// reached there, and neither can any screen behind it. This takes the same
-    /// string the code carries and goes through the same `pair` path, so what it
-    /// exercises is the real one. Debug builds only: a shipped app that accepts
-    /// a pasted destination is a shipped app someone can be talked into pasting
-    /// into.
-    @ViewBuilder private var typedCodeSection: some View {
-        #if DEBUG
-            Section {
-                TextField("{\"v\":1,\"url\":…,\"pk\":…}", text: $typedCode, axis: .vertical)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .font(.footnote.monospaced())
-                Button("Pair with this code") {
-                    services.pair(withScannedCode: typedCode.trimmingCharacters(in: .whitespacesAndNewlines))
-                    typedCode = ""
-                }
-                .disabled(typedCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            } header: {
-                Text("Debug")
-            } footer: {
-                Text("Paste what the code holds. Debug builds only — this is not in what ships.")
-            }
-        #endif
     }
 
     // MARK: - The everyday screen
@@ -218,12 +183,32 @@ struct StatusView: View {
 
     @ViewBuilder private var readerSection: some View {
         if let destination = services.destination {
-            Section("Reader") {
+            Section("Archive") {
                 LabeledContent("Host", value: destination.endpoint.host() ?? "—")
                 // The first characters are enough to tell two buckets apart at a
                 // glance; the whole name is not something to leave on a screen.
                 LabeledContent("Bucket", value: String(destination.bucket.prefix(8)) + "…")
                 Button("Disconnect", role: .destructive) { confirmingDisconnect = true }
+            }
+            if let handoff = services.connectionHandoff {
+                Section {
+                    ShareLink(item: handoff.text) {
+                        Label("Connect an agent", systemImage: "square.and.arrow.up")
+                    }
+                } footer: {
+                    Text(
+                        "The shared text contains the reading key. The agent must store it locally "
+                            + "and must never send it to Cloudflare or another remote tool."
+                    )
+                }
+            } else {
+                Section("Legacy connection") {
+                    Text(
+                        "This archive was connected by the older reader-first flow. It keeps "
+                            + "working, but this phone does not hold its reading key and cannot share it."
+                    )
+                    .foregroundStyle(.secondary)
+                }
             }
         }
     }

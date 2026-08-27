@@ -83,12 +83,32 @@ final class InteropTests: XCTestCase {
             )
         )
 
+        // The new phone-first connection crosses a second language boundary:
+        // CryptoKit's raw private key has to become the PKCS8 key WebCrypto
+        // keeps locally, and the two sides must derive the same bucket.
+        let phoneReadingKey = Curve25519.KeyAgreement.PrivateKey()
+        let destination = try Destination(
+            endpoint: XCTUnwrap(URL(string: "https://efferent.example")),
+            readingPublicKey: phoneReadingKey.publicKey.rawRepresentation
+        )
+        let deployment = try Deployment(
+            serviceURL: destination.endpoint,
+            promptURL: XCTUnwrap(URL(string: "https://efferent.example/prompts/connect/v1")),
+            mcpBaseURL: XCTUnwrap(URL(string: "https://efferent.example/mcp/b"))
+        )
+        let handoff = ConnectionHandoff(
+            deployment: deployment,
+            destination: destination,
+            privateKey: phoneReadingKey.rawRepresentation
+        )
+
         print("EFFERENT_INTEROP_FRAME=\(Base64URL.encode(frame))")
         print("EFFERENT_INTEROP_WRITER=\(Base64URL.encode(writer.publicKey.rawRepresentation))")
         print("EFFERENT_INTEROP_SIGNATURE=\(Base64URL.encode(Data(signature)))")
         print("EFFERENT_INTEROP_TIMESTAMP=\(timestamp)")
         print("EFFERENT_INTEROP_LIVESIGNATURE=\(Base64URL.encode(Data(liveSignature)))")
         print("EFFERENT_INTEROP_LIVETIMESTAMP=\(liveTimestamp)")
+        print("EFFERENT_INTEROP_HANDOFF=\(Base64URL.encode(Data(handoff.text.utf8)))")
     }
 
     private func seal(_ events: [Event], on day: String) throws -> Data {

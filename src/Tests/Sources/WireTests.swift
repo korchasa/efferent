@@ -18,41 +18,61 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(Destination.bucket(for: Self.readingPublicKey), Self.expectedBucket)
     }
 
-    func testPairingReadsTheCodeTheReaderShows() throws {
-        let code = #"{"v":1,"url":"https://efferent.example.com","pk":"YAvPaXBsGTnyrLF6FcE1oI2EjHmIeKAg07zRX51nI2w"}"#
-
-        let destination = try Pairing.parse(code)
-
-        XCTAssertEqual(destination.bucket, Self.expectedBucket)
-        XCTAssertEqual(destination.endpoint.host(), "efferent.example.com")
-        XCTAssertEqual(
-            destination.dayURL("2026-08-07").absoluteString,
-            "https://efferent.example.com/b/\(Self.expectedBucket)/d/2026-08-07"
+    func testPhoneBuildsTheFourFieldConnectionHandoff() throws {
+        let destination = try Destination(
+            endpoint: XCTUnwrap(URL(string: "https://efferent.example.com")),
+            readingPublicKey: Self.readingPublicKey
         )
+        let deployment = try Deployment(
+            serviceURL: destination.endpoint,
+            promptURL: XCTUnwrap(URL(string: "https://efferent.example.com/prompts/connect/v1")),
+            mcpBaseURL: XCTUnwrap(URL(string: "https://efferent.example.com/mcp/b"))
+        )
+        let handoff = ConnectionHandoff(
+            deployment: deployment,
+            destination: destination,
+            privateKey: Data(repeating: 7, count: 32)
+        )
+
+        XCTAssertEqual(
+            handoff.mcpURL.absoluteString,
+            "https://efferent.example.com/mcp/b/\(Self.expectedBucket)"
+        )
+        XCTAssertTrue(handoff.readingKey.hasPrefix("efferent-reading-v1."))
+        XCTAssertTrue(handoff.text.contains("Prompt:\nhttps://efferent.example.com/prompts/connect/v1"))
+        XCTAssertTrue(handoff.text.contains("MCP:\n\(handoff.mcpURL.absoluteString)"))
+        XCTAssertTrue(handoff.text.contains("Reading key:\n\(handoff.readingKey)"))
+        XCTAssertFalse(handoff.mcpURL.absoluteString.contains(handoff.readingKey))
     }
 
-    func testPairingRefusesAKeyOfTheWrongLength() {
-        let code = #"{"v":1,"url":"https://example.com","pk":"AAAA"}"#
+    func testArchiveCreationIsAnEmptySignedRequest() throws {
+        let account = "writer-test-\(UUID().uuidString)"
+        let identity = DeviceIdentity(service: "dev.korchasa.efferent.tests", account: account)
+        defer { try? identity.forget() }
+        let destination = try Destination(
+            endpoint: XCTUnwrap(URL(string: "https://efferent.example.com")),
+            readingPublicKey: Self.readingPublicKey
+        )
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
 
-        XCTAssertThrowsError(try Pairing.parse(code)) { error in
-            XCTAssertEqual(error as? PairingError, .malformedKey(bytes: 3))
-        }
-    }
+        let request = try ArchiveCreator.request(
+            destination: destination, identity: identity, now: date
+        )
 
-    func testPairingRefusesAVersionItDoesNotKnow() {
-        let code = #"{"v":2,"url":"https://example.com","pk":"YAvPaXBsGTnyrLF6FcE1oI2EjHmIeKAg07zRX51nI2w"}"#
-
-        XCTAssertThrowsError(try Pairing.parse(code)) { error in
-            XCTAssertEqual(error as? PairingError, .unsupportedVersion(2))
-        }
-    }
-
-    func testPairingRefusesAnythingThatIsNotAnHTTPAddress() {
-        let code = #"{"v":1,"url":"ftp://example.com","pk":"YAvPaXBsGTnyrLF6FcE1oI2EjHmIeKAg07zRX51nI2w"}"#
-
-        XCTAssertThrowsError(try Pairing.parse(code)) { error in
-            XCTAssertEqual(error as? PairingError, .unsupportedScheme("ftp"))
-        }
+        XCTAssertEqual(request.httpMethod, "PUT")
+        XCTAssertEqual(request.url, destination.bucketURL)
+        XCTAssertEqual(request.httpBody, Data())
+        XCTAssertEqual(request.value(forHTTPHeaderField: "x-efferent-timestamp"), "1700000000")
+        let signature = try Base64URL.decode(XCTUnwrap(
+            request.value(forHTTPHeaderField: "x-efferent-signature")
+        ))
+        let key = try identity.signingKey()
+        XCTAssertTrue(key.publicKey.isValidSignature(
+            signature,
+            for: CanonicalRequest.bytes(
+                bucket: destination.bucket, days: [], timestamp: 1_700_000_000, body: Data()
+            )
+        ))
     }
 
     /// The service checks this string byte for byte. A stray separator or a

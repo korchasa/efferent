@@ -1,10 +1,18 @@
 {
   "name": "efferent",
   "version": "1.0.0",
+  "nodeModulesDir": "auto",
+  "compilerOptions": {
+    "skipLibCheck": true
+  },
   "exports": {},
   "imports": {
+    "@modelcontextprotocol/server": "npm:@modelcontextprotocol/server@2.0.0",
     "@std/assert": "jsr:@std/assert@^1.0.0",
-    "qrcode-terminal": "npm:qrcode-terminal@^0.12.0"
+    "@types/node": "npm:@types/node@^26.3.0",
+    "agents": "npm:agents@0.21.0",
+    "wrangler": "npm:wrangler@4.126.0",
+    "zod": "npm:zod@4.4.3"
   },
   "tasks": {
     "check": "deno run -A scripts/check.ts",
@@ -15,8 +23,10 @@
     "fmt": "deno run -A scripts/fmt.ts",
     "secrets": "deno run -A scripts/secrets.ts",
     "generate": "deno run -A scripts/generate.ts",
-    "server:dev": "wrangler dev --config server/wrangler.toml",
-    "server:deploy": "wrangler deploy --config server/wrangler.toml",
+    "server:types": "wrangler types server/worker-configuration.d.ts --config server/wrangler.jsonc",
+    "server:types:check": "wrangler types server/worker-configuration.d.ts --config server/wrangler.jsonc --check",
+    "server:dev": "wrangler dev --config server/wrangler.jsonc",
+    "server:deploy": "wrangler deploy --config server/wrangler.jsonc",
     "efferent": "deno run -A tools/efferent.ts",
     "interop": "deno run -A scripts/interop.ts",
     "icons": "deno run -A scripts/icons.ts"
@@ -29,6 +39,9 @@
       "tools/",
       "deno.json"
     ],
+    "exclude": [
+      "server/worker-configuration.d.ts"
+    ],
     "lineWidth": 100
   },
   "lint": {
@@ -37,6 +50,9 @@
       "protocol/",
       "server/",
       "tools/"
+    ],
+    "exclude": [
+      "server/worker-configuration.d.ts"
     ]
   }
 }

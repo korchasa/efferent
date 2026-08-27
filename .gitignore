@@ -6,6 +6,7 @@
 Derived/
 .build/
 build/
+node_modules/
 
 # Local only.
 *.xcuserdatad
