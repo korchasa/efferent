@@ -65,6 +65,49 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(try store.digest(for: "2026-08-07"), Data([0xAB]))
     }
 
+    // MARK: - Changing archives
+
+    func testActivatingAnotherArchiveRequeuesKnownDaysAndKeepsHealthState() throws {
+        let store = try Store.inMemory()
+        let sample = try uuid("01")
+        try store.rememberArchive("old-bucket")
+        try store.markDirty(
+            ["2026-08-06"],
+            anchor: Anchor(typeIdentifier: "steps", value: Data([0x01]))
+        )
+        try store.recordSent(
+            day: "2026-08-07", digest: Data([0xAB]), sampleIdentifiers: [sample]
+        )
+        try store.recordBackfillReached("2011-03-04")
+        try store.recordReconciled(at: Date(timeIntervalSince1970: 1_700_000_000))
+        _ = try store.installedDay(defaultingTo: "2026-08-01")
+
+        XCTAssertTrue(try store.activateArchive("new-bucket"))
+
+        XCTAssertEqual(
+            try store.pendingDays(limit: 10), ["2026-08-07", "2026-08-06"],
+            "days known from the previous archive were not queued for the new one"
+        )
+        XCTAssertEqual(try store.stats().sentDays, 0)
+        XCTAssertNil(try store.stats().lastUploadAt)
+        XCTAssertNil(try store.stats().backfillReached)
+        XCTAssertNil(try store.lastReconciledAt())
+        XCTAssertEqual(try store.anchor(for: "steps"), Data([0x01]))
+        XCTAssertEqual(try store.days(ofRemoved: [sample]), ["2026-08-07"])
+        XCTAssertEqual(try store.installedDay(defaultingTo: "2026-09-01"), "2026-08-01")
+        XCTAssertFalse(try store.activateArchive("new-bucket"), "the same archive reset twice")
+    }
+
+    func testRememberingALegacyArchiveDoesNotRequeueItsDays() throws {
+        let store = try Store.inMemory()
+        try store.recordSent(day: "2026-08-07", digest: Data([0xAB]), sampleIdentifiers: [])
+
+        try store.rememberArchive("legacy-bucket")
+
+        XCTAssertEqual(try store.stats().sentDays, 1)
+        XCTAssertTrue(try store.pendingDays(limit: 10).isEmpty)
+    }
+
     // MARK: - Deletions
 
     /// HealthKit reports a removed record as a bare identifier — no date, no

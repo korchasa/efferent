@@ -290,7 +290,10 @@ learns that days arrived together.
 There is no server-side invitation or pairing session. The phone creates the bucket and gives the
 connection handoff directly to the agent. [`documents/connection.md`](documents/connection.md)
 defines its fields and responsibilities. Existing build-7 destinations remain readable and keep
-uploading, but fresh setup is phone-first and the scanner has been removed.
+uploading, but fresh setup is phone-first and the scanner has been removed. The on-device ledger is
+bound to the bucket whose writes its fingerprints describe: activating another phone-owned archive
+invalidates those claims and queues every known day again, while a legacy destination is adopted
+without a reset.
 
 `protocol/` describes these bytes in TypeScript and `src/Core` describes them again in Swift, so
 `deno task interop` exists to prove the two still agree: a Swift test packs, seals and signs a real
