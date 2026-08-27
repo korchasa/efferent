@@ -82,6 +82,10 @@ enum Database {
 /// Values that live in `meta`. Spelled out here so a typo is a compile error
 /// rather than a silently missing value that reads as zero.
 enum MetaKey: String {
+    /// The bucket whose acceptance claims live in `day.digest`. A digest has no
+    /// meaning without this: the same bytes being present in one archive says
+    /// nothing about whether another archive holds them.
+    case archiveBucket = "archive.bucket"
     /// The oldest day the first export has reached, walking backwards. Absent
     /// until it starts, and left in place when it finishes so a reinstall does
     /// not silently begin again.

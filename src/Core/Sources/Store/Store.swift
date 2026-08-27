@@ -27,6 +27,10 @@ public struct Stats: Equatable, Sendable {
     public let backfillReached: String?
 }
 
+public enum StoreError: Error, Equatable {
+    case archiveChangedWithoutReset(stored: String, current: String)
+}
+
 /// The device's durable state: which days still have to go, and where each
 /// reader stopped.
 public final class Store {
@@ -44,6 +48,58 @@ public final class Store {
     private init(dbQueue: DatabaseQueue) throws {
         self.dbQueue = dbQueue
         try Database.migrator().migrate(dbQueue)
+    }
+
+    // MARK: - Archive identity
+
+    /// Attach an existing reader-first destination to its existing ledger.
+    ///
+    /// Legacy phones do not hold the reading private key, so there is no
+    /// evidence that a missing marker means the archive changed. Remember the
+    /// current bucket without invalidating claims that already belong to it.
+    public func rememberArchive(_ bucket: String) throws {
+        try dbQueue.write { db in
+            if let stored = try Self.string(db, MetaKey.archiveBucket.rawValue) {
+                guard stored == bucket else {
+                    throw StoreError.archiveChangedWithoutReset(stored: stored, current: bucket)
+                }
+                return
+            }
+            try Self.setString(db, MetaKey.archiveBucket.rawValue, bucket)
+        }
+    }
+
+    /// Start using a phone-owned archive and invalidate every claim about the
+    /// previous one. Returns true exactly once per bucket change.
+    ///
+    /// Health anchors, sample-to-day rows and the install day describe the
+    /// phone, so they survive. Digests, upload time, export progress and the
+    /// last reconciliation describe one archive, so they do not. Known days
+    /// are queued immediately; the user already made the destructive choice by
+    /// disconnecting and creating another archive.
+    @discardableResult
+    public func activateArchive(_ bucket: String) throws -> Bool {
+        try dbQueue.write { db in
+            if try Self.string(db, MetaKey.archiveBucket.rawValue) == bucket {
+                return false
+            }
+
+            let now = Date().timeIntervalSince1970
+            try db.execute(
+                sql: "UPDATE day SET digest = NULL, dirty = 1, updatedAt = ?",
+                arguments: [now]
+            )
+            try db.execute(
+                sql: "DELETE FROM meta WHERE key IN (?, ?, ?)",
+                arguments: [
+                    MetaKey.lastUploadAt.rawValue,
+                    MetaKey.backfillReached.rawValue,
+                    MetaKey.lastReconciledAt.rawValue,
+                ]
+            )
+            try Self.setString(db, MetaKey.archiveBucket.rawValue, bucket)
+            return true
+        }
     }
 
     // MARK: - Noticing what changed

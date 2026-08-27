@@ -8,6 +8,8 @@ superseded reader-first scan described under [Migration state](#migration-state)
 The first real build-8 handoff was verified end to end on 2026-08-27: the local importer matched the
 reading key to the phone-created bucket, wrote owner-only files, and the local MCP answered
 `health_overview`. The new archive was still empty at that check, pending the phone's Health export.
+That check exposed one migration defect: build 8 left the old archive's fingerprints in the phone
+ledger, so the empty new archive looked complete. The fix is implemented in source for build 9.
 
 ## The boundary
 
@@ -118,9 +120,14 @@ That is a capability boundary, not a reason to give the key to Cloudflare.
 Fresh installs now start with **Create encrypted archive**. Existing build-7 installations retain
 their stored destination and keep uploading to it; they do not have its reading private key on the
 phone, so the new connection handoff is unavailable and the screen labels the archive as a legacy
-connection. There is deliberately no automatic migration and no silent decade-long re-upload.
+connection. Adopting that legacy destination records its bucket without changing its ledger.
 
 The owner can keep the existing archive, or explicitly disconnect and create a new phone-owned one.
-Disconnecting forgets the old signing key. After creating a new archive, **Export everything Health
-has** is the explicit action that moves the history. Importing an old reader-owned private key into
-the phone remains outside this implementation.
+Disconnecting forgets the old signing key. Creating the new archive binds the ledger to its bucket,
+clears the previous archive's fingerprints, upload time, export progress and reconciliation time,
+and queues every day the phone already knows. HealthKit anchors, sample-to-day rows and the install
+day survive because they describe the phone, not an archive. This reset happens once per bucket and
+starts sending immediately; **Export everything Health has** additionally discovers history that
+was never present in the old ledger. Upgrading an affected build-8 phone-owned connection performs
+the same one-time reset, while importing an old reader-owned private key remains outside this
+implementation.

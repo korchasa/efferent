@@ -36,6 +36,7 @@ final class Services: ObservableObject {
         }
         health = HealthCoordinator(store: store)
         destination = Self.loadDestination()
+        var activatedPhoneOwnedArchive = false
         do {
             deployment = try Deployment.load()
             deploymentError = nil
@@ -44,9 +45,24 @@ final class Services: ObservableObject {
             deploymentError = String(describing: error)
         }
         connectionHandoff = nil
+        do {
+            if let destination {
+                if try readingIdentity.existingPrivateKey() == nil {
+                    try store.rememberArchive(destination.bucket)
+                } else {
+                    activatedPhoneOwnedArchive = try store.activateArchive(destination.bucket)
+                }
+            }
+        } catch {
+            lastError = "Could not bind the day ledger to its archive. (\(error))"
+        }
         refreshConnectionHandoff()
         health.onNewData = { [weak self] in
             Task { @MainActor in await self?.sendNow() }
+        }
+        if activatedPhoneOwnedArchive {
+            refreshStats()
+            Task { [weak self] in await self?.sendNow() }
         }
     }
 
@@ -66,12 +82,15 @@ final class Services: ObservableObject {
                 readingPublicKey: readingKey.publicKey.rawRepresentation
             )
             try await ArchiveCreator.create(destination: created, identity: identity)
+            _ = try store.activateArchive(created.bucket)
             try UserDefaults.standard.set(JSONEncoder().encode(created), forKey: Self.destinationKey)
             destination = created
             uploader = nil
             lastError = nil
             refreshConnectionHandoff()
+            refreshStats()
             log.info("created bucket \(created.bucket, privacy: .public)")
+            await sendNow()
         } catch {
             lastError = "Could not create the archive. (\(error))"
         }

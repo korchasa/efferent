@@ -35,6 +35,10 @@ This file is the rulebook.
   first day Health knows about through today. Never against the days the ledger says were sent: the
   ledger is the thing under suspicion. `Store.markMissing` is the one place a fingerprint is thrown
   away, and `markDirty` deliberately keeps it; do not merge the two.
+- **Archive claims belong to one bucket.** The ledger records which bucket its digests describe.
+  Activating another phone-owned archive clears every digest and archive timestamp and requeues
+  every known day, while preserving HealthKit anchors, sample-to-day rows and the install day.
+  Merely adopting a legacy reader-first destination records its bucket without resetting it.
 - **The check runs before the pass decides there is nothing to do.** "Nothing waiting" is precisely
   the answer it exists to distrust — a day whose fingerprint matches an archive that has since lost
   it looks exactly like a day that is safely stored.
