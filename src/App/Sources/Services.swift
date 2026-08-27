@@ -13,11 +13,15 @@ final class Services: ObservableObject {
     let store: Store
     let health: HealthCoordinator
     let identity = DeviceIdentity()
+    let readingIdentity = ReadingIdentity()
+    let deployment: Deployment?
+    let deploymentError: String?
     private let log = Logger(subsystem: "dev.korchasa.efferent", category: "services")
 
     @Published private(set) var stats: Stats?
     @Published private(set) var lastError: String?
     @Published private(set) var destination: Destination?
+    @Published private(set) var connectionHandoff: ConnectionHandoff?
 
     private var uploader: Uploader?
 
@@ -32,39 +36,76 @@ final class Services: ObservableObject {
         }
         health = HealthCoordinator(store: store)
         destination = Self.loadDestination()
+        do {
+            deployment = try Deployment.load()
+            deploymentError = nil
+        } catch {
+            deployment = nil
+            deploymentError = String(describing: error)
+        }
+        connectionHandoff = nil
+        refreshConnectionHandoff()
         health.onNewData = { [weak self] in
             Task { @MainActor in await self?.sendNow() }
         }
     }
 
-    // MARK: - Pairing
+    // MARK: - Archive creation and connection
 
-    /// Take the scanned code and remember where this phone writes.
-    ///
-    /// Nothing here is secret, so it lives in user defaults rather than the
-    /// Keychain: an address and a public key. The one secret the device owns —
-    /// its signing key — is made separately and never leaves the Keychain.
-    func pair(withScannedCode code: String) {
+    /// Make the phone-owned reading key, claim its archive, then remember it.
+    /// The destination is persisted only after the server accepts the claim.
+    func createArchive() async {
         do {
-            let paired = try Pairing.parse(code)
-            try UserDefaults.standard.set(JSONEncoder().encode(paired), forKey: Self.destinationKey)
-            destination = paired
+            guard destination == nil else { return }
+            guard let deployment else {
+                throw ConnectionError.missingDeploymentValue(deploymentError ?? "deployment")
+            }
+            let readingKey = try readingIdentity.privateKey()
+            let created = try Destination(
+                endpoint: deployment.serviceURL,
+                readingPublicKey: readingKey.publicKey.rawRepresentation
+            )
+            try await ArchiveCreator.create(destination: created, identity: identity)
+            try UserDefaults.standard.set(JSONEncoder().encode(created), forKey: Self.destinationKey)
+            destination = created
             uploader = nil
             lastError = nil
-            log.info("paired with bucket \(paired.bucket, privacy: .public)")
+            refreshConnectionHandoff()
+            log.info("created bucket \(created.bucket, privacy: .public)")
         } catch {
-            lastError = "That code is not an Efferent pairing code. (\(error))"
+            lastError = "Could not create the archive. (\(error))"
         }
     }
 
-    /// Forget where to send. The signing key goes too, so the bucket it claimed
-    /// can never be written to again — which is why this asks first.
+    private func refreshConnectionHandoff() {
+        do {
+            guard let deployment, let destination,
+                  let privateKey = try readingIdentity.existingPrivateKey()
+            else {
+                connectionHandoff = nil
+                return
+            }
+            connectionHandoff = ConnectionHandoff(
+                deployment: deployment,
+                destination: destination,
+                privateKey: privateKey.rawRepresentation
+            )
+        } catch {
+            connectionHandoff = nil
+            lastError = "Could not read the connection key. (\(error))"
+        }
+    }
+
+    /// Forget where to send and both phone-owned keys. A phone-owned archive
+    /// becomes unreadable if its reading key was not already moved elsewhere.
     func disconnect() {
         UserDefaults.standard.removeObject(forKey: Self.destinationKey)
         destination = nil
+        connectionHandoff = nil
         uploader = nil
         do {
             try identity.forget()
+            try readingIdentity.forget()
         } catch {
             lastError = String(describing: error)
         }
@@ -134,7 +175,7 @@ final class Services: ObservableObject {
 
     func sendNow() async {
         guard let uploader = uploaderIfPaired() else {
-            lastError = "Not paired with a reader yet."
+            lastError = "No archive has been created yet."
             return
         }
         do {

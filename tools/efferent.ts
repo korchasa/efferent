@@ -32,7 +32,7 @@ import {
   write,
   writeDay,
 } from "./archive.ts";
-import qrcode from "qrcode-terminal";
+import { installConnectionHandoff } from "./connection.ts";
 
 interface WriterKey {
   /** Ed25519 private key, pkcs8. Stands in for the one a phone would make. */
@@ -56,10 +56,10 @@ async function main(args: string[]): Promise<void> {
   const options = parseOptions(rest);
 
   switch (command) {
+    case "connect":
+      return await connect(requireOption(options, "handoff"));
     case "keygen":
       return await keygen();
-    case "pair":
-      return await pair(requireOption(options, "url"));
     case "send":
       return await send(requireOption(options, "url"), options.day ?? today());
     case "read":
@@ -76,8 +76,8 @@ async function main(args: string[]): Promise<void> {
       console.error(
         [
           "usage:",
+          "  efferent connect --handoff <file>    import the phone handoff locally",
           "  efferent keygen                       create the reading key pair",
-          "  efferent pair --url <endpoint>        print what the phone needs",
           "  efferent send --url <endpoint>        pretend to be a phone, write days",
           "                [--day <d>[,<d>…]]      one request, however many days",
           "  efferent read --url <endpoint>        fetch and decrypt, straight to stdout",
@@ -98,6 +98,17 @@ async function main(args: string[]): Promise<void> {
 
 // MARK: - Commands
 
+async function connect(path: string): Promise<void> {
+  const text = path === "-"
+    ? await new Response(Deno.stdin.readable).text()
+    : await Deno.readTextFile(path);
+  const connection = await installConnectionHandoff(text);
+  console.log(`connected: ${connection.bucket}`);
+  console.log(`saved:     ${HOME}/reading-key.json`);
+  console.log(`archive:   ${connection.endpoint}`);
+  console.log("the reading key stayed on this machine");
+}
+
 async function keygen(): Promise<void> {
   const pair = await crypto.subtle.generateKey({ name: "X25519" }, true, [
     "deriveBits",
@@ -112,23 +123,6 @@ async function keygen(): Promise<void> {
 
   console.log(`bucket: ${await bucketId(fromBase64url(key.readingPublic))}`);
   console.log(`saved:  ${HOME}/reading-key.json — this file is the only way to read the data`);
-}
-
-async function pair(url: string): Promise<void> {
-  const key = await load<ReadingKey>("reading-key.json");
-  // Nothing here is secret: an address and a public key. That is the point —
-  // this payload can be shown on a screen or photographed without consequence,
-  // which is why pairing is a scan rather than a careful transfer.
-  const payload = JSON.stringify({ v: 1, url, pk: key.readingPublic });
-
-  await new Promise<void>((resolve) => {
-    qrcode.generate(payload, { small: true }, (code: string) => {
-      console.log(code);
-      resolve();
-    });
-  });
-  console.log(`bucket: ${await bucketId(fromBase64url(key.readingPublic))}`);
-  console.log(payload);
 }
 
 /**

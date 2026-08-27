@@ -5,8 +5,8 @@
  * keep one object per day, and hand days back by range. It never sees a key
  * that decrypts anything, so there is deliberately no code here that could.
  *
- * There are no accounts and no registration. A bucket comes into existence on
- * its first write, and its name already proves who it belongs to.
+ * There are no accounts and no registration. A bucket comes into existence
+ * when the phone sends an empty signed claim, before any Health day exists.
  *
  * A day is written whole and replaced whole. That is the one property worth
  * being careful about: the device does not send a difference it worked out, it
@@ -23,6 +23,12 @@
  * What it learns is which days exist and how big they are. Not what happened in
  * them, not at what time, not of what kind.
  */
+
+/// <reference path="../worker-configuration.d.ts" />
+
+import { McpServer } from "@modelcontextprotocol/server";
+import { createMcpHandler } from "agents/mcp/server";
+import { z } from "zod";
 
 import {
   dayBefore,
@@ -51,39 +57,25 @@ const MAX_DAYS_PER_PAGE = 1000;
  * that asking what is in an archive never costs more than a moment. */
 const STATS_PAGE_LIMIT = 20;
 
-/** Only the parts of R2 this service uses. Spelled out rather than pulled from
- * a types package, so the whole repository stays checkable without one. */
-interface R2Object {
-  key: string;
-  size: number;
-  /** When this day was last written. It is what tells a reader that a day it
-   * already has was rewritten since — the only way to notice, now that a day
-   * can legitimately change. */
-  uploaded: Date;
-}
-interface R2ObjectBody extends R2Object {
-  arrayBuffer(): Promise<ArrayBuffer>;
-}
-interface R2Bucket {
-  get(key: string): Promise<R2ObjectBody | null>;
-  head(key: string): Promise<R2Object | null>;
-  put(key: string, value: ArrayBuffer | Uint8Array): Promise<unknown>;
-  list(
-    options: { prefix?: string; startAfter?: string; limit?: number },
-  ): Promise<{ objects: R2Object[]; truncated: boolean }>;
-}
-
-export interface Env {
-  BLOBS: R2Bucket;
-}
-
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const segments = url.pathname.split("/").filter(Boolean);
 
     if (segments.length === 1 && segments[0] === "health") {
       return json({ ok: true });
+    }
+    if (
+      segments.length === 3 && segments[0] === "prompts" && segments[1] === "connect" &&
+      segments[2] === "v1" && request.method === "GET"
+    ) {
+      return connectionPrompt();
+    }
+    if (segments.length === 3 && segments[0] === "mcp" && segments[1] === "b") {
+      const bucket = segments[2];
+      if (!isBucketId(bucket)) return problem(400, "malformed bucket id");
+      if (!ctx) return problem(500, "execution context is unavailable");
+      return await remoteMcp(request, env, ctx, bucket, url.origin);
     }
     if (segments[0] !== "b" || !segments[1]) {
       return problem(404, "unknown path");
@@ -92,6 +84,9 @@ export default {
     const bucket = segments[1];
     if (!isBucketId(bucket)) return problem(400, "malformed bucket id");
 
+    if (segments.length === 2 && request.method === "PUT") {
+      return await createBucket(request, env, bucket);
+    }
     if (segments.length === 3 && segments[2] === "days") {
       if (request.method === "GET") return await listDays(env, bucket, url);
       if (request.method === "PUT") return await putDays(request, env, bucket);
@@ -106,7 +101,169 @@ export default {
     }
     return problem(405, `${request.method} is not allowed here`);
   },
-};
+} satisfies ExportedHandler<Env>;
+
+const CONNECT_PROMPT = `# Connect Efferent v1
+
+You are connecting an end-to-end encrypted Apple Health archive. The phone gave you four fields:
+an instruction, this public prompt URL, a remote MCP URL containing the bucket id, and a reading key.
+
+Security boundary:
+
+- Keep the reading key on this machine. Never put it in a URL, HTTP header, remote MCP argument,
+  log, chat reply, or cloud service.
+- The remote MCP server has no decryption capability. It lists sealed days and returns links to
+  ciphertext only.
+- Decryption and every health-data answer must run locally. If you cannot run local code, stop.
+
+Connection procedure:
+
+1. Connect the supplied remote MCP URL using Streamable HTTP. Do not add authentication or the key.
+2. Clone https://github.com/korchasa/efferent.git on the local machine and require Deno 2.
+3. Put the complete four-field handoff in a file readable only by the current user, or pass it on
+   standard input. Set EFFERENT_HOME to a new private directory and run:
+
+       deno task efferent connect --handoff <file>
+
+   Use --handoff - for standard input. Delete the temporary handoff file after a successful import.
+4. Register the local MCP process with \`deno task mcp\` and the same absolute EFFERENT_HOME. Use its
+   health tools for all questions; they fetch ciphertext and decrypt it locally.
+5. Call \`health_overview\` first. Its result and every health tool description carry the rules
+   needed to interpret the archive correctly.
+
+The local importer verifies that the reading key derives the bucket id embedded in the remote MCP
+URL before it writes any local configuration. It refuses to overwrite an existing local reader.
+`;
+
+function connectionPrompt(): Response {
+  return new Response(CONNECT_PROMPT, {
+    headers: {
+      "content-type": "text/markdown; charset=utf-8",
+      "cache-control": "public, max-age=31536000, immutable",
+    },
+  });
+}
+
+function createRemoteServer(env: Env, bucket: string, origin: string): McpServer {
+  const server = new McpServer({ name: "efferent-sealed-archive", version: "1.0.0" });
+
+  server.registerTool(
+    "archive_status",
+    {
+      title: "Describe the sealed archive",
+      description:
+        "Return only ciphertext metadata: whether this bucket exists, its day count, byte count, " +
+        "and first and last dates. This server never receives a reading key and cannot answer a " +
+        "health question. Use the local Efferent MCP tools after importing the key on your machine.",
+      inputSchema: z.object({}),
+    },
+    async () => textTool(await describeData(env, bucket)),
+  );
+
+  server.registerTool(
+    "list_sealed_days",
+    {
+      title: "List sealed days",
+      description:
+        "List ciphertext objects by date, size and upload time. Both date bounds are inclusive. " +
+        "Follow next until it is null. No argument accepts a key and no returned value contains " +
+        "plaintext; decrypt downloaded objects only in the local Efferent reader.",
+      inputSchema: z.object({
+        from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        after: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        limit: z.number().int().min(1).max(MAX_DAYS_PER_PAGE).optional(),
+      }),
+    },
+    async (arguments_) => {
+      const url = new URL(`/b/${bucket}/days`, origin);
+      for (const [name, value] of Object.entries(arguments_)) {
+        if (value !== undefined) url.searchParams.set(name, String(value));
+      }
+      const response = await listDays(env, bucket, url);
+      return responseTool(response);
+    },
+  );
+
+  server.registerTool(
+    "get_sealed_day",
+    {
+      title: "Get a sealed day",
+      description:
+        "Return a link to one encrypted day object. The link carries only the bucket id and date. " +
+        "Download the bytes and pass them to the local Efferent reader; never pass the reading key " +
+        "back to this tool or attach it to the download request.",
+      inputSchema: z.object({
+        day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      }),
+    },
+    async ({ day }) => {
+      if (!isDay(day)) return failedTool("day must be YYYY-MM-DD and a date that exists");
+      const object = await env.BLOBS.head(dayKey(bucket, day));
+      if (!object) return failedTool("no such day");
+      const uri = new URL(`/b/${bucket}/d/${day}`, origin).toString();
+      return {
+        content: [{
+          type: "resource_link" as const,
+          uri,
+          name: `sealed-day-${day}`,
+          description: "End-to-end encrypted Efferent day; decrypt only on the agent machine.",
+          mimeType: "application/octet-stream",
+        }],
+      };
+    },
+  );
+
+  return server;
+}
+
+function remoteMcp(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  bucket: string,
+  origin: string,
+): Promise<Response> {
+  const route = new URL(request.url).pathname;
+  return createMcpHandler(() => createRemoteServer(env, bucket, origin), {
+    route,
+  })(request, env, ctx);
+}
+
+function textTool(value: unknown) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(value) }],
+    structuredContent: value as Record<string, unknown>,
+  };
+}
+
+async function responseTool(response: Response) {
+  const value = await response.json() as Record<string, unknown>;
+  return response.ok ? textTool(value) : failedTool(String(value.error ?? "request failed"));
+}
+
+function failedTool(message: string) {
+  return { content: [{ type: "text" as const, text: message }], isError: true };
+}
+
+/**
+ * Claim an empty logical bucket before the phone has a day to send.
+ *
+ * It is the same proof used for an upload, signed over an empty body and an
+ * empty day list. The reading key is absent: the service learns only the
+ * independent public signing key.
+ */
+async function createBucket(request: Request, env: Env, bucket: string): Promise<Response> {
+  const body = new Uint8Array(await request.arrayBuffer());
+  if (body.length !== 0) return problem(400, "bucket creation must have an empty body");
+
+  const authorization = await authorizeWriter(request, env, bucket, [], body);
+  if (authorization instanceof Response) return authorization;
+  if (!authorization.registered) {
+    await env.BLOBS.put(signingKeyObject(bucket), authorization.claimed);
+  }
+  return json({ bucket, created: !authorization.registered }, authorization.registered ? 200 : 201);
+}
 
 /**
  * Store the days a request carries, each replacing whatever was there.
@@ -126,19 +283,6 @@ export default {
  * time. That is what idempotence is for.
  */
 async function putDays(request: Request, env: Env, bucket: string): Promise<Response> {
-  const signature = request.headers.get("x-efferent-signature");
-  const writerKey = request.headers.get("x-efferent-writer");
-  if (!signature || !writerKey) return problem(400, "missing writer key or signature");
-
-  const timestamp = Number(request.headers.get("x-efferent-timestamp"));
-  if (!Number.isSafeInteger(timestamp) || timestamp < 0) {
-    return problem(400, "x-efferent-timestamp must be a whole number");
-  }
-  const drift = Math.abs(Math.floor(Date.now() / 1000) - timestamp);
-  if (drift > TIMESTAMP_TOLERANCE_SECONDS) {
-    return problem(400, `timestamp is ${drift}s away from this server's clock`);
-  }
-
   const body = new Uint8Array(await request.arrayBuffer());
   if (body.length === 0) return problem(400, "empty body");
   if (body.length > MAX_BODY_BYTES) return problem(413, `a request over ${MAX_BODY_BYTES} bytes`);
@@ -156,7 +300,59 @@ async function putDays(request: Request, env: Env, bucket: string): Promise<Resp
     );
   }
 
-  const claimed = fromBase64url(writerKey);
+  const authorization = await authorizeWriter(
+    request,
+    env,
+    bucket,
+    entries.map((entry) => entry.day),
+    body,
+  );
+  if (authorization instanceof Response) return authorization;
+
+  // Registered only after the signature checked out, so a stranger cannot claim
+  // an unused bucket by presenting a key they do not hold.
+  if (!authorization.registered) {
+    await env.BLOBS.put(signingKeyObject(bucket), authorization.claimed);
+  }
+
+  await Promise.all(
+    entries.map((entry) => env.BLOBS.put(dayKey(bucket, entry.day), entry.blob)),
+  );
+  return json({ stored: entries.map((entry) => entry.day), bytes: body.length });
+}
+
+async function authorizeWriter(
+  request: Request,
+  env: Env,
+  bucket: string,
+  days: string[],
+  body: Uint8Array,
+): Promise<{ claimed: Uint8Array; registered: boolean } | Response> {
+  const signature = request.headers.get("x-efferent-signature");
+  const writerKey = request.headers.get("x-efferent-writer");
+  if (!signature || !writerKey) return problem(400, "missing writer key or signature");
+
+  const timestamp = Number(request.headers.get("x-efferent-timestamp"));
+  if (!Number.isSafeInteger(timestamp) || timestamp < 0) {
+    return problem(400, "x-efferent-timestamp must be a whole number");
+  }
+  const drift = Math.abs(Math.floor(Date.now() / 1000) - timestamp);
+  if (drift > TIMESTAMP_TOLERANCE_SECONDS) {
+    return problem(400, `timestamp is ${drift}s away from this server's clock`);
+  }
+
+  let claimed: Uint8Array;
+  let decodedSignature: Uint8Array;
+  try {
+    claimed = fromBase64url(writerKey);
+    decodedSignature = fromBase64url(signature);
+  } catch {
+    return problem(400, "writer key and signature must be base64url");
+  }
+  if (claimed.length !== 32 || decodedSignature.length !== 64) {
+    return problem(400, "writer key or signature has the wrong length");
+  }
+
   const registered = await env.BLOBS.get(signingKeyObject(bucket));
   if (registered) {
     const known = new Uint8Array(await registered.arrayBuffer());
@@ -165,28 +361,20 @@ async function putDays(request: Request, env: Env, bucket: string): Promise<Resp
     }
   }
 
-  // Signed over the days as unpacked here, not as the URL claims them: this is
-  // where a frame read differently from how it was packed stops.
-  const header: UploadHeader = { bucket, days: entries.map((entry) => entry.day), timestamp };
-  if (!await verifyUpload(claimed, fromBase64url(signature), header, body)) {
+  // For an upload, `days` came from the unpacked frame. This proves the service
+  // parsed exactly what the phone signed. For creation it is deliberately empty.
+  const header: UploadHeader = { bucket, days, timestamp };
+  if (!await verifyUpload(claimed, decodedSignature, header, body)) {
     return problem(403, "signature does not match the request");
   }
-
-  // Registered only after the signature checked out, so a stranger cannot claim
-  // an unused bucket by presenting a key they do not hold.
-  if (!registered) await env.BLOBS.put(signingKeyObject(bucket), claimed);
-
-  await Promise.all(
-    entries.map((entry) => env.BLOBS.put(dayKey(bucket, entry.day), entry.blob)),
-  );
-  return json({ stored: entries.map((entry) => entry.day), bytes: body.length });
+  return { claimed, registered: registered !== null };
 }
 
 async function getDay(env: Env, bucket: string, day: string): Promise<Response> {
   const object = await env.BLOBS.get(dayKey(bucket, day));
   if (!object) return problem(404, "no such day");
 
-  return new Response(await object.arrayBuffer(), {
+  return new Response(object.body, {
     headers: {
       "content-type": "application/octet-stream",
       "last-modified": object.uploaded.toUTCString(),
@@ -241,6 +429,10 @@ async function listDays(env: Env, bucket: string, url: URL): Promise<Response> {
 /** What is in here, without downloading it. Cheap enough for an agent to ask
  * before deciding whether it needs anything at all. */
 async function describe(env: Env, bucket: string): Promise<Response> {
+  return json(await describeData(env, bucket));
+}
+
+async function describeData(env: Env, bucket: string) {
   let days = 0;
   let bytes = 0;
   let firstDay: string | null = null;
@@ -262,7 +454,7 @@ async function describe(env: Env, bucket: string): Promise<Response> {
   }
 
   const claimed = await env.BLOBS.head(signingKeyObject(bucket));
-  return json({
+  return {
     exists: claimed !== null || days > 0,
     days,
     bytes,
@@ -272,7 +464,7 @@ async function describe(env: Env, bucket: string): Promise<Response> {
     // numbers are then a floor, not a total. Saying so beats quietly rounding
     // an archive down to the part that was convenient to count.
     complete,
-  });
+  };
 }
 
 async function listPage(

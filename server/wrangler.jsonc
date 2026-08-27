@@ -1,0 +1,16 @@
+{
+  // The bucket service and its keyless remote MCP endpoint. Nothing here can
+  // decrypt an archive; only ciphertext and public signing keys reach R2.
+  "name": "efferent",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-27",
+  "r2_buckets": [
+    {
+      "binding": "BLOBS",
+      "bucket_name": "efferent"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

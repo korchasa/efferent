@@ -22,6 +22,7 @@ import { decompress } from "../protocol/framing.ts";
 import { unpackDays } from "../protocol/batch.ts";
 import { canonicalRequest, fromBase64url, verifyUpload } from "../protocol/signing.ts";
 import { bucketId } from "../protocol/ids.ts";
+import { parseConnectionHandoff } from "../tools/connection.ts";
 
 /**
  * A throwaway key pair, generated for this check and used nowhere else.
@@ -68,7 +69,21 @@ const emitted = {
   writer: marker(stdout, "WRITER"),
   signature: marker(stdout, "SIGNATURE"),
   timestamp: Number(marker(stdout, "TIMESTAMP")),
+  handoff: marker(stdout, "HANDOFF"),
 };
+
+section("Importing the phone-owned reading key locally");
+const handoff = new TextDecoder().decode(fromBase64url(emitted.handoff));
+const importedConnection = await parseConnectionHandoff(handoff);
+expect(
+  importedConnection.mcpURL ===
+    `https://efferent.example/mcp/b/${importedConnection.bucket}`,
+  "the local importer did not keep the bucket embedded in the phone's MCP URL",
+);
+expect(
+  importedConnection.reading.readingPrivate.length > 40,
+  "the phone's raw private key did not become a local PKCS8 reading key",
+);
 
 section("Unpacking the request the phone built");
 const readingPublic = fromBase64url(READING_PUBLIC);

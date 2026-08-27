@@ -31,6 +31,7 @@ class MemoryBucket {
       key,
       size: stored.body.length,
       uploaded: stored.uploaded,
+      body: new Blob([stored.body.slice().buffer]).stream(),
       // deno-lint-ignore require-await
       arrayBuffer: async () => stored.body.buffer.slice(0) as ArrayBuffer,
     };
@@ -95,6 +96,14 @@ function environment(): Environment {
   return { BLOBS: new MemoryBucket() };
 }
 
+function executionContext(): ExecutionContext {
+  return {
+    waitUntil() {},
+    passThroughOnException() {},
+    props: {},
+  } as unknown as ExecutionContext;
+}
+
 /** Stand-in for a sealed day. The service never opens one, so its contents only
  * ever need to be recognisable. */
 function sealedBody(...rest: number[]): Uint8Array {
@@ -129,6 +138,27 @@ async function send(
         "x-efferent-signature": base64url(await signUpload(writer.privateKey, header, body)),
       },
       body: body as BodyInit,
+    }),
+    bindings(env),
+  );
+}
+
+async function claim(env: Environment, writer: Writer): Promise<Response> {
+  const body = new Uint8Array();
+  const header: UploadHeader = {
+    bucket: BUCKET,
+    days: [],
+    timestamp: Math.floor(Date.now() / 1000),
+  };
+  return await worker.fetch(
+    new Request(`https://example.invalid/b/${BUCKET}`, {
+      method: "PUT",
+      headers: {
+        "x-efferent-timestamp": String(header.timestamp),
+        "x-efferent-writer": writer.publicKey,
+        "x-efferent-signature": base64url(await signUpload(writer.privateKey, header, body)),
+      },
+      body,
     }),
     bindings(env),
   );
@@ -188,7 +218,10 @@ Deno.test("every day in a batch becomes its own object", async () => {
   ]);
 
   assertEquals(response.status, 200);
-  assertEquals((await response.json()).stored, ["2026-08-05", "2026-08-06", "2026-08-07"]);
+  assertEquals(
+    (await response.json() as { stored: string[] }).stored,
+    ["2026-08-05", "2026-08-06", "2026-08-07"],
+  );
   assertEquals(stored(env, "2026-08-05"), [1, 5]);
   assertEquals(stored(env, "2026-08-06"), [1, 6, 6]);
   assertEquals(stored(env, "2026-08-07"), [1, 7, 7, 7]);
@@ -359,7 +392,86 @@ Deno.test("an unknown bucket is empty rather than an error", async () => {
   });
 });
 
-/// The bucket belongs to whoever wrote into it first. Without this, anyone who
+Deno.test("the phone claims an empty archive before any health day exists", async () => {
+  const env = environment();
+  const owner = await writerKey();
+
+  const first = await claim(env, owner);
+  const repeated = await claim(env, owner);
+
+  assertEquals(first.status, 201);
+  assertEquals(await first.json(), { bucket: BUCKET, created: true });
+  assertEquals(repeated.status, 200);
+  assertEquals(await repeated.json(), { bucket: BUCKET, created: false });
+  assert(env.BLOBS.store.has(signingKeyObject(BUCKET)));
+  assertEquals(env.BLOBS.store.has(dayKey(BUCKET, "2026-08-07")), false);
+});
+
+Deno.test("a writer that did not create the archive cannot upload into it", async () => {
+  const env = environment();
+  await claim(env, await writerKey());
+
+  const stranger = await put(env, await writerKey(), "2026-08-07", sealedBody(6));
+
+  assertEquals(stranger.status, 403);
+  assertEquals(env.BLOBS.store.has(dayKey(BUCKET, "2026-08-07")), false);
+});
+
+Deno.test("the versioned connection prompt is public and immutable", async () => {
+  const response = await worker.fetch(
+    new Request("https://example.invalid/prompts/connect/v1"),
+    bindings(environment()),
+  );
+  const body = await response.text();
+
+  assertEquals(response.status, 200);
+  assertEquals(response.headers.get("cache-control"), "public, max-age=31536000, immutable");
+  assert(body.includes("Keep the reading key on this machine"));
+  assert(body.includes("health_overview"));
+});
+
+Deno.test("the bucket URL exposes only keyless ciphertext MCP tools", async () => {
+  const response = await worker.fetch(
+    new Request(`http://localhost/mcp/b/${BUCKET}`, {
+      method: "POST",
+      headers: {
+        "accept": "application/json",
+        "content-type": "application/json",
+        "host": "localhost",
+        "mcp-method": "tools/list",
+        "mcp-protocol-version": "2026-07-28",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/list",
+        params: {
+          _meta: {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+          },
+        },
+      }),
+    }),
+    bindings(environment()),
+    executionContext(),
+  );
+  const body = await response.json() as {
+    result?: { tools?: { name: string; inputSchema: { properties?: Record<string, unknown> } }[] };
+  };
+
+  assertEquals(response.status, 200);
+  assertEquals(body.result?.tools?.map((tool) => tool.name), [
+    "archive_status",
+    "list_sealed_days",
+    "get_sealed_day",
+  ]);
+  for (const tool of body.result?.tools ?? []) {
+    assertEquals(tool.inputSchema.properties?.readingKey, undefined);
+  }
+});
+
+/// The bucket belongs to the writer that claimed it. Without this, anyone who
 /// learned a bucket id could overwrite a day with rubbish — and overwriting is
 /// now the ordinary operation, so the check carries more weight than it did.
 Deno.test("a second writer cannot touch a claimed bucket", async () => {
