@@ -129,6 +129,8 @@ Everything, for good. The service is not a letterbox that empties when the reade
 where the history lives, so an agent can ask a question months later without the phone being awake,
 reachable, or still owned by the same person.
 
+- **`PUT /b/<bucket>`** creates the logical archive with an empty signed request. It records only
+  the phone's public signing key, before there is a Health day to upload.
 - **`PUT /b/<bucket>/days`** stores the days the request carries, each replacing what was there.
   Every date is in what was signed, so a stored day cannot be passed off as another date by anyone
   in between. The answer names the days that landed, and that is what lets the phone stop marking
@@ -140,6 +142,9 @@ reachable, or still owned by the same person.
 - **`GET /b/<bucket>/d/<day>`** hands that day back, exactly as it went in.
 - **`GET /b/<bucket>/stats`** says how much is there — days, bytes, first and last — without handing
   any of it over. It is encrypted anyway; this is for deciding whether to fetch.
+- **`GET /prompts/connect/v1`** serves the public, versioned bootstrap instructions.
+- **`/mcp/b/<bucket>`** exposes the keyless remote MCP tools for archive metadata and ciphertext
+  links. It never accepts the reading key.
 
 The upload time in a listing is what keeps a mirror in step. A day can be rewritten at any moment,
 so "everything after where I stopped" is not a question that can be asked any more. "Everything that
@@ -184,13 +189,15 @@ so a run that stops costs the days it had not reached and nothing else.
 
 ## Letting an agent ask
 
-Decryption and analysis run on the agent's machine. The target connection model starts on the phone:
+Decryption and analysis run on the agent's machine. The connection starts on the phone:
 the phone creates the archive and reading key, then hands an otherwise unprepared agent a public
 prompt URL, a keyless remote MCP URL containing the bucket id, and the reading key as a separate
 local secret. The remote MCP server returns ciphertext only. The complete decision and the boundary
 between phone, Cloudflare and agent are in [`documents/connection.md`](documents/connection.md).
 
-The current source tree has not migrated yet. It exposes the archive through a local MCP server:
+The Worker exposes the keyless remote MCP at `/mcp/b/<bucket-id>`. It offers archive metadata,
+sealed-day listings and ciphertext links. After importing the phone handoff with `efferent connect`,
+the agent exposes the actual health tools from a local MCP server:
 
 ```bash
 deno task mcp
@@ -258,9 +265,9 @@ and never sent to the remote MCP endpoint, Cloudflare, an HTTP header or a tool 
 can list and return sealed days but cannot open one. The agent fetches ciphertext and decrypts and
 analyses it locally.
 
-Encryption says nothing about authorship, so the phone also makes a signing key on first launch and
-signs every upload. The first upload into an empty bucket registers that key and afterwards only it
-is accepted — otherwise a stranger who learned a bucket name could fill it with rubbish. That check
+Encryption says nothing about authorship, so the phone also makes a signing key on first launch. It
+claims the empty archive with that key and signs every later upload; afterwards only that writer is
+accepted — otherwise a stranger who learned a bucket name could fill it with rubbish. That check
 carries more weight now than it did: writing over a day is the ordinary operation, so without it a
 stranger could overwrite history rather than merely add to it. The signing key cannot decrypt, and
 the reading key cannot write: handing an agent the ability to read must not hand it the ability to
@@ -282,8 +289,8 @@ learns that days arrived together.
 
 There is no server-side invitation or pairing session. The phone creates the bucket and gives the
 connection handoff directly to the agent. [`documents/connection.md`](documents/connection.md)
-defines its fields and responsibilities. The reader-first scan still present in the code is the
-superseded build-7 implementation, not a design to extend.
+defines its fields and responsibilities. Existing build-7 destinations remain readable and keep
+uploading, but fresh setup is phone-first and the scanner has been removed.
 
 `protocol/` describes these bytes in TypeScript and `src/Core` describes them again in Swift, so
 `deno task interop` exists to prove the two still agree: a Swift test packs, seals and signs a real
@@ -304,8 +311,8 @@ turnstile in front of the first write is the obvious next thing if the address e
 deno task check
 ```
 
-- `check` — the secret scan, then lint and types on the scripts, protocol and reading-tool tests,
-  then a simulator build.
+- `check` — the secret scan, generated Cloudflare types, lint and types on the scripts, protocol and
+  reading-tool tests, then a simulator build.
 - `test` — protocol and reading-tool tests, then unit tests on any available iPhone simulator.
 - `dist` — unsigned App Store archive at `build/Efferent.xcarchive`.
 - `fmt` — format task scripts, and Swift if swiftformat is installed.
@@ -313,30 +320,25 @@ deno task check
   gitleaks`). Part of `check`, and the only thing GitHub runs on a push.
 - `generate` — regenerate the Xcode project from `Project.swift`.
 - `icons` — re-render the app icons from `documents/icon.svg`.
-- `server:dev` / `server:deploy` — the bucket service, locally or to Cloudflare.
-- `interop` — check that the Swift and TypeScript sides still make the same bytes.
-- `efferent` — the current reading side: `keygen`, legacy `pair` (prints the code build 7 scans),
-  `ask`, `sync`, `status`, `query`, plus `send` and `read` for poking at days by hand. `send --day`
-  takes a list, which is the only way to reach the batching path without a phone.
+- `server:types` — regenerate the Worker bindings and runtime types from `server/wrangler.jsonc`.
+- `server:dev` / `server:deploy` — the bucket service, public prompt and remote MCP, locally or on
+  Cloudflare.
+- `interop` — check that Swift and TypeScript agree on request bytes and the phone handoff key.
+- `efferent` — the local reading side: `connect --handoff <file>`, `ask`, `sync`, `status`, `query`,
+  plus `keygen`, `send` and `read` for protocol development. `connect --handoff -` reads the handoff
+  from standard input without putting the key in a process argument.
 - `mcp` — the same archive as an MCP server on stdio, for an agent to read.
 
-Trying the currently implemented, reader-first path without a phone:
+Trying the phone-first path without a phone:
 
 ```bash
 deno task server:dev
 ```
 
-Then, in another shell: `deno task efferent keygen`,
-`deno task efferent pair
---url http://127.0.0.1:8787` to get a code the phone can scan, and
-`deno task
-efferent read --url http://127.0.0.1:8787` to see what arrived. `send` stands in for a
-phone when you have no device to hand, and writes as many days in one request as you name.
-
-In the simulator there is no camera, so the legacy scanner cannot be reached and neither can any
-screen behind it. Debug builds therefore also take the code as text — put it on the device's
-pasteboard with `xcrun simctl pbcopy <udid>` and paste it in. It goes through the same pairing path
-as a scan, and is compiled out of what ships.
+Create an archive in the app, share its four-field handoff into a private file, then set a fresh
+`EFFERENT_HOME` and run `deno task efferent connect --handoff <file>`. Delete the temporary file
+after import. `send` still stands in for a phone during protocol development and writes as many days
+in one request as are named.
 
 One thing to watch when writing into a service that keeps its data: the first writer owns a bucket
 for good, so a test upload claims it and the phone is refused afterwards. Release the claim by
@@ -355,6 +357,7 @@ certificate, and the archive path above is the whole of the agreement with whate
 - `src/Tests/Sources` — unit tests.
 - `protocol/` — bucket and day names, the request frame, signing, sealed envelopes.
 - `server/` — the bucket service, a Cloudflare Worker over R2.
+- `documents/server-costs.md` — the measured marginal storage and operation cost per user.
 - `tools/archive.ts` — where days come from: the reading key, the service, the mirror.
 - `tools/analysis.ts` — days turned into answers, and every correction that turning needs.
 - `tools/efferent.ts` — the reading side as a command line tool.

@@ -108,11 +108,11 @@ is the only thing that catches drift before a phone does.
   returns ciphertext only.
 - **The signing key and the reading key are separate on purpose.** One writes, one reads. Merging
   them would mean an agent's config file grants the right to forge uploads.
-- **Both keys are bare base64 pkcs8, which is why the scanner carries a rule of its own.** A stock
-  secret scanner looks for the PEM armour these keys do not have, so it reads a committed reading
-  key as ordinary text — checked, and it did. `.gitleaks.toml` matches the pkcs8 prefix instead, and
-  excuses the interop fixture by file *and* value, so replacing that fixture with a real key still
-  fails. Never widen that exception to the file alone.
+- **The stored reader key is bare base64 PKCS8; the phone handoff key is raw base64url.** A stock
+  secret scanner looks for PEM armour and can read either as ordinary text. `.gitleaks.toml` matches
+  the stored PKCS8 prefix and excuses the interop fixture by file *and* value, so replacing that
+  fixture with a real key still fails. The phone handoff prefix must also remain covered; never
+  widen an exception to a whole file.
 - **Bucket, days and body hash are all bound into what gets signed, and bucket and day into the
   encryption tag.** Dropping any of them from either place lets a day be replayed, moved to another
   bucket, or handed back as a different date, silently. The days are named in the signed string as

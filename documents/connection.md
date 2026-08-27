@@ -1,7 +1,7 @@
 # Connection architecture
 
-Status: **decided on 2026-08-27, not implemented yet**. Build 7 and the current source tree still
-use the superseded reader-first scan described under [Migration state](#migration-state).
+Status: **implemented in the source tree on 2026-08-27, not deployed or shipped yet**. Build 7 still
+contains the superseded reader-first scan described under [Migration state](#migration-state).
 
 ## The boundary
 
@@ -55,6 +55,12 @@ Reading key:
 
 The exact public hosts are deployment configuration, not protocol constants.
 
+The concrete key value is
+`efferent-reading-v1.<raw-private-base64url>.<raw-public-base64url>`. It remains one field. The public
+half lets the local importer derive the bucket and reject a handoff whose key and MCP URL do not
+belong together; the private half is the secret. The importer turns the raw private key into the
+PKCS8 representation used by the existing local reader.
+
 The bucket id belongs in the MCP URL; it is an address, not a decryption secret. The reading key is
 a separate field. It must never appear in a URL, an HTTP header, a remote MCP tool argument, a log,
 or server-side storage. Once received, the agent moves it into the local reader's secret storage and
@@ -85,6 +91,11 @@ bucket, key or archive data.
 The remote MCP server is discovery and ciphertext transport. It is deliberately unable to perform
 the health analysis tools.
 
+The implemented remote tools are `archive_status`, `list_sealed_days` and `get_sealed_day`. The last
+returns a resource link to `application/octet-stream`, not the bytes decoded into another shape.
+The public prompt is served at `/prompts/connect/v1` with an immutable one-year cache policy. The
+phone claims an empty archive with a signed `PUT /b/<bucket-id>` before any Health day exists.
+
 ### Agent machine
 
 - Read the public connection prompt.
@@ -98,15 +109,12 @@ That is a capability boundary, not a reason to give the key to Cloudflare.
 
 ## Migration state
 
-The current implementation predates this decision:
+Fresh installs now start with **Create encrypted archive**. Existing build-7 installations retain
+their stored destination and keep uploading to it; they do not have its reading private key on the
+phone, so the new connection handoff is unavailable and the screen labels the archive as a legacy
+connection. There is deliberately no automatic migration and no silent decade-long re-upload.
 
-- the reader creates the reading key pair;
-- `efferent pair --url ...` prints a code containing the endpoint and public key;
-- the phone scans that code before it can create or write its archive;
-- only the local stdio MCP server exists.
-
-Those behaviours describe build 7, but they no longer describe the intended architecture. Do not
-extend the old pairing flow. Replacing it requires a phone-side reading key, an unpaired archive
-creation screen, the public bootstrap prompt, a keyless remote MCP endpoint and local key import on
-the reader. Migration of an existing archive is a separate implementation decision; this document
-does not silently choose between importing its existing key and creating a new archive.
+The owner can keep the existing archive, or explicitly disconnect and create a new phone-owned one.
+Disconnecting forgets the old signing key. After creating a new archive, **Export everything Health
+has** is the explicit action that moves the history. Importing an old reader-owned private key into
+the phone remains outside this implementation.
