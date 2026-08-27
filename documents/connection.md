@@ -12,7 +12,10 @@ reading key to the phone-created bucket, wrote owner-only files, and the local M
 That check exposed one migration defect: build 8 left the old archive's fingerprints in the phone
 ledger, so the empty new archive looked complete. The fix shipped in TestFlight build 9: changing
 the archive resets only archive-specific delivery state, requeues every known day and preserves the
-HealthKit anchors and sample-to-day index needed to rebuild the archive locally.
+HealthKit anchors and sample-to-day index needed to rebuild the archive locally. The repair was
+verified on the phone after installing build 9: the new archive reached 3,912 days covering
+2015-12-12 through 2026-08-27, a fresh handoff imported locally without exposing its reading key,
+and `health_overview` decrypted the archive locally. The final local mirror matched all 3,912 days.
 
 ## The boundary
 
