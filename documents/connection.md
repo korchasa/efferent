@@ -1,7 +1,8 @@
 # Connection architecture
 
-Status: **implemented in the source tree on 2026-08-27, not deployed or shipped yet**. Build 7 still
-contains the superseded reader-first scan described under [Migration state](#migration-state).
+Status: **shipped in TestFlight build 8 on 2026-08-27; the matching Worker is not deployed yet**
+because Wrangler requires a fresh owner login. Build 7 still contains the superseded reader-first
+scan described under [Migration state](#migration-state).
 
 ## The boundary
 
