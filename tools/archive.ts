@@ -80,7 +80,7 @@ export async function load<T>(name: string): Promise<T> {
 }
 
 export async function write(name: string, value: unknown): Promise<void> {
-  await Deno.mkdir(HOME, { recursive: true });
+  await privateDirectory(HOME);
   await Deno.writeTextFile(`${HOME}/${name}`, JSON.stringify(value, null, 2) + "\n");
   await Deno.chmod(`${HOME}/${name}`, 0o600);
 }
@@ -118,7 +118,7 @@ export async function saveState(state: MirrorState): Promise<void> {
 // MARK: - The mirror, one file per day
 
 export async function writeDay(day: string, events: Event[]): Promise<void> {
-  await Deno.mkdir(`${HOME}/${DAYS}`, { recursive: true });
+  await privateDirectory(`${HOME}/${DAYS}`);
   // Through a temporary file: a day truncated by an interrupted write would look
   // like a day on which almost nothing happened.
   const temporary = `${HOME}/${DAYS}/${day}.partial`;
@@ -126,7 +126,16 @@ export async function writeDay(day: string, events: Event[]): Promise<void> {
     temporary,
     events.map((event) => JSON.stringify(event)).join("\n") + "\n",
   );
+  await Deno.chmod(temporary, 0o600);
   await Deno.rename(temporary, `${HOME}/${DAYS}/${day}.ndjson`);
+}
+
+async function privateDirectory(path: string): Promise<void> {
+  await Deno.mkdir(path, { recursive: true, mode: 0o700 });
+  // mkdir's mode applies only when it creates the last component. Tighten an
+  // existing reader too, because an older release created these directories
+  // through the process umask and commonly left them at 0755.
+  await Deno.chmod(path, 0o700);
 }
 
 export async function readDay(day: string): Promise<Event[]> {
