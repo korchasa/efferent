@@ -1,8 +1,9 @@
 # Connection architecture
 
-Status: **shipped in TestFlight build 8 on 2026-08-27; the matching Worker is not deployed yet**
-because Wrangler requires a fresh owner login. Build 7 still contains the superseded reader-first
-scan described under [Migration state](#migration-state).
+Status: **live since 2026-08-27 in TestFlight build 8 and Worker version
+`9f7af515-652c-4391-917a-3aa406597f24`**. The live health check, immutable connection prompt and
+keyless remote MCP tool listing were verified after deployment. Build 7 still contains the
+superseded reader-first scan described under [Migration state](#migration-state).
 
 ## The boundary
 
