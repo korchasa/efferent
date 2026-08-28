@@ -3,17 +3,19 @@ import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { base32, bucketId, dayBefore, dayKey, isBucketId, isDay } from "./ids.ts";
 import { canonicalRequest, signUpload, verifyUpload } from "./signing.ts";
 import { associatedData, open, seal } from "./sealedbox.ts";
+import { sealLegacy } from "./sealedbox-v1.ts";
 import { compress, decompress } from "./framing.ts";
 import { packDays, type SealedDay, unpackDays } from "./batch.ts";
 
 const encoder = new TextEncoder();
 
-async function readingKeys(): Promise<{ privateKey: CryptoKey; publicRaw: Uint8Array }> {
+async function readingKeys(): Promise<{ privateRaw: Uint8Array; publicRaw: Uint8Array }> {
   const pair = await crypto.subtle.generateKey({ name: "X25519" }, true, [
     "deriveBits",
   ]) as CryptoKeyPair;
+  const privateJWK = await crypto.subtle.exportKey("jwk", pair.privateKey);
   return {
-    privateKey: pair.privateKey,
+    privateRaw: Uint8Array.fromBase64(privateJWK.d!, { alphabet: "base64url" }),
     publicRaw: new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey)),
   };
 }
@@ -219,14 +221,27 @@ Deno.test("a frame is read within its own bounds", () => {
   assertEquals([...unpacked[0].blob], [4, 5]);
 });
 
-Deno.test("what the phone seals, the reading key opens", async () => {
-  const { privateKey, publicRaw } = await readingKeys();
+Deno.test("what the phone seals with RFC 9180 HPKE, the reading key opens", async () => {
+  const { privateRaw, publicRaw } = await readingKeys();
   const aad = associatedData("c".repeat(26), "2026-08-07");
   const plaintext = encoder.encode('{"metric":"steps"}');
 
   const blob = await seal(publicRaw, plaintext, aad);
 
-  assertEquals(await open(privateKey, publicRaw, blob, aad), plaintext);
+  assertEquals(await open(privateRaw, publicRaw, blob, aad), plaintext);
+  assertEquals(blob[0], 2);
+  assertEquals(blob.length, 1 + 32 + plaintext.length + 16);
+});
+
+Deno.test("the reader still opens a sealed version 1 day during migration", async () => {
+  const { privateRaw, publicRaw } = await readingKeys();
+  const aad = associatedData("c".repeat(26), "2026-08-07");
+  const plaintext = encoder.encode("legacy day");
+
+  const blob = await sealLegacy(publicRaw, plaintext, aad);
+
+  assertEquals(blob[0], 1);
+  assertEquals(await open(privateRaw, publicRaw, blob, aad), plaintext);
 });
 
 /// The phone holds only the public half, so a stolen phone gives up nothing
@@ -246,22 +261,22 @@ Deno.test("sealing the same batch twice gives different ciphertext", async () =>
 /// date's object. Binding the day into the tag makes that fail loudly instead
 /// of handing back Tuesday for Monday.
 Deno.test("a day cannot be passed off as another day", async () => {
-  const { privateKey, publicRaw } = await readingKeys();
+  const { privateRaw, publicRaw } = await readingKeys();
   const bucket = "d".repeat(26);
   const blob = await seal(publicRaw, encoder.encode("a day"), associatedData(bucket, "2026-08-07"));
 
   await assertRejects(() =>
-    open(privateKey, publicRaw, blob, associatedData(bucket, "2026-08-08"))
+    open(privateRaw, publicRaw, blob, associatedData(bucket, "2026-08-08"))
   );
 });
 
 Deno.test("a day cannot be moved to another bucket", async () => {
-  const { privateKey, publicRaw } = await readingKeys();
+  const { privateRaw, publicRaw } = await readingKeys();
   const day = associatedData("d".repeat(26), "2026-08-07");
   const blob = await seal(publicRaw, encoder.encode("a day"), day);
 
   await assertRejects(() =>
-    open(privateKey, publicRaw, blob, associatedData("e".repeat(26), "2026-08-07"))
+    open(privateRaw, publicRaw, blob, associatedData("e".repeat(26), "2026-08-07"))
   );
 });
 
@@ -271,16 +286,16 @@ Deno.test("another reading key cannot open the blob", async () => {
   const aad = associatedData("f".repeat(26), "2026-08-07");
   const blob = await seal(mine.publicRaw, encoder.encode("batch"), aad);
 
-  await assertRejects(() => open(theirs.privateKey, theirs.publicRaw, blob, aad));
+  await assertRejects(() => open(theirs.privateRaw, theirs.publicRaw, blob, aad));
 });
 
 Deno.test("a flipped byte in the ciphertext is refused, not returned", async () => {
-  const { privateKey, publicRaw } = await readingKeys();
+  const { privateRaw, publicRaw } = await readingKeys();
   const aad = associatedData("g".repeat(26), "2026-08-07");
   const blob = await seal(publicRaw, encoder.encode("batch"), aad);
   blob[blob.length - 1] ^= 0x01;
 
-  await assertRejects(() => open(privateKey, publicRaw, blob, aad));
+  await assertRejects(() => open(privateRaw, publicRaw, blob, aad));
 });
 
 Deno.test("NDJSON survives the compression it travels under", async () => {

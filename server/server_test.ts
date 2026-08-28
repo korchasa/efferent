@@ -418,16 +418,40 @@ Deno.test("a writer that did not create the archive cannot upload into it", asyn
 });
 
 Deno.test("the versioned connection prompt is public and immutable", async () => {
-  const response = await worker.fetch(
+  const legacy = await worker.fetch(
     new Request("https://example.invalid/prompts/connect/v1"),
     bindings(environment()),
   );
-  const body = await response.text();
+  const legacyBody = await legacy.text();
 
-  assertEquals(response.status, 200);
-  assertEquals(response.headers.get("cache-control"), "public, max-age=31536000, immutable");
+  assertEquals(legacy.status, 200);
+  assertEquals(legacy.headers.get("cache-control"), "public, max-age=31536000, immutable");
+  assert(legacyBody.includes("# Connect Efferent v1"));
+  assert(!legacyBody.includes("pyhpke"));
+  const legacyHash = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(legacyBody)),
+  );
+  assertEquals(
+    legacyHash.toHex(),
+    "c5ec4a180f2ecf4d8f8294becffaee646f3e740a1a0e4ee323dee5f8527ea9bb",
+    "immutable prompt v1 changed in place",
+  );
+
+  const current = await worker.fetch(
+    new Request("https://example.invalid/prompts/connect/v2"),
+    bindings(environment()),
+  );
+  const body = await current.text();
+
+  assertEquals(current.status, 200);
+  assertEquals(current.headers.get("cache-control"), "public, max-age=31536000, immutable");
+  assert(body.includes("# Connect Efferent v2"));
   assert(body.includes("Keep the reading key on this machine"));
   assert(body.includes("health_overview"));
+  assert(body.includes("pyhpke==0.6.3"));
+  assert(body.includes("DHKEM_X25519_HKDF_SHA256"));
+  assert(body.includes('INFO = b"efferent/v2 hpke"'));
+  assert(body.includes("urlopen"));
 });
 
 Deno.test("the bucket URL exposes only keyless ciphertext MCP tools", async () => {

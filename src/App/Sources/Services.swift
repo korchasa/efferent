@@ -36,7 +36,7 @@ final class Services: ObservableObject {
         }
         health = HealthCoordinator(store: store)
         destination = Self.loadDestination()
-        var activatedPhoneOwnedArchive = false
+        var archiveNeedsRewrite = false
         do {
             deployment = try Deployment.load()
             deploymentError = nil
@@ -50,8 +50,10 @@ final class Services: ObservableObject {
                 if try readingIdentity.existingPrivateKey() == nil {
                     try store.rememberArchive(destination.bucket)
                 } else {
-                    activatedPhoneOwnedArchive = try store.activateArchive(destination.bucket)
+                    archiveNeedsRewrite = try store.activateArchive(destination.bucket)
                 }
+                archiveNeedsRewrite = try store.activateSealingVersion(Int64(SealedBox.version))
+                    || archiveNeedsRewrite
             }
         } catch {
             lastError = "Could not bind the day ledger to its archive. (\(error))"
@@ -60,7 +62,7 @@ final class Services: ObservableObject {
         health.onNewData = { [weak self] in
             Task { @MainActor in await self?.sendNow() }
         }
-        if activatedPhoneOwnedArchive {
+        if archiveNeedsRewrite {
             refreshStats()
             Task { [weak self] in await self?.sendNow() }
         }
@@ -83,6 +85,7 @@ final class Services: ObservableObject {
             )
             try await ArchiveCreator.create(destination: created, identity: identity)
             _ = try store.activateArchive(created.bucket)
+            _ = try store.activateSealingVersion(Int64(SealedBox.version))
             try UserDefaults.standard.set(JSONEncoder().encode(created), forKey: Self.destinationKey)
             destination = created
             uploader = nil

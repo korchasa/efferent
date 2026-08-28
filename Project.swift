@@ -63,7 +63,7 @@ public let project = Project(
                 // credentials; the reading key never enters the plist.
                 "EfferentServiceURL": .string("https://efferent.korchasa.workers.dev"),
                 "EfferentPromptURL": .string(
-                    "https://efferent.korchasa.workers.dev/prompts/connect/v1"
+                    "https://efferent.korchasa.workers.dev/prompts/connect/v2"
                 ),
                 "EfferentMCPBaseURL": .string(
                     "https://efferent.korchasa.workers.dev/mcp/b"

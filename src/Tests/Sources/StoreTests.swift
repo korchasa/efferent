@@ -108,6 +108,21 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(try store.pendingDays(limit: 10).isEmpty)
     }
 
+    func testChangingTheSealingVersionRequeuesEveryKnownDayExactlyOnce() throws {
+        let store = try Store.inMemory()
+        try store.recordSent(day: "2026-08-07", digest: Data([0xAB]), sampleIdentifiers: [])
+
+        XCTAssertTrue(try store.activateSealingVersion(2))
+
+        XCTAssertEqual(try store.pendingDays(limit: 10), ["2026-08-07"])
+        XCTAssertNil(try store.digest(for: "2026-08-07"))
+
+        try store.recordSent(day: "2026-08-07", digest: Data([0xCD]), sampleIdentifiers: [])
+        XCTAssertFalse(try store.activateSealingVersion(2))
+        XCTAssertTrue(try store.pendingDays(limit: 10).isEmpty)
+        XCTAssertEqual(try store.digest(for: "2026-08-07"), Data([0xCD]))
+    }
+
     // MARK: - Deletions
 
     /// HealthKit reports a removed record as a bare identifier — no date, no

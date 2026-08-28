@@ -104,4 +104,7 @@ enum MetaKey: String {
     /// sent, in seconds since 1970. Absent until the first comparison, which is
     /// what makes a device check before it trusts a ledger it has never tested.
     case lastReconciledAt = "reconcile.lastAt"
+    /// The sealed-envelope version represented by every non-null day digest.
+    /// Changing it invalidates those claims and requeues the known archive.
+    case sealingVersion = "sealing.version"
 }

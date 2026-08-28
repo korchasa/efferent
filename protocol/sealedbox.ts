@@ -1,141 +1,93 @@
-/**
- * Sealing a batch for a reader who is not present.
- *
- * The phone holds only the reading *public* key, so it can write to the bucket
- * and cannot read it back — an important property in itself: a lost or seized
- * phone gives up nothing about the history it already sent. Each batch gets a
- * throwaway key pair whose private half is discarded the moment the shared
- * secret is derived, so there is no long-lived key on the device to steal.
- *
- * This is the base mode of HPKE built out of the pieces every platform already
- * ships: X25519 to agree, HKDF-SHA256 to turn the agreement into a key, and
- * AES-256-GCM to encrypt. Deliberately no third-party crypto library — CryptoKit
- * and WebCrypto both have all three.
- */
+/** RFC 9180 HPKE envelopes written by the phone and opened only locally. */
 
-export const SEALED_VERSION = 1;
+import { Chacha20Poly1305 } from "@hpke/chacha20poly1305";
+import { CipherSuite, HkdfSha256 } from "@hpke/core";
+import { DhkemX25519HkdfSha256 } from "@hpke/dhkem-x25519";
 
-const EPHEMERAL_KEY_BYTES = 32;
-const NONCE_BYTES = 12;
-const HEADER_BYTES = 1 + EPHEMERAL_KEY_BYTES + NONCE_BYTES;
+import { openLegacy } from "./sealedbox-v1.ts";
 
-const INFO = new TextEncoder().encode("efferent/v1 sealed box");
+export const SEALED_VERSION = 2;
+export const HPKE_INFO = "efferent/v2 hpke";
 
-/**
- * `[version][ephemeral public key][nonce][ciphertext and tag]`.
- *
- * The version byte comes first so a future change of algorithm is a decision
- * the reader can make, rather than a decode that fails in a confusing way.
- */
+const LEGACY_VERSION = 1;
+const INFO = new TextEncoder().encode(HPKE_INFO);
+const suite = new CipherSuite({
+  kem: new DhkemX25519HkdfSha256(),
+  kdf: new HkdfSha256(),
+  aead: new Chacha20Poly1305(),
+});
+const HEADER_BYTES = 1 + suite.kem.encSize;
+const TAG_BYTES = 16;
+
+/** RFC 9180 base mode: `[version][encapsulated key][ciphertext and tag]`. */
 export async function seal(
-  readingPublicKey: Uint8Array,
+  readingPublicRaw: Uint8Array,
   plaintext: Uint8Array,
   associatedData: Uint8Array,
 ): Promise<Uint8Array> {
-  const recipient = await importPublic(readingPublicKey);
-  const ephemeral = await crypto.subtle.generateKey({ name: "X25519" }, true, [
-    "deriveBits",
-  ]) as CryptoKeyPair;
-  const ephemeralPublic = new Uint8Array(
-    await crypto.subtle.exportKey("raw", ephemeral.publicKey),
+  const recipientPublicKey = await suite.kem.importKey(
+    "raw",
+    asArrayBuffer(readingPublicRaw),
+    true,
   );
-
-  const key = await deriveKey(ephemeral.privateKey, recipient, ephemeralPublic, readingPublicKey);
-  const nonce = crypto.getRandomValues(new Uint8Array(NONCE_BYTES));
-  const ciphertext = new Uint8Array(
-    await crypto.subtle.encrypt(
-      {
-        name: "AES-GCM",
-        iv: nonce as BufferSource,
-        additionalData: associatedData as BufferSource,
-      },
-      key,
-      plaintext as BufferSource,
-    ),
-  );
+  const sender = await suite.createSenderContext({ recipientPublicKey, info: INFO });
+  const ciphertext = new Uint8Array(await sender.seal(plaintext, associatedData));
 
   const blob = new Uint8Array(HEADER_BYTES + ciphertext.length);
   blob[0] = SEALED_VERSION;
-  blob.set(ephemeralPublic, 1);
-  blob.set(nonce, 1 + EPHEMERAL_KEY_BYTES);
+  blob.set(new Uint8Array(sender.enc), 1);
   blob.set(ciphertext, HEADER_BYTES);
   return blob;
 }
 
+/** Open HPKE v2, while retaining read compatibility with already stored v1 days. */
 export async function open(
-  readingPrivateKey: CryptoKey,
-  readingPublicKey: Uint8Array,
+  readingPrivateRaw: Uint8Array,
+  readingPublicRaw: Uint8Array,
   blob: Uint8Array,
   associatedData: Uint8Array,
 ): Promise<Uint8Array> {
-  if (blob.length <= HEADER_BYTES) throw new Error("sealed blob is too short to hold a message");
-  if (blob[0] !== SEALED_VERSION) {
-    throw new Error(`sealed blob version ${blob[0]} is newer than this reader understands`);
+  if (blob.length === 0) throw new Error("sealed blob has no version byte");
+  if (blob[0] === LEGACY_VERSION) {
+    return await openLegacy(readingPrivateRaw, readingPublicRaw, blob, associatedData);
   }
+  if (blob[0] !== SEALED_VERSION) throw new Error(`unsupported sealed version ${blob[0]}`);
+  if (blob.length < HEADER_BYTES + TAG_BYTES) throw new Error("sealed v2 blob is too short");
 
-  const ephemeralPublic = blob.slice(1, 1 + EPHEMERAL_KEY_BYTES);
-  const nonce = blob.slice(1 + EPHEMERAL_KEY_BYTES, HEADER_BYTES);
-  const ciphertext = blob.slice(HEADER_BYTES);
-
-  const key = await deriveKey(
-    readingPrivateKey,
-    await importPublic(ephemeralPublic),
-    ephemeralPublic,
-    readingPublicKey,
+  const recipientKey = await suite.kem.importKey(
+    "raw",
+    asArrayBuffer(readingPrivateRaw),
+    false,
   );
-  const plaintext = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: nonce as BufferSource, additionalData: associatedData as BufferSource },
-    key,
-    ciphertext as BufferSource,
+  const recipient = await suite.createRecipientContext({
+    recipientKey,
+    enc: blob.subarray(1, HEADER_BYTES),
+    info: INFO,
+  });
+  return new Uint8Array(
+    await recipient.open(blob.subarray(HEADER_BYTES), associatedData),
   );
-  return new Uint8Array(plaintext);
 }
 
-/**
- * What the ciphertext is bound to.
- *
- * Feeding the bucket and the day in as associated data means a blob cannot be
- * moved to another bucket or relabelled with a different date: the tag stops
- * matching. Without it, a server could shuffle history around undetected even
- * while unable to read a word of it — and with days it would not even need to
- * forge anything, only to answer one date with another date's object.
- */
+/** Bucket and day stay bound to the ciphertext across the envelope migration. */
 export function associatedData(bucket: string, day: string): Uint8Array {
   return new TextEncoder().encode(`efferent/v1\n${bucket}\n${day}`);
 }
 
-/**
- * Both sides bind the derivation to both public keys via the salt, so a key
- * agreed for one recipient can never be reused against another.
- */
-async function deriveKey(
-  privateKey: CryptoKey,
-  publicKey: CryptoKey,
-  ephemeralPublic: Uint8Array,
-  readingPublic: Uint8Array,
-): Promise<CryptoKey> {
-  const shared = await crypto.subtle.deriveBits(
-    { name: "X25519", public: publicKey },
-    privateKey,
-    256,
+/** Convert the local reader's historical PKCS8 storage to RFC 9180 raw X25519. */
+export async function rawPrivateKey(pkcs8: Uint8Array): Promise<Uint8Array> {
+  const key = await crypto.subtle.importKey(
+    "pkcs8",
+    asArrayBuffer(pkcs8),
+    { name: "X25519" },
+    true,
+    ["deriveBits"],
   );
-  const material = await crypto.subtle.importKey("raw", shared, "HKDF", false, ["deriveBits"]);
-
-  const salt = new Uint8Array(ephemeralPublic.length + readingPublic.length);
-  salt.set(ephemeralPublic, 0);
-  salt.set(readingPublic, ephemeralPublic.length);
-
-  const bits = await crypto.subtle.deriveBits(
-    { name: "HKDF", hash: "SHA-256", salt: salt as BufferSource, info: INFO as BufferSource },
-    material,
-    256,
-  );
-  return await crypto.subtle.importKey("raw", bits, { name: "AES-GCM" }, false, [
-    "encrypt",
-    "decrypt",
-  ]);
+  const jwk = await crypto.subtle.exportKey("jwk", key);
+  if (!jwk.d) throw new Error("the stored reading key has no private X25519 value");
+  return Uint8Array.fromBase64(jwk.d, { alphabet: "base64url" });
 }
 
-function importPublic(raw: Uint8Array): Promise<CryptoKey> {
-  return crypto.subtle.importKey("raw", raw as BufferSource, { name: "X25519" }, true, []);
+function asArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.slice().buffer;
 }

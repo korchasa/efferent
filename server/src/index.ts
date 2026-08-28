@@ -45,6 +45,7 @@ import {
   type UploadHeader,
   verifyUpload,
 } from "../../protocol/signing.ts";
+import { CONNECT_PROMPT_V1, CONNECT_PROMPT_V2 } from "./connect-prompt.ts";
 
 /** A month of busy days over; well under what a Worker can hold in memory. */
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
@@ -67,9 +68,9 @@ export default {
     }
     if (
       segments.length === 3 && segments[0] === "prompts" && segments[1] === "connect" &&
-      segments[2] === "v1" && request.method === "GET"
+      (segments[2] === "v1" || segments[2] === "v2") && request.method === "GET"
     ) {
-      return connectionPrompt();
+      return connectionPrompt(segments[2]);
     }
     if (segments.length === 3 && segments[0] === "mcp" && segments[1] === "b") {
       const bucket = segments[2];
@@ -103,40 +104,8 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-const CONNECT_PROMPT = `# Connect Efferent v1
-
-You are connecting an end-to-end encrypted Apple Health archive. The phone gave you four fields:
-an instruction, this public prompt URL, a remote MCP URL containing the bucket id, and a reading key.
-
-Security boundary:
-
-- Keep the reading key on this machine. Never put it in a URL, HTTP header, remote MCP argument,
-  log, chat reply, or cloud service.
-- The remote MCP server has no decryption capability. It lists sealed days and returns links to
-  ciphertext only.
-- Decryption and every health-data answer must run locally. If you cannot run local code, stop.
-
-Connection procedure:
-
-1. Connect the supplied remote MCP URL using Streamable HTTP. Do not add authentication or the key.
-2. Clone https://github.com/korchasa/efferent.git on the local machine and require Deno 2.
-3. Put the complete four-field handoff in a file readable only by the current user, or pass it on
-   standard input. Set EFFERENT_HOME to a new private directory and run:
-
-       deno task efferent connect --handoff <file>
-
-   Use --handoff - for standard input. Delete the temporary handoff file after a successful import.
-4. Register the local MCP process with \`deno task mcp\` and the same absolute EFFERENT_HOME. Use its
-   health tools for all questions; they fetch ciphertext and decrypt it locally.
-5. Call \`health_overview\` first. Its result and every health tool description carry the rules
-   needed to interpret the archive correctly.
-
-The local importer verifies that the reading key derives the bucket id embedded in the remote MCP
-URL before it writes any local configuration. It refuses to overwrite an existing local reader.
-`;
-
-function connectionPrompt(): Response {
-  return new Response(CONNECT_PROMPT, {
+function connectionPrompt(version: "v1" | "v2"): Response {
+  return new Response(version === "v1" ? CONNECT_PROMPT_V1 : CONNECT_PROMPT_V2, {
     headers: {
       "content-type": "text/markdown; charset=utf-8",
       "cache-control": "public, max-age=31536000, immutable",

@@ -1,10 +1,11 @@
 # Connection architecture
 
-Status: **live since 2026-08-27 in TestFlight build 9 and Worker version
-`9f7af515-652c-4391-917a-3aa406597f24`**. The live health check, immutable connection prompt and
-keyless remote MCP tool listing were verified after deployment. Build 9 is `VALID`,
-`IN_BETA_TESTING` and available to the internal TestFlight group. Build 7 still contains the
-superseded reader-first scan described under [Migration state](#migration-state).
+Status: the phone-first connection is **live since 2026-08-27 in TestFlight build 9 and Worker
+version `9f7af515-652c-4391-917a-3aa406597f24`**. That deployed build still writes the custom sealed
+version 1 format and hands out the immutable `/prompts/connect/v1` prompt. The repository moved new
+writes to RFC 9180 HPKE version 2 on 2026-08-28 and added `/prompts/connect/v2`; neither change is
+deployed or in TestFlight yet. Build 7 still contains the superseded reader-first scan described
+under [Migration state](#migration-state).
 
 The first real build-8 handoff was verified end to end on 2026-08-27: the local importer matched the
 reading key to the phone-created bucket, wrote owner-only files, and the local MCP answered
@@ -58,7 +59,7 @@ Instruction:
 Connect Efferent. Keep the reading key local and never pass it to a remote tool.
 
 Prompt:
-https://<public-host>/prompts/connect/v1
+https://<public-host>/prompts/connect/v2
 
 MCP:
 https://<mcp-host>/mcp/b/<bucket-id>
@@ -80,10 +81,11 @@ a separate field. It must never appear in a URL, an HTTP header, a remote MCP to
 or server-side storage. Once received, the agent moves it into the local reader's secret storage and
 does not repeat it in model-visible output.
 
-The prompt URL is public, immutable and versioned. It contains only stable instructions for an agent
-that knows nothing about Efferent: how to connect the remote MCP server, install or invoke the local
-reader, store the key locally and use the health tools correctly. It contains no user-specific
-bucket, key or archive data.
+The prompt URL is public, immutable and versioned. Version 2 contains both the normal repository
+connection procedure and a runnable Python reference for the HPKE envelope. It contains no
+user-specific bucket, key or archive data. Version 1 remains byte-for-byte available for handoffs
+already shared; changing an immutable prompt in place would leave different agents following
+different cached instructions under the same URL.
 
 ## Responsibilities
 
@@ -107,8 +109,9 @@ the health analysis tools.
 
 The implemented remote tools are `archive_status`, `list_sealed_days` and `get_sealed_day`. The last
 returns a resource link to `application/octet-stream`, not the bytes decoded into another shape.
-The public prompt is served at `/prompts/connect/v1` with an immutable one-year cache policy. The
-phone claims an empty archive with a signed `PUT /b/<bucket-id>` before any Health day exists.
+The current public prompt is served at `/prompts/connect/v2` with an immutable one-year cache
+policy, beside the retained `/v1` prompt. The phone claims an empty archive with a signed
+`PUT /b/<bucket-id>` before any Health day exists.
 
 ### Agent machine
 
@@ -121,12 +124,36 @@ phone claims an empty archive with a signed `PUT /b/<bucket-id>` before any Heal
 An agent that cannot execute code locally cannot read an Efferent archive under this security model.
 That is a capability boundary, not a reason to give the key to Cloudflare.
 
+## Sealed format
+
+New writes use RFC 9180 base-mode HPKE with DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 and
+ChaCha20-Poly1305. A stored day is `[0x02][32-byte encapsulated key][ciphertext and 16-byte tag]`.
+The HPKE info is `efferent/v2 hpke`; the authenticated data remains
+`efferent/v1\n<bucket>\n<day>` so the same bucket and date binding holds across the migration. The
+payload inside is raw-deflate-compressed NDJSON.
+
+CryptoKit implements the sender on iOS. The local TypeScript reader uses `hpke-js`; the exact Python
+source embedded in prompt v2 uses PyHPKE 0.6.3. The three implementations are tested against each
+other. PyHPKE and hpke-js report passing the RFC vectors but have not had a formal independent
+audit; they are local readers and never expand what Cloudflare can see.
+
+The TypeScript reader dispatches on the first byte. It opens both version 1 and version 2, but every
+new seal is version 2. The Python reference intentionally opens only version 2 and fails clearly on
+a legacy day rather than silently attempting another construction.
+
 ## Migration state
 
 Fresh installs now start with **Create encrypted archive**. Existing build-7 installations retain
 their stored destination and keep uploading to it; they do not have its reading private key on the
 phone, so the new connection handoff is unavailable and the screen labels the archive as a legacy
 connection. Adopting that legacy destination records its bucket without changing its ledger.
+
+The first app build containing HPKE records the sealing version beside the archive ledger. When it
+finds a ledger created by version 1, it clears the plaintext digests and requeues every known day in
+one transaction. HealthKit anchors, sample-to-day rows, installation day and backfill progress stay
+intact. The phone then replaces days with version 2 newest first; the local TypeScript reader can
+read a mixed archive throughout this process. The reset is stored before sending and therefore runs
+only once even if the migration is interrupted.
 
 The owner can keep the existing archive, or explicitly disconnect and create a new phone-owned one.
 Disconnecting forgets the old signing key. Creating the new archive binds the ledger to its bucket,
