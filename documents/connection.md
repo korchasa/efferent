@@ -1,9 +1,10 @@
 # Connection architecture
 
-Status: the phone-first connection with RFC 9180 HPKE is live in TestFlight build 10. The current
-source prepares build 11 and `/prompts/connect/v3`, whose embedded Python reference is the complete
-local connection path. The immutable `/v1` and `/v2` prompts remain available for handoffs already
-shared. Build 10 introduced the HPKE migration described under [Migration state](#migration-state).
+Status: the self-contained phone-first connection is **live since 2026-08-29 in TestFlight build 11
+and Worker version `eaada87a-373d-4add-a8f4-bfb77ccc5b9b`**. New handoffs point at
+`/prompts/connect/v3`, whose embedded Python reference is the complete local connection path. The
+immutable `/v1` and `/v2` prompts remain available for handoffs already shared. Build 10 introduced
+the HPKE migration described under [Migration state](#migration-state).
 
 The first real build-8 handoff was verified end to end on 2026-08-27: the local importer matched the
 reading key to the phone-created bucket, wrote owner-only files, and the local MCP answered
