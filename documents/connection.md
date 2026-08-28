@@ -1,9 +1,11 @@
 # Connection architecture
 
-Status: the self-contained phone-first connection is live in TestFlight build 11 and Worker version
-`eaada87a-373d-4add-a8f4-bfb77ccc5b9b`. The current source prepares build 12 and moves the complete
-Python reference into the remote MCP's `setup_guide` tool. The versioned HTTP prompt routes are
-removed. Build 10 introduced the HPKE migration described under [Migration state](#migration-state).
+Status: Worker version `efdea416-98ad-4119-aa31-c7c295bd6aaf` is live and exposes the complete
+Python reference through the remote MCP's `setup_guide` tool. The versioned HTTP prompt routes are
+removed. App build 12 contains the matching three-field handoff but is not yet uploaded to
+TestFlight; build 11 still emits the retired prompt URL and must not be used to create a new
+connection during this cutover. Build 10 introduced the HPKE migration described under
+[Migration state](#migration-state).
 
 The first real build-8 handoff was verified end to end on 2026-08-27: the local importer matched the
 reading key to the phone-created bucket, wrote owner-only files, and the local MCP answered
