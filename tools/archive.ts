@@ -11,7 +11,7 @@
 
 import { bucketId, dayBefore, isDay } from "../protocol/ids.ts";
 import { fromBase64url } from "../protocol/signing.ts";
-import { associatedData, open } from "../protocol/sealedbox.ts";
+import { associatedData, open, rawPrivateKey } from "../protocol/sealedbox.ts";
 import { decompress } from "../protocol/framing.ts";
 
 export { dayBefore, isDay };
@@ -178,13 +178,7 @@ export async function openArchive(endpoint: string): Promise<Archive> {
   const reading = await load<ReadingKey>("reading-key.json");
   const readingPublic = fromBase64url(reading.readingPublic);
   const bucket = await bucketId(readingPublic);
-  const privateKey = await crypto.subtle.importKey(
-    "pkcs8",
-    fromBase64url(reading.readingPrivate) as BufferSource,
-    { name: "X25519" },
-    false,
-    ["deriveBits"],
-  );
+  const privateRaw = await rawPrivateKey(fromBase64url(reading.readingPrivate));
 
   async function day(name: string): Promise<{ day: string; events: Event[] }> {
     const response = await fetch(`${endpoint}/b/${bucket}/d/${name}`);
@@ -194,7 +188,7 @@ export async function openArchive(endpoint: string): Promise<Archive> {
 
     const plaintext = await decompress(
       await open(
-        privateKey,
+        privateRaw,
         readingPublic,
         new Uint8Array(await response.arrayBuffer()),
         associatedData(bucket, name),

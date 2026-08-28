@@ -142,7 +142,8 @@ reachable, or still owned by the same person.
 - **`GET /b/<bucket>/d/<day>`** hands that day back, exactly as it went in.
 - **`GET /b/<bucket>/stats`** says how much is there — days, bytes, first and last — without handing
   any of it over. It is encrypted anyway; this is for deciding whether to fetch.
-- **`GET /prompts/connect/v1`** serves the public, versioned bootstrap instructions.
+- **`GET /prompts/connect/v2`** serves the current public bootstrap instructions, including a
+  runnable Python HPKE reader. The immutable `/v1` prompt remains available for old handoffs.
 - **`/mcp/b/<bucket>`** exposes the keyless remote MCP tools for archive metadata and ciphertext
   links. It never accepts the reading key.
 
@@ -273,11 +274,12 @@ stranger could overwrite history rather than merely add to it. The signing key c
 the reading key cannot write: handing an agent the ability to read must not hand it the ability to
 forge.
 
-A day on the wire is raw-deflate-compressed NDJSON inside a sealed envelope —
-`[version][ephemeral public key][nonce][ciphertext]` — with the bucket name and the date bound into
-the tag, so a blob cannot be moved to another bucket, or offered back as a different day, without
-the decryption failing. The building blocks are X25519, HKDF-SHA256 and AES-256-GCM, all of which
-CryptoKit and WebCrypto already ship. No crypto library is vendored anywhere.
+A day on the wire is raw-deflate-compressed NDJSON inside an RFC 9180 base-mode HPKE envelope —
+`[version 2][32-byte encapsulated key][ciphertext and tag]` — with the bucket name and the date bound
+into the authenticated data. The suite is DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 and
+ChaCha20-Poly1305. CryptoKit seals on the phone and `hpke-js` opens in the local TypeScript reader.
+The reader retains the custom X25519/HKDF/AES-GCM version 1 decoder while stored days are replaced;
+new writes never use it.
 
 Days travel a month at a time, because the request is what costs rather than what is in it: a day is
 a few kilobytes and the first export is thousands of them, so a request each would be a phone
@@ -326,7 +328,9 @@ deno task check
 - `server:types` — regenerate the Worker bindings and runtime types from `server/wrangler.jsonc`.
 - `server:dev` / `server:deploy` — the bucket service, public prompt and remote MCP, locally or on
   Cloudflare.
-- `interop` — check that Swift and TypeScript agree on request bytes and the phone handoff key.
+- `interop` — check that Swift and TypeScript agree on request bytes, HPKE and the phone handoff key.
+- `interop:python` — with PyHPKE installed in the selected Python, prove that the exact source
+  embedded in prompt v2 opens a TypeScript-sealed day. Set `EFFERENT_PYTHON` to that interpreter.
 - `efferent` — the local reading side: `connect --handoff <file>`, `ask`, `sync`, `status`, `query`,
   plus `keygen`, `send` and `read` for protocol development. `connect --handoff -` reads the handoff
   from standard input without putting the key in a process argument.

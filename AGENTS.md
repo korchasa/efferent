@@ -100,7 +100,9 @@ This file is the rulebook.
 `protocol/` is the single description of what goes on the wire, and the Swift side has to match it
 byte for byte. When you change anything there, change both sides in the same commit and run
 `deno task interop` — Swift agreeing with Swift proves only that Swift is consistent, and that check
-is the only thing that catches drift before a phone does.
+is the only thing that catches drift before a phone does. The public Python reference is a third
+implementation: after changing HPKE or the prompt, also run `deno task interop:python` with PyHPKE
+0.6.3 in the selected local interpreter.
 
 - **The phone creates the archive and the reading key; the agent only connects.** The phone derives
   the bucket id from the reading public key, seals days with that public half, and keeps the private
@@ -125,6 +127,10 @@ is the only thing that catches drift before a phone does.
   nobody meant.
 - **Compress before sealing, never after.** Ciphertext does not compress, and a round trip that only
   works one way tends to be discovered on a phone.
+- **New days are RFC 9180 HPKE version 2; old days remain readable as version 1.** The current suite
+  is DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 and ChaCha20-Poly1305. Changing it requires a new
+  envelope byte, a new immutable connection prompt URL, Swift/TypeScript/Python interoperability
+  proof and a one-time ledger reset that makes the phone replace every known day.
 - The service must never gain a way to read a day. If a feature seems to need one, it belongs in the
   reading tool instead.
 - **Anything that answers a question runs on the agent's machine.** The remote MCP server is only a

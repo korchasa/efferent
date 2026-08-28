@@ -35,3 +35,8 @@ These are marginal amounts. At low usage Cloudflare's free allowances can make t
 at higher usage the account-level Worker subscription and any abuse protection dominate before an
 individual archive's storage does. Recalculate when prices, retention, batch size or the number of
 hourly rewrites changes.
+
+The HPKE version 2 envelope removes the explicit 12-byte nonce from each stored day, saving about
+46.9 KB across the measured 3,912-day archive. That does not change any rounded monthly figure
+above. Migrating the existing archive rewrites each day once, so its one-time server cost is the
+same order as the initial export: about **$0.0183** for this archive.

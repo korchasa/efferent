@@ -102,6 +102,29 @@ public final class Store {
         }
     }
 
+    /// Requeue every known day exactly once when the sealing format changes.
+    ///
+    /// A plaintext digest cannot prove which envelope version is stored. If it
+    /// survived an algorithm change, the ordinary uploader would rebuild an
+    /// identical day, call it unchanged and leave the legacy ciphertext in the
+    /// archive forever. The version therefore belongs beside the archive's
+    /// digests and invalidates them as one transaction.
+    @discardableResult
+    public func activateSealingVersion(_ version: Int64) throws -> Bool {
+        try dbQueue.write { db in
+            if try Self.int(db, MetaKey.sealingVersion.rawValue) == version {
+                return false
+            }
+
+            try db.execute(
+                sql: "UPDATE day SET digest = NULL, dirty = 1, updatedAt = ?",
+                arguments: [Date().timeIntervalSince1970]
+            )
+            try Self.setInt(db, MetaKey.sealingVersion.rawValue, version)
+            return true
+        }
+    }
+
     // MARK: - Noticing what changed
 
     /// Mark `days` as needing to be built and sent, and move `anchor` forward.

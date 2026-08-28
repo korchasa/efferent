@@ -17,7 +17,7 @@
 import { fail, run, section } from "./lib.ts";
 import { SCHEME, systemToolPath, WORKSPACE } from "./config.ts";
 import { generate } from "./generate.ts";
-import { associatedData, open } from "../protocol/sealedbox.ts";
+import { associatedData, open, rawPrivateKey } from "../protocol/sealedbox.ts";
 import { decompress } from "../protocol/framing.ts";
 import { unpackDays } from "../protocol/batch.ts";
 import { canonicalRequest, fromBase64url, verifyUpload } from "../protocol/signing.ts";
@@ -89,13 +89,7 @@ section("Unpacking the request the phone built");
 const readingPublic = fromBase64url(READING_PUBLIC);
 const bucket = await bucketId(readingPublic);
 
-const privateKey = await crypto.subtle.importKey(
-  "pkcs8",
-  fromBase64url(READING_PRIVATE) as BufferSource,
-  { name: "X25519" },
-  false,
-  ["deriveBits"],
-);
+const privateRaw = await rawPrivateKey(fromBase64url(READING_PRIVATE));
 
 const frame = fromBase64url(emitted.frame);
 const packed = unpackDays(frame);
@@ -125,7 +119,7 @@ expect(second[0].value === 1201, `the second day's total was ${second[0].value}`
 // notice — the day is only in the tag, never in the ciphertext.
 let moved = false;
 try {
-  await open(privateKey, readingPublic, packed[1].blob, associatedData(bucket, DAY));
+  await open(privateRaw, readingPublic, packed[1].blob, associatedData(bucket, DAY));
   moved = true;
 } catch { /* what should happen */ }
 expect(!moved, "a day opened under another date — the date is not bound into the tag");
@@ -201,7 +195,7 @@ if (postTo) {
       await (await fetch(`${postTo}/b/${bucket}/d/${day}`)).arrayBuffer(),
     );
     const readBack = new TextDecoder().decode(
-      await decompress(await open(privateKey, readingPublic, stored, associatedData(bucket, day))),
+      await decompress(await open(privateRaw, readingPublic, stored, associatedData(bucket, day))),
     );
     expect(readBack.includes(id), `what came back for ${day} is not what went in`);
     console.log(
@@ -228,7 +222,7 @@ console.log(
 /** Open one sealed day and read its lines back. */
 async function read(blob: Uint8Array, day: string): Promise<Record<string, unknown>[]> {
   const plaintext = await decompress(
-    await open(privateKey, readingPublic, blob, associatedData(bucket, day)),
+    await open(privateRaw, readingPublic, blob, associatedData(bucket, day)),
   );
   return new TextDecoder().decode(plaintext).trim().split("\n").map((line) =>
     JSON.parse(line) as Record<string, unknown>

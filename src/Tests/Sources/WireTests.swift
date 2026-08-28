@@ -25,7 +25,7 @@ final class WireTests: XCTestCase {
         )
         let deployment = try Deployment(
             serviceURL: destination.endpoint,
-            promptURL: XCTUnwrap(URL(string: "https://efferent.example.com/prompts/connect/v1")),
+            promptURL: XCTUnwrap(URL(string: "https://efferent.example.com/prompts/connect/v2")),
             mcpBaseURL: XCTUnwrap(URL(string: "https://efferent.example.com/mcp/b"))
         )
         let handoff = ConnectionHandoff(
@@ -39,7 +39,7 @@ final class WireTests: XCTestCase {
             "https://efferent.example.com/mcp/b/\(Self.expectedBucket)"
         )
         XCTAssertTrue(handoff.readingKey.hasPrefix("efferent-reading-v1."))
-        XCTAssertTrue(handoff.text.contains("Prompt:\nhttps://efferent.example.com/prompts/connect/v1"))
+        XCTAssertTrue(handoff.text.contains("Prompt:\nhttps://efferent.example.com/prompts/connect/v2"))
         XCTAssertTrue(handoff.text.contains("MCP:\n\(handoff.mcpURL.absoluteString)"))
         XCTAssertTrue(handoff.text.contains("Reading key:\n\(handoff.readingKey)"))
         XCTAssertFalse(handoff.mcpURL.absoluteString.contains(handoff.readingKey))
@@ -176,7 +176,7 @@ final class WireTests: XCTestCase {
         XCTAssertNotEqual(first, second)
     }
 
-    func testTheSealedLayoutIsVersionKeyNonceThenCiphertext() throws {
+    func testTheHPKELayoutIsVersionEncapsulatedKeyThenCiphertext() throws {
         let plaintext = Data("0123456789".utf8)
 
         let blob = try SealedBox.seal(
@@ -186,7 +186,7 @@ final class WireTests: XCTestCase {
         )
 
         XCTAssertEqual(blob.first, SealedBox.version)
-        // 1 version + 32 ephemeral key + 12 nonce + plaintext + 16 tag
-        XCTAssertEqual(blob.count, 1 + 32 + 12 + plaintext.count + 16)
+        // 1 version + 32 encapsulated X25519 key + plaintext + 16 tag.
+        XCTAssertEqual(blob.count, 1 + 32 + plaintext.count + 16)
     }
 }
