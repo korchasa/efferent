@@ -1,11 +1,10 @@
 # Connection architecture
 
-Status: the phone-first connection is **live since 2026-08-27 in TestFlight build 9**. That build
-still writes the custom sealed version 1 format. Worker version
-`67bcb0bd-1361-4b00-8eac-a791105561e9`, deployed on 2026-08-28, serves the immutable legacy
-`/prompts/connect/v1` prompt and the new `/prompts/connect/v2` prompt with the RFC 9180 HPKE reader.
-The matching app change is not in TestFlight yet. Build 7 still contains the superseded
-reader-first scan described under [Migration state](#migration-state).
+Status: the phone-first connection with RFC 9180 HPKE is **live since 2026-08-28 in TestFlight
+build 10 and Worker version `67bcb0bd-1361-4b00-8eac-a791105561e9`**. The Worker serves the
+immutable legacy `/prompts/connect/v1` prompt and the new `/prompts/connect/v2` prompt with the
+RFC 9180 HPKE reader. Build 10 migrates phone-owned archives from sealed version 1 as described
+under [Migration state](#migration-state); build 9 remains readable but is superseded.
 
 The first real build-8 handoff was verified end to end on 2026-08-27: the local importer matched the
 reading key to the phone-created bucket, wrote owner-only files, and the local MCP answered
