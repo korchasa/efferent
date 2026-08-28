@@ -19,7 +19,7 @@ async function fixture(): Promise<{ text: string; bucket: string }> {
       "Connect Efferent. Keep the reading key local and never pass it to a remote tool.",
       "",
       "Prompt:",
-      "https://efferent.example/prompts/connect/v2",
+      "https://efferent.example/prompts/connect/v3",
       "",
       "MCP:",
       `https://efferent.example/mcp/b/${bucket}`,

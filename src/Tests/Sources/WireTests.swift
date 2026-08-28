@@ -25,7 +25,7 @@ final class WireTests: XCTestCase {
         )
         let deployment = try Deployment(
             serviceURL: destination.endpoint,
-            promptURL: XCTUnwrap(URL(string: "https://efferent.example.com/prompts/connect/v2")),
+            promptURL: XCTUnwrap(URL(string: "https://efferent.example.com/prompts/connect/v3")),
             mcpBaseURL: XCTUnwrap(URL(string: "https://efferent.example.com/mcp/b"))
         )
         let handoff = ConnectionHandoff(
@@ -39,7 +39,7 @@ final class WireTests: XCTestCase {
             "https://efferent.example.com/mcp/b/\(Self.expectedBucket)"
         )
         XCTAssertTrue(handoff.readingKey.hasPrefix("efferent-reading-v1."))
-        XCTAssertTrue(handoff.text.contains("Prompt:\nhttps://efferent.example.com/prompts/connect/v2"))
+        XCTAssertTrue(handoff.text.contains("Prompt:\nhttps://efferent.example.com/prompts/connect/v3"))
         XCTAssertTrue(handoff.text.contains("MCP:\n\(handoff.mcpURL.absoluteString)"))
         XCTAssertTrue(handoff.text.contains("Reading key:\n\(handoff.readingKey)"))
         XCTAssertFalse(handoff.mcpURL.absoluteString.contains(handoff.readingKey))
