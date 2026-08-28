@@ -417,64 +417,7 @@ Deno.test("a writer that did not create the archive cannot upload into it", asyn
   assertEquals(env.BLOBS.store.has(dayKey(BUCKET, "2026-08-07")), false);
 });
 
-Deno.test("the versioned connection prompt is public and immutable", async () => {
-  const legacy = await worker.fetch(
-    new Request("https://example.invalid/prompts/connect/v1"),
-    bindings(environment()),
-  );
-  const legacyBody = await legacy.text();
-
-  assertEquals(legacy.status, 200);
-  assertEquals(legacy.headers.get("cache-control"), "public, max-age=31536000, immutable");
-  assert(legacyBody.includes("# Connect Efferent v1"));
-  assert(!legacyBody.includes("pyhpke"));
-  const legacyHash = new Uint8Array(
-    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(legacyBody)),
-  );
-  assertEquals(
-    legacyHash.toHex(),
-    "c5ec4a180f2ecf4d8f8294becffaee646f3e740a1a0e4ee323dee5f8527ea9bb",
-    "immutable prompt v1 changed in place",
-  );
-
-  const previous = await worker.fetch(
-    new Request("https://example.invalid/prompts/connect/v2"),
-    bindings(environment()),
-  );
-  const previousBody = await previous.text();
-
-  assertEquals(previous.status, 200);
-  assertEquals(previous.headers.get("cache-control"), "public, max-age=31536000, immutable");
-  const previousHash = new Uint8Array(
-    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(previousBody)),
-  );
-  assertEquals(
-    previousHash.toHex(),
-    "5815d712b9482fc254341fade0e2b2cbb0260ed6431825ec0f76e73f4a973bcd",
-    "immutable prompt v2 changed in place",
-  );
-
-  const current = await worker.fetch(
-    new Request("https://example.invalid/prompts/connect/v3"),
-    bindings(environment()),
-  );
-  const body = await current.text();
-
-  assertEquals(current.status, 200);
-  assertEquals(current.headers.get("cache-control"), "public, max-age=31536000, immutable");
-  assert(body.includes("# Connect Efferent v3"));
-  assert(body.includes("Keep the reading key on this machine"));
-  assert(body.includes("pyhpke==0.6.3"));
-  assert(body.includes("DHKEM_X25519_HKDF_SHA256"));
-  assert(body.includes('INFO = b"efferent/v2 hpke"'));
-  assert(body.includes('"User-Agent": "efferent-local-reader/1.0"'));
-  assert(body.includes("No Efferent repository"));
-  assert(!body.includes("github.com"));
-  assert(!body.includes("deno task"));
-  assert(!body.includes("health_overview"));
-});
-
-Deno.test("the bucket URL exposes only keyless ciphertext MCP tools", async () => {
+Deno.test("the bucket URL exposes setup and keyless ciphertext MCP tools", async () => {
   const response = await worker.fetch(
     new Request(`http://localhost/mcp/b/${BUCKET}`, {
       method: "POST",
@@ -506,12 +449,67 @@ Deno.test("the bucket URL exposes only keyless ciphertext MCP tools", async () =
 
   assertEquals(response.status, 200);
   assertEquals(body.result?.tools?.map((tool) => tool.name), [
+    "setup_guide",
     "archive_status",
     "list_sealed_days",
     "get_sealed_day",
   ]);
   for (const tool of body.result?.tools ?? []) {
     assertEquals(tool.inputSchema.properties?.readingKey, undefined);
+  }
+});
+
+Deno.test("setup_guide returns the complete local reader without receiving a key", async () => {
+  const response = await worker.fetch(
+    new Request(`http://localhost/mcp/b/${BUCKET}`, {
+      method: "POST",
+      headers: {
+        "accept": "application/json",
+        "content-type": "application/json",
+        "host": "localhost",
+        "mcp-method": "tools/call",
+        "mcp-name": "setup_guide",
+        "mcp-protocol-version": "2026-07-28",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "setup_guide",
+          arguments: {},
+          _meta: {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+          },
+        },
+      }),
+    }),
+    bindings(environment()),
+    executionContext(),
+  );
+  const body = await response.json() as {
+    result?: { content?: { type: string; text?: string }[] };
+  };
+  const guide = body.result?.content?.[0]?.text ?? "";
+
+  assertEquals(response.status, 200, JSON.stringify(body));
+  assert(guide.includes("# Set up Efferent"));
+  assert(guide.includes("three fields"));
+  assert(guide.includes("pyhpke==0.6.3"));
+  assert(guide.includes('"User-Agent": "efferent-local-reader/1.0"'));
+  assert(!guide.includes("github.com"));
+  assert(!guide.includes("deno task"));
+  assert(!guide.includes("Prompt:"));
+});
+
+Deno.test("versioned HTTP prompts no longer exist", async () => {
+  for (const version of ["v1", "v2", "v3"]) {
+    const response = await worker.fetch(
+      new Request(`https://example.invalid/prompts/connect/${version}`),
+      bindings(environment()),
+    );
+    assertEquals(response.status, 404);
   }
 });
 

@@ -45,7 +45,7 @@ import {
   type UploadHeader,
   verifyUpload,
 } from "../../protocol/signing.ts";
-import { CONNECT_PROMPT_V1, CONNECT_PROMPT_V2, CONNECT_PROMPT_V3 } from "./connect-prompt.ts";
+import { SETUP_GUIDE } from "./setup-guide.ts";
 
 /** A month of busy days over; well under what a Worker can hold in memory. */
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
@@ -65,13 +65,6 @@ export default {
 
     if (segments.length === 1 && segments[0] === "health") {
       return json({ ok: true });
-    }
-    if (
-      segments.length === 3 && segments[0] === "prompts" && segments[1] === "connect" &&
-      (segments[2] === "v1" || segments[2] === "v2" || segments[2] === "v3") &&
-      request.method === "GET"
-    ) {
-      return connectionPrompt(segments[2]);
     }
     if (segments.length === 3 && segments[0] === "mcp" && segments[1] === "b") {
       const bucket = segments[2];
@@ -105,22 +98,27 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-function connectionPrompt(version: "v1" | "v2" | "v3"): Response {
-  const body = version === "v1"
-    ? CONNECT_PROMPT_V1
-    : version === "v2"
-    ? CONNECT_PROMPT_V2
-    : CONNECT_PROMPT_V3;
-  return new Response(body, {
-    headers: {
-      "content-type": "text/markdown; charset=utf-8",
-      "cache-control": "public, max-age=31536000, immutable",
-    },
-  });
-}
-
 function createRemoteServer(env: Env, bucket: string, origin: string): McpServer {
-  const server = new McpServer({ name: "efferent-sealed-archive", version: "1.0.0" });
+  const server = new McpServer(
+    { name: "efferent-sealed-archive", version: "1.0.0" },
+    {
+      instructions:
+        "Call setup_guide first. Keep the reading key local and never pass it to this server, " +
+        "a remote tool, an HTTP request, a URL or a log. This server returns ciphertext only.",
+    },
+  );
+
+  server.registerTool(
+    "setup_guide",
+    {
+      title: "Set up local Efferent reading",
+      description:
+        "Call this first. Return the complete local-only setup procedure and reference Python " +
+        "reader. It takes no arguments and never receives the reading key.",
+      inputSchema: z.object({}),
+    },
+    () => ({ content: [{ type: "text" as const, text: SETUP_GUIDE }] }),
+  );
 
   server.registerTool(
     "archive_status",
@@ -129,7 +127,7 @@ function createRemoteServer(env: Env, bucket: string, origin: string): McpServer
       description:
         "Return only ciphertext metadata: whether this bucket exists, its day count, byte count, " +
         "and first and last dates. This server never receives a reading key and cannot answer a " +
-        "health question. Decrypt selected days with the reference code in the connection prompt.",
+        "health question. Decrypt selected days with the reference code from setup_guide.",
       inputSchema: z.object({}),
     },
     async () => textTool(await describeData(env, bucket)),

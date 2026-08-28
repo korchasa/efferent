@@ -142,11 +142,9 @@ reachable, or still owned by the same person.
 - **`GET /b/<bucket>/d/<day>`** hands that day back, exactly as it went in.
 - **`GET /b/<bucket>/stats`** says how much is there — days, bytes, first and last — without handing
   any of it over. It is encrypted anyway; this is for deciding whether to fetch.
-- **`GET /prompts/connect/v3`** serves the current public bootstrap instructions, including the
-  complete runnable Python HPKE reference. The immutable `/v1` and `/v2` prompts remain available
-  for old handoffs.
 - **`/mcp/b/<bucket>`** exposes the keyless remote MCP tools for archive metadata and ciphertext
-  links. It never accepts the reading key.
+  links plus `setup_guide`, which returns the complete local Python reference without accepting any
+  arguments. It never accepts the reading key.
 
 The upload time in a listing is what keeps a mirror in step. A day can be rewritten at any moment,
 so "everything after where I stopped" is not a question that can be asked any more. "Everything that
@@ -192,17 +190,18 @@ so a run that stops costs the days it had not reached and nothing else.
 ## Letting an agent ask
 
 Decryption and analysis run on the agent's machine. The connection starts on the phone:
-the phone creates the archive and reading key, then hands an otherwise unprepared agent a public
-prompt URL, a keyless remote MCP URL containing the bucket id, and the reading key as a separate
-local secret. The remote MCP server returns ciphertext only. The complete decision and the boundary
-between phone, Cloudflare and agent are in [`documents/connection.md`](documents/connection.md).
+the phone creates the archive and reading key, then hands an otherwise unprepared agent a keyless
+remote MCP URL containing the bucket id and the reading key as a separate local secret. The short
+instruction tells the agent to call `setup_guide` first. The remote MCP server returns setup text,
+archive metadata and ciphertext only. The complete decision and the boundary between phone,
+Cloudflare and agent are in [`documents/connection.md`](documents/connection.md).
 
 The Worker exposes the keyless remote MCP at `/mcp/b/<bucket-id>`. It offers archive metadata,
-sealed-day listings and ciphertext links. The public `/prompts/connect/v3` response embeds the exact
+sealed-day listings and ciphertext links. Its argument-free `setup_guide` tool returns the exact
 Python source needed to decrypt one selected day locally. The agent saves that source and the
-handoff in private local files, uses the remote MCP to select dates, and runs the reference once per
-date. No repository checkout, Deno installation, second MCP server or gateway restart is part of
-the connection.
+handoff in private local files, uses the remaining remote tools to select dates, and runs the
+reference once per date. No repository checkout, Deno installation, second MCP server, separate
+prompt URL or gateway restart is part of the connection.
 
 **The part that answers runs next to the reading key, and it has to.** The remote MCP endpoint is
 discovery and ciphertext transport. The embedded script validates that the key belongs to the
@@ -223,11 +222,11 @@ public half for sealing days and keeps the private half in its Keychain so the o
 an agent. The bucket is named by the hash of the public key, which is why there are no accounts here:
 knowing where to write follows from knowing which key seals the archive.
 
-The handoff gives the agent a public, versioned prompt URL; a remote MCP URL with the bucket id in
-its path; and the reading private key as a separate field. The key is stored on the agent's machine
-and never sent to the remote MCP endpoint, Cloudflare, an HTTP header or a tool argument. Cloudflare
-can list and return sealed days but cannot open one. The agent fetches ciphertext and decrypts and
-analyses it locally.
+The handoff gives the agent a remote MCP URL with the bucket id in its path and the reading private
+key as a separate field. Its instruction says to call `setup_guide` first. The key is stored on the
+agent's machine and never sent to the remote MCP endpoint, Cloudflare, an HTTP header or a tool
+argument. Cloudflare can return setup text, list and return sealed days, but cannot open one. The
+agent fetches ciphertext and decrypts and analyses it locally.
 
 Encryption says nothing about authorship, so the phone also makes a signing key on first launch. It
 claims the empty archive with that key and signs every later upload; afterwards only that writer is
@@ -289,11 +288,11 @@ deno task check
 - `generate` — regenerate the Xcode project from `Project.swift`.
 - `icons` — re-render the app icons from `documents/icon.svg`.
 - `server:types` — regenerate the Worker bindings and runtime types from `server/wrangler.jsonc`.
-- `server:dev` / `server:deploy` — the bucket service, public prompt and remote MCP, locally or on
+- `server:dev` / `server:deploy` — the bucket service and remote MCP, locally or on
   Cloudflare.
 - `interop` — check that Swift and TypeScript agree on request bytes, HPKE and the phone handoff key.
 - `interop:python` — with PyHPKE installed in the selected Python, prove that the exact source
-  embedded in prompt v3 opens a TypeScript-sealed day. Set `EFFERENT_PYTHON` to that interpreter.
+  returned by `setup_guide` opens a TypeScript-sealed day. Set `EFFERENT_PYTHON` to that interpreter.
 - `efferent` — the local reading side: `connect --handoff <file>`, `ask`, `sync`, `status`, `query`,
   plus `keygen`, `send` and `read` for protocol development. `connect --handoff -` reads the handoff
   from standard input without putting the key in a process argument.
@@ -305,7 +304,7 @@ Trying the phone-first path without a phone:
 deno task server:dev
 ```
 
-Create an archive in the app, share its four-field handoff into a private file, then set a fresh
+Create an archive in the app, share its three-field handoff into a private file, then set a fresh
 `EFFERENT_HOME` and run `deno task efferent connect --handoff <file>`. Delete the temporary file
 after import. `send` still stands in for a phone during protocol development and writes as many days
 in one request as are named.

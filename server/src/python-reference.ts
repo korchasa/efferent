@@ -1,4 +1,4 @@
-/** The immutable local-only RFC 9180 reader embedded in connect prompt v2. */
+/** The local-only RFC 9180 reader embedded in the remote MCP setup guide. */
 export const PYTHON_HPKE_REFERENCE = String.raw`#!/usr/bin/env python3
 import argparse
 import base64
@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 import sys
 from urllib.parse import urlsplit, urlunsplit
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 import zlib
 
 from cryptography.hazmat.primitives import serialization
@@ -75,7 +75,14 @@ def read_day(handoff_path: Path, day: str) -> bytes:
     aad = f"efferent/v1\n{bucket}\n{day}".encode()
 
     # This request contains only the bucket and date. The reading key remains local.
-    with urlopen(f"{endpoint}/b/{bucket}/d/{day}", timeout=30) as response:
+    request = Request(
+        f"{endpoint}/b/{bucket}/d/{day}",
+        headers={
+            "Accept": "application/octet-stream",
+            "User-Agent": "efferent-local-reader/1.0",
+        },
+    )
+    with urlopen(request, timeout=30) as response:
         blob = response.read(16 * 1024 * 1024 + 1)
     if len(blob) > 16 * 1024 * 1024:
         raise ValueError("the sealed day exceeds the 16 MiB protocol limit")
@@ -108,26 +115,3 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 `;
-
-/**
- * The local-only reader embedded in connect prompt v3.
- *
- * Version 2 is immutable, so the Cloudflare-compatible request headers are a
- * versioned source transformation rather than an in-place edit of its prompt.
- */
-export const PYTHON_HPKE_REFERENCE_V3 = PYTHON_HPKE_REFERENCE
-  .replace(
-    "from urllib.request import urlopen",
-    "from urllib.request import Request, urlopen",
-  )
-  .replace(
-    '    with urlopen(f"{endpoint}/b/{bucket}/d/{day}", timeout=30) as response:',
-    String.raw`    request = Request(
-        f"{endpoint}/b/{bucket}/d/{day}",
-        headers={
-            "Accept": "application/octet-stream",
-            "User-Agent": "efferent-local-reader/1.0",
-        },
-    )
-    with urlopen(request, timeout=30) as response:`,
-  );

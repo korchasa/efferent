@@ -5,7 +5,6 @@ import { base64url, fromBase64url } from "../protocol/signing.ts";
 import { HOME, type ReadingKey, write } from "./archive.ts";
 
 export interface ImportedConnection {
-  promptURL: string;
   mcpURL: string;
   endpoint: string;
   bucket: string;
@@ -14,12 +13,11 @@ export interface ImportedConnection {
 
 export async function parseConnectionHandoff(text: string): Promise<ImportedConnection> {
   const instruction = field(text, "Instruction");
-  const prompt = webURL(field(text, "Prompt"), "Prompt");
   const mcp = webURL(field(text, "MCP"), "MCP");
   const encodedKey = field(text, "Reading key");
 
-  if (!instruction.includes("Keep the reading key local")) {
-    throw new Error("the instruction does not say to keep the reading key local");
+  if (!instruction.includes("setup_guide") || !instruction.includes("Keep the reading key local")) {
+    throw new Error("the instruction must call setup_guide and keep the reading key local");
   }
 
   const marker = "/mcp/b/";
@@ -58,7 +56,6 @@ export async function parseConnectionHandoff(text: string): Promise<ImportedConn
   };
 
   return {
-    promptURL: prompt.toString(),
     mcpURL: mcp.toString(),
     endpoint,
     bucket,

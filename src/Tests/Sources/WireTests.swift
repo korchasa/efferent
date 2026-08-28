@@ -18,14 +18,13 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(Destination.bucket(for: Self.readingPublicKey), Self.expectedBucket)
     }
 
-    func testPhoneBuildsTheFourFieldConnectionHandoff() throws {
+    func testPhoneBuildsTheThreeFieldConnectionHandoff() throws {
         let destination = try Destination(
             endpoint: XCTUnwrap(URL(string: "https://efferent.example.com")),
             readingPublicKey: Self.readingPublicKey
         )
         let deployment = try Deployment(
             serviceURL: destination.endpoint,
-            promptURL: XCTUnwrap(URL(string: "https://efferent.example.com/prompts/connect/v3")),
             mcpBaseURL: XCTUnwrap(URL(string: "https://efferent.example.com/mcp/b"))
         )
         let handoff = ConnectionHandoff(
@@ -39,7 +38,8 @@ final class WireTests: XCTestCase {
             "https://efferent.example.com/mcp/b/\(Self.expectedBucket)"
         )
         XCTAssertTrue(handoff.readingKey.hasPrefix("efferent-reading-v1."))
-        XCTAssertTrue(handoff.text.contains("Prompt:\nhttps://efferent.example.com/prompts/connect/v3"))
+        XCTAssertTrue(handoff.text.contains("call setup_guide first"))
+        XCTAssertFalse(handoff.text.contains("Prompt:"))
         XCTAssertTrue(handoff.text.contains("MCP:\n\(handoff.mcpURL.absoluteString)"))
         XCTAssertTrue(handoff.text.contains("Reading key:\n\(handoff.readingKey)"))
         XCTAssertFalse(handoff.mcpURL.absoluteString.contains(handoff.readingKey))
