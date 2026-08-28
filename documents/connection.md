@@ -18,6 +18,24 @@ verified on the phone after installing build 9: the new archive reached 3,912 da
 2015-12-12 through 2026-08-27, a fresh handoff imported locally without exposing its reading key,
 and `health_overview` decrypted the archive locally. The final local mirror matched all 3,912 days.
 
+## Deferred direct installation
+
+Direct installation was investigated on 2026-08-29 as a faster replacement for uploading every
+development build to TestFlight. The owner's iPhone is paired with this Mac, available over the
+local network and has Developer Mode enabled. The Mac has a valid Apple Development identity.
+
+A controlled probe generated the Xcode project and built configuration `Release` for that physical
+device with automatic development signing. The build completed, its signature passed strict
+verification, its development profile included the registered device, and the signed app retained
+both HealthKit and HealthKit background-delivery entitlements. Nothing was installed on the phone.
+
+The automation itself is deferred: there is no direct-install command in either repository. If the
+work resumes, it belongs in the private factory beside the other signing operations, not in this
+app repository. It should build `Release`, select the single paired iPhone with Developer Mode,
+verify the signed entitlements, install with `devicectl` without attaching a debugger, and never
+uninstall the existing app as an error-recovery step. Until then, TestFlight build 11 remains the
+installed build and build 12 remains unuploaded.
+
 ## The boundary
 
 The phone creates the archive. An agent arrives with no prior knowledge of Efferent and receives a
