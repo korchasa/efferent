@@ -142,8 +142,9 @@ reachable, or still owned by the same person.
 - **`GET /b/<bucket>/d/<day>`** hands that day back, exactly as it went in.
 - **`GET /b/<bucket>/stats`** says how much is there — days, bytes, first and last — without handing
   any of it over. It is encrypted anyway; this is for deciding whether to fetch.
-- **`GET /prompts/connect/v2`** serves the current public bootstrap instructions, including a
-  runnable Python HPKE reader. The immutable `/v1` prompt remains available for old handoffs.
+- **`GET /prompts/connect/v3`** serves the current public bootstrap instructions, including the
+  complete runnable Python HPKE reference. The immutable `/v1` and `/v2` prompts remain available
+  for old handoffs.
 - **`/mcp/b/<bucket>`** exposes the keyless remote MCP tools for archive metadata and ciphertext
   links. It never accepts the reading key.
 
@@ -197,59 +198,21 @@ local secret. The remote MCP server returns ciphertext only. The complete decisi
 between phone, Cloudflare and agent are in [`documents/connection.md`](documents/connection.md).
 
 The Worker exposes the keyless remote MCP at `/mcp/b/<bucket-id>`. It offers archive metadata,
-sealed-day listings and ciphertext links. After importing the phone handoff with `efferent connect`,
-the agent exposes the actual health tools from a local MCP server:
+sealed-day listings and ciphertext links. The public `/prompts/connect/v3` response embeds the exact
+Python source needed to decrypt one selected day locally. The agent saves that source and the
+handoff in private local files, uses the remote MCP to select dates, and runs the reference once per
+date. No repository checkout, Deno installation, second MCP server or gateway restart is part of
+the connection.
 
-```bash
-deno task mcp
-```
+**The part that answers runs next to the reading key, and it has to.** The remote MCP endpoint is
+discovery and ciphertext transport. The embedded script validates that the key belongs to the
+bucket, fetches only ciphertext using the bucket id and date, and emits local NDJSON. The agent then
+analyses those records with local code and never sends plaintext or the reading key to a remote
+tool.
 
-It speaks JSON-RPC over stdin and stdout, which is how an agent expects to find it. Registering it
-looks the same in every client that takes the usual configuration file:
-
-```json
-{
-  "mcpServers": {
-    "efferent": {
-      "command": "deno",
-      "args": ["run", "-A", "/path/to/efferent/tools/mcp.ts"],
-      "env": { "EFFERENT_HOME": "/path/to/efferent/.efferent" }
-    }
-  }
-}
-```
-
-`EFFERENT_HOME` is not optional there. It defaults to `.efferent` beside the working directory, and
-an agent starts its servers from wherever it happens to be — so without it the server looks for the
-key somewhere else entirely and says so.
-
-**The part that answers runs here, next to the reading key, and it has to.** The new remote MCP
-endpoint is discovery and ciphertext transport, not a remote version of these health tools. A tool
-that answers anything about Health runs locally; otherwise Cloudflare would need the reading key.
-
-Seven tools, and they answer questions rather than run queries:
-
-- **`health_overview`** — what the archive covers and when each metric starts. A metric begins on the
-  day the device that measures it arrived, which is the first thing anyone needs and the last thing
-  they guess.
-- **`health_daily`** — a day per row: steps, distance, flights, energy, exercise and stand minutes.
-- **`health_statistics`** — one metric grouped by day, week, month or year, as count, median, mean,
-  percentiles and sum. This is what answers a question about a decade without moving a decade.
-- **`health_sleep`** — nights, merged and whole.
-- **`health_workouts`** — what was recorded, by activity rather than by Apple's activity number.
-- **`health_samples`** — the raw readings, capped, for the questions the others do not shape.
-- **`health_sync`** — bring the local copy up to date. The other tools refresh what they need on
-  their own; this is only for making the whole history readable at once.
-
-The shapes are the point. Handing an agent a query language over a million events would make it
-responsible for the traps in this data, and every one of them fails quietly: overlapping stretches of
-sleep added together give nine hours to someone who slept six; hourly and daily totals live in the
-same day, so taking both doubles it; blood oxygen is a fraction with "%" written on it, so 0.97 reads
-as a tenth of what it is. Those are decided in `tools/analysis.ts`, once, with tests that fail if
-anybody undecides them.
-
-An answer that had to come from the local copy because the archive was unreachable says so in the
-answer itself. Health data quietly out of date is worse than an error.
+The TypeScript reader and shaped local health tools remain in this repository for development and
+for people who deliberately choose that interface. They are not a dependency of the public
+connection procedure.
 
 ## Who can read it
 
@@ -330,7 +293,7 @@ deno task check
   Cloudflare.
 - `interop` — check that Swift and TypeScript agree on request bytes, HPKE and the phone handoff key.
 - `interop:python` — with PyHPKE installed in the selected Python, prove that the exact source
-  embedded in prompt v2 opens a TypeScript-sealed day. Set `EFFERENT_PYTHON` to that interpreter.
+  embedded in prompt v3 opens a TypeScript-sealed day. Set `EFFERENT_PYTHON` to that interpreter.
 - `efferent` — the local reading side: `connect --handoff <file>`, `ask`, `sync`, `status`, `query`,
   plus `keygen`, `send` and `read` for protocol development. `connect --handoff -` reads the handoff
   from standard input without putting the key in a process argument.

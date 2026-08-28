@@ -437,21 +437,41 @@ Deno.test("the versioned connection prompt is public and immutable", async () =>
     "immutable prompt v1 changed in place",
   );
 
-  const current = await worker.fetch(
+  const previous = await worker.fetch(
     new Request("https://example.invalid/prompts/connect/v2"),
+    bindings(environment()),
+  );
+  const previousBody = await previous.text();
+
+  assertEquals(previous.status, 200);
+  assertEquals(previous.headers.get("cache-control"), "public, max-age=31536000, immutable");
+  const previousHash = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(previousBody)),
+  );
+  assertEquals(
+    previousHash.toHex(),
+    "5815d712b9482fc254341fade0e2b2cbb0260ed6431825ec0f76e73f4a973bcd",
+    "immutable prompt v2 changed in place",
+  );
+
+  const current = await worker.fetch(
+    new Request("https://example.invalid/prompts/connect/v3"),
     bindings(environment()),
   );
   const body = await current.text();
 
   assertEquals(current.status, 200);
   assertEquals(current.headers.get("cache-control"), "public, max-age=31536000, immutable");
-  assert(body.includes("# Connect Efferent v2"));
+  assert(body.includes("# Connect Efferent v3"));
   assert(body.includes("Keep the reading key on this machine"));
-  assert(body.includes("health_overview"));
   assert(body.includes("pyhpke==0.6.3"));
   assert(body.includes("DHKEM_X25519_HKDF_SHA256"));
   assert(body.includes('INFO = b"efferent/v2 hpke"'));
-  assert(body.includes("urlopen"));
+  assert(body.includes('"User-Agent": "efferent-local-reader/1.0"'));
+  assert(body.includes("No Efferent repository"));
+  assert(!body.includes("github.com"));
+  assert(!body.includes("deno task"));
+  assert(!body.includes("health_overview"));
 });
 
 Deno.test("the bucket URL exposes only keyless ciphertext MCP tools", async () => {

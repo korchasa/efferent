@@ -131,12 +131,13 @@ implementation: after changing HPKE or the prompt, also run `deno task interop:p
   is DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 and ChaCha20-Poly1305. Changing it requires a new
   envelope byte, a new immutable connection prompt URL, Swift/TypeScript/Python interoperability
   proof and a one-time ledger reset that makes the phone replace every known day.
-- The service must never gain a way to read a day. If a feature seems to need one, it belongs in the
-  reading tool instead.
+- The service must never gain a way to read a day. If a feature seems to need one, it belongs in
+  local reading code instead.
 - **Anything that answers a question runs on the agent's machine.** The remote MCP server is only a
-  catalogue and transport for ciphertext. The local reader decrypts and runs `tools/analysis.ts`.
-  If an agent cannot execute local code, it cannot read this archive; do not work around that by
-  sending the reading key to the service.
+  catalogue and transport for ciphertext. The public prompt's Python reference is the complete
+  default connection path; the repository's TypeScript reader is optional. If an agent cannot
+  execute local code, it cannot read this archive; do not work around that by sending the reading
+  key to the service.
 
 ## Answering on behalf of a reader
 
@@ -157,10 +158,10 @@ it exists because the wrong version fails quietly.
   replaced by a smaller one, and nothing in it says so.
 - **An answer from a stale local copy says it is stale.** The archive being unreachable is not a
   reason to fail, and it is not a reason to keep quiet either.
-- **Bootstrap and interpretation have separate homes.** The public, immutable, versioned connection
-  prompt teaches an unprepared agent how to connect the keyless remote MCP endpoint and start the
-  local reader. Tool descriptions still carry everything needed to interpret the health data they
-  return; do not make a tool's correctness depend on remembering the bootstrap prompt.
+- **The public bootstrap is self-contained.** The public, immutable, versioned connection prompt
+  teaches an unprepared agent how to connect the keyless remote MCP endpoint and contains the exact
+  Python source that decrypts selected days. It must never require a repository checkout, Deno, a
+  second MCP server or a gateway restart.
 - **The server's `serve()` call stays the last line of `tools/mcp.ts`.** It never returns, so
   anything below it never initialises; importing the module hides this entirely, and only the test
   that spawns the server as a process catches it.

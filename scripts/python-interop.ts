@@ -1,10 +1,10 @@
-/** Prove that the exact Python source in connect prompt v2 opens a TypeScript HPKE day. */
+/** Prove that the exact Python source in connect prompt v3 opens a TypeScript HPKE day. */
 
 import { bucketId } from "../protocol/ids.ts";
 import { compress } from "../protocol/framing.ts";
 import { base64url } from "../protocol/signing.ts";
 import { associatedData, seal } from "../protocol/sealedbox.ts";
-import { PYTHON_HPKE_REFERENCE } from "../server/src/python-reference.ts";
+import { PYTHON_HPKE_REFERENCE_V3 } from "../server/src/python-reference.ts";
 
 const DAY = "2026-08-28";
 const plaintext = new TextEncoder().encode(
@@ -23,6 +23,12 @@ const blob = await seal(publicRaw, await compress(plaintext), associatedData(buc
 const server = Deno.serve({ hostname: "127.0.0.1", port: 0, onListen() {} }, (request) => {
   const path = new URL(request.url).pathname;
   if (path !== `/b/${bucket}/d/${DAY}`) return new Response("not found", { status: 404 });
+  if (request.headers.get("user-agent") !== "efferent-local-reader/1.0") {
+    return new Response("reader user agent required", { status: 403 });
+  }
+  if (request.headers.get("accept") !== "application/octet-stream") {
+    return new Response("sealed-day media type required", { status: 406 });
+  }
   return new Response(blob.slice().buffer, {
     headers: { "content-type": "application/octet-stream" },
   });
@@ -33,7 +39,7 @@ const root = await Deno.makeTempDir({ prefix: "efferent-python-interop-" });
 try {
   const source = `${root}/efferent_hpke.py`;
   const handoff = `${root}/handoff.txt`;
-  await Deno.writeTextFile(source, PYTHON_HPKE_REFERENCE);
+  await Deno.writeTextFile(source, PYTHON_HPKE_REFERENCE_V3);
   await Deno.writeTextFile(
     handoff,
     [
@@ -41,7 +47,7 @@ try {
       "Connect Efferent. Keep the reading key local and never pass it to a remote tool.",
       "",
       "Prompt:",
-      `http://127.0.0.1:${address.port}/prompts/connect/v2`,
+      `http://127.0.0.1:${address.port}/prompts/connect/v3`,
       "",
       "MCP:",
       `http://127.0.0.1:${address.port}/mcp/b/${bucket}`,

@@ -45,7 +45,7 @@ import {
   type UploadHeader,
   verifyUpload,
 } from "../../protocol/signing.ts";
-import { CONNECT_PROMPT_V1, CONNECT_PROMPT_V2 } from "./connect-prompt.ts";
+import { CONNECT_PROMPT_V1, CONNECT_PROMPT_V2, CONNECT_PROMPT_V3 } from "./connect-prompt.ts";
 
 /** A month of busy days over; well under what a Worker can hold in memory. */
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
@@ -68,7 +68,8 @@ export default {
     }
     if (
       segments.length === 3 && segments[0] === "prompts" && segments[1] === "connect" &&
-      (segments[2] === "v1" || segments[2] === "v2") && request.method === "GET"
+      (segments[2] === "v1" || segments[2] === "v2" || segments[2] === "v3") &&
+      request.method === "GET"
     ) {
       return connectionPrompt(segments[2]);
     }
@@ -104,8 +105,13 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-function connectionPrompt(version: "v1" | "v2"): Response {
-  return new Response(version === "v1" ? CONNECT_PROMPT_V1 : CONNECT_PROMPT_V2, {
+function connectionPrompt(version: "v1" | "v2" | "v3"): Response {
+  const body = version === "v1"
+    ? CONNECT_PROMPT_V1
+    : version === "v2"
+    ? CONNECT_PROMPT_V2
+    : CONNECT_PROMPT_V3;
+  return new Response(body, {
     headers: {
       "content-type": "text/markdown; charset=utf-8",
       "cache-control": "public, max-age=31536000, immutable",
@@ -123,7 +129,7 @@ function createRemoteServer(env: Env, bucket: string, origin: string): McpServer
       description:
         "Return only ciphertext metadata: whether this bucket exists, its day count, byte count, " +
         "and first and last dates. This server never receives a reading key and cannot answer a " +
-        "health question. Use the local Efferent MCP tools after importing the key on your machine.",
+        "health question. Decrypt selected days with the reference code in the connection prompt.",
       inputSchema: z.object({}),
     },
     async () => textTool(await describeData(env, bucket)),
@@ -136,7 +142,7 @@ function createRemoteServer(env: Env, bucket: string, origin: string): McpServer
       description:
         "List ciphertext objects by date, size and upload time. Both date bounds are inclusive. " +
         "Follow next until it is null. No argument accepts a key and no returned value contains " +
-        "plaintext; decrypt downloaded objects only in the local Efferent reader.",
+        "plaintext; decrypt selected objects only with local code on the agent machine.",
       inputSchema: z.object({
         from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
         to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -160,7 +166,7 @@ function createRemoteServer(env: Env, bucket: string, origin: string): McpServer
       title: "Get a sealed day",
       description:
         "Return a link to one encrypted day object. The link carries only the bucket id and date. " +
-        "Download the bytes and pass them to the local Efferent reader; never pass the reading key " +
+        "Download the bytes and pass them to the local reference code; never pass the reading key " +
         "back to this tool or attach it to the download request.",
       inputSchema: z.object({
         day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),

@@ -1,10 +1,9 @@
 # Connection architecture
 
-Status: the phone-first connection with RFC 9180 HPKE is **live since 2026-08-28 in TestFlight
-build 10 and Worker version `67bcb0bd-1361-4b00-8eac-a791105561e9`**. The Worker serves the
-immutable legacy `/prompts/connect/v1` prompt and the new `/prompts/connect/v2` prompt with the
-RFC 9180 HPKE reader. Build 10 migrates phone-owned archives from sealed version 1 as described
-under [Migration state](#migration-state); build 9 remains readable but is superseded.
+Status: the phone-first connection with RFC 9180 HPKE is live in TestFlight build 10. The current
+source prepares build 11 and `/prompts/connect/v3`, whose embedded Python reference is the complete
+local connection path. The immutable `/v1` and `/v2` prompts remain available for handoffs already
+shared. Build 10 introduced the HPKE migration described under [Migration state](#migration-state).
 
 The first real build-8 handoff was verified end to end on 2026-08-27: the local importer matched the
 reading key to the phone-created bucket, wrote owner-only files, and the local MCP answered
@@ -58,7 +57,7 @@ Instruction:
 Connect Efferent. Keep the reading key local and never pass it to a remote tool.
 
 Prompt:
-https://<public-host>/prompts/connect/v2
+https://<public-host>/prompts/connect/v3
 
 MCP:
 https://<mcp-host>/mcp/b/<bucket-id>
@@ -71,20 +70,20 @@ The exact public hosts are deployment configuration, not protocol constants.
 
 The concrete key value is
 `efferent-reading-v1.<raw-private-base64url>.<raw-public-base64url>`. It remains one field. The public
-half lets the local importer derive the bucket and reject a handoff whose key and MCP URL do not
-belong together; the private half is the secret. The importer turns the raw private key into the
-PKCS8 representation used by the existing local reader.
+half lets the local Python reference derive the bucket and reject a handoff whose key and MCP URL do
+not belong together; the private half is the secret.
 
 The bucket id belongs in the MCP URL; it is an address, not a decryption secret. The reading key is
 a separate field. It must never appear in a URL, an HTTP header, a remote MCP tool argument, a log,
-or server-side storage. Once received, the agent moves it into the local reader's secret storage and
-does not repeat it in model-visible output.
+or server-side storage. The agent keeps the handoff in an owner-only local file and does not repeat
+the key in output.
 
-The prompt URL is public, immutable and versioned. Version 2 contains both the normal repository
-connection procedure and a runnable Python reference for the HPKE envelope. It contains no
-user-specific bucket, key or archive data. Version 1 remains byte-for-byte available for handoffs
-already shared; changing an immutable prompt in place would leave different agents following
-different cached instructions under the same URL.
+The prompt URL is public, immutable and versioned. Version 3 contains a runnable Python reference
+for the HPKE envelope and is sufficient by itself: it does not require a repository checkout, Deno,
+a local MCP server or a gateway restart. It contains no user-specific bucket, key or archive data.
+Versions 1 and 2 remain byte-for-byte available for handoffs already shared; changing an immutable
+prompt in place would leave different agents following different cached instructions under the same
+URL.
 
 ## Responsibilities
 
@@ -108,17 +107,18 @@ the health analysis tools.
 
 The implemented remote tools are `archive_status`, `list_sealed_days` and `get_sealed_day`. The last
 returns a resource link to `application/octet-stream`, not the bytes decoded into another shape.
-The current public prompt is served at `/prompts/connect/v2` with an immutable one-year cache
-policy, beside the retained `/v1` prompt. The phone claims an empty archive with a signed
+The current public prompt is served at `/prompts/connect/v3` with an immutable one-year cache
+policy, beside the retained `/v1` and `/v2` prompts. The phone claims an empty archive with a signed
 `PUT /b/<bucket-id>` before any Health day exists.
 
 ### Agent machine
 
 - Read the public connection prompt.
-- Store the reading private key locally.
+- Store the complete handoff in an owner-only local file.
 - Connect to the keyless remote MCP endpoint using the bucket id only.
-- Fetch ciphertext, decrypt it locally and run `tools/analysis.ts` locally.
-- Expose the existing shaped health tools from a local process when the host supports local MCP.
+- Use the remote tools to select dates.
+- Save and run the Python reference embedded in the prompt to fetch and decrypt each selected day.
+- Analyse the resulting NDJSON locally and never send plaintext to a remote tool.
 
 An agent that cannot execute code locally cannot read an Efferent archive under this security model.
 That is a capability boundary, not a reason to give the key to Cloudflare.
@@ -131,10 +131,10 @@ The HPKE info is `efferent/v2 hpke`; the authenticated data remains
 `efferent/v1\n<bucket>\n<day>` so the same bucket and date binding holds across the migration. The
 payload inside is raw-deflate-compressed NDJSON.
 
-CryptoKit implements the sender on iOS. The local TypeScript reader uses `hpke-js`; the exact Python
-source embedded in prompt v2 uses PyHPKE 0.6.3. The three implementations are tested against each
-other. PyHPKE and hpke-js report passing the RFC vectors but have not had a formal independent
-audit; they are local readers and never expand what Cloudflare can see.
+CryptoKit implements the sender on iOS. The optional TypeScript development reader uses `hpke-js`;
+the exact Python source embedded in prompt v3 uses PyHPKE 0.6.3. The three implementations are
+tested against each other. PyHPKE and hpke-js report passing the RFC vectors but have not had a
+formal independent audit; they are local readers and never expand what Cloudflare can see.
 
 The TypeScript reader dispatches on the first byte. It opens both version 1 and version 2, but every
 new seal is version 2. The Python reference intentionally opens only version 2 and fails clearly on

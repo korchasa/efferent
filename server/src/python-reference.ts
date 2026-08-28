@@ -1,4 +1,4 @@
-/** A runnable local-only RFC 9180 reader embedded verbatim in connect prompt v2. */
+/** The immutable local-only RFC 9180 reader embedded in connect prompt v2. */
 export const PYTHON_HPKE_REFERENCE = String.raw`#!/usr/bin/env python3
 import argparse
 import base64
@@ -108,3 +108,26 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 `;
+
+/**
+ * The local-only reader embedded in connect prompt v3.
+ *
+ * Version 2 is immutable, so the Cloudflare-compatible request headers are a
+ * versioned source transformation rather than an in-place edit of its prompt.
+ */
+export const PYTHON_HPKE_REFERENCE_V3 = PYTHON_HPKE_REFERENCE
+  .replace(
+    "from urllib.request import urlopen",
+    "from urllib.request import Request, urlopen",
+  )
+  .replace(
+    '    with urlopen(f"{endpoint}/b/{bucket}/d/{day}", timeout=30) as response:',
+    String.raw`    request = Request(
+        f"{endpoint}/b/{bucket}/d/{day}",
+        headers={
+            "Accept": "application/octet-stream",
+            "User-Agent": "efferent-local-reader/1.0",
+        },
+    )
+    with urlopen(request, timeout=30) as response:`,
+  );
