@@ -16,10 +16,7 @@ async function fixture(): Promise<{ text: string; bucket: string }> {
     bucket,
     text: [
       "Instruction:",
-      "Connect Efferent. Keep the reading key local and never pass it to a remote tool.",
-      "",
-      "Prompt:",
-      "https://efferent.example/prompts/connect/v3",
+      "Connect the supplied Efferent MCP and call setup_guide first. Keep the reading key local and never pass it to a remote tool.",
       "",
       "MCP:",
       `https://efferent.example/mcp/b/${bucket}`,
@@ -69,6 +66,17 @@ Deno.test("a reading key cannot be smuggled into the MCP URL", async () => {
     () => parseConnectionHandoff(wrong),
     Error,
     "without a query",
+  );
+});
+
+Deno.test("the phone instruction must bootstrap through setup_guide", async () => {
+  const { text } = await fixture();
+  const wrong = text.replace("call setup_guide first. ", "");
+
+  await assertRejects(
+    () => parseConnectionHandoff(wrong),
+    Error,
+    "must call setup_guide",
   );
 });
 

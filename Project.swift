@@ -23,7 +23,7 @@ public let project = Project(
             "CODE_SIGN_STYLE": "Automatic",
             "SWIFT_TREAT_WARNINGS_AS_ERRORS": "YES",
             "MARKETING_VERSION": "1.0.0",
-            "CURRENT_PROJECT_VERSION": "11",
+            "CURRENT_PROJECT_VERSION": "12",
         ],
         configurations: [
             .debug(name: "Debug", xcconfig: "Configs/Debug.xcconfig"),
@@ -62,9 +62,6 @@ public let project = Project(
                 // Public deployment configuration. These are addresses, not
                 // credentials; the reading key never enters the plist.
                 "EfferentServiceURL": .string("https://efferent.korchasa.workers.dev"),
-                "EfferentPromptURL": .string(
-                    "https://efferent.korchasa.workers.dev/prompts/connect/v3"
-                ),
                 "EfferentMCPBaseURL": .string(
                     "https://efferent.korchasa.workers.dev/mcp/b"
                 ),

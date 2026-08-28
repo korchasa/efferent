@@ -35,17 +35,15 @@ public struct ReadingIdentity {
 /// Public deployment addresses embedded in one build of the app.
 public struct Deployment: Equatable, Sendable {
     public let serviceURL: URL
-    public let promptURL: URL
     public let mcpBaseURL: URL
 
-    public init(serviceURL: URL, promptURL: URL, mcpBaseURL: URL) throws {
-        for url in [serviceURL, promptURL, mcpBaseURL] {
+    public init(serviceURL: URL, mcpBaseURL: URL) throws {
+        for url in [serviceURL, mcpBaseURL] {
             guard let scheme = url.scheme, scheme == "https" || scheme == "http" else {
                 throw ConnectionError.unsupportedScheme(url.scheme)
             }
         }
         self.serviceURL = serviceURL
-        self.promptURL = promptURL
         self.mcpBaseURL = mcpBaseURL
     }
 
@@ -60,7 +58,6 @@ public struct Deployment: Equatable, Sendable {
         }
         return try Deployment(
             serviceURL: address("EfferentServiceURL"),
-            promptURL: address("EfferentPromptURL"),
             mcpBaseURL: address("EfferentMCPBaseURL")
         )
     }
@@ -73,14 +70,12 @@ public struct Deployment: Equatable, Sendable {
 /// the MCP URL before it overwrites any local state.
 public struct ConnectionHandoff: Equatable, Sendable {
     public static let instruction =
-        "Connect Efferent. Keep the reading key local and never pass it to a remote tool."
+        "Connect the supplied Efferent MCP and call setup_guide first. Keep the reading key local and never pass it to a remote tool."
 
-    public let promptURL: URL
     public let mcpURL: URL
     public let readingKey: String
 
     public init(deployment: Deployment, destination: Destination, privateKey: Data) {
-        promptURL = deployment.promptURL
         mcpURL = deployment.mcpBaseURL.appendingPathComponent(destination.bucket)
         readingKey = [
             "efferent-reading-v1",
@@ -93,9 +88,6 @@ public struct ConnectionHandoff: Equatable, Sendable {
         """
         Instruction:
         \(Self.instruction)
-
-        Prompt:
-        \(promptURL.absoluteString)
 
         MCP:
         \(mcpURL.absoluteString)

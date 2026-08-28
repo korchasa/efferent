@@ -1,10 +1,9 @@
 # Connection architecture
 
-Status: the self-contained phone-first connection is **live since 2026-08-29 in TestFlight build 11
-and Worker version `eaada87a-373d-4add-a8f4-bfb77ccc5b9b`**. New handoffs point at
-`/prompts/connect/v3`, whose embedded Python reference is the complete local connection path. The
-immutable `/v1` and `/v2` prompts remain available for handoffs already shared. Build 10 introduced
-the HPKE migration described under [Migration state](#migration-state).
+Status: the self-contained phone-first connection is live in TestFlight build 11 and Worker version
+`eaada87a-373d-4add-a8f4-bfb77ccc5b9b`. The current source prepares build 12 and moves the complete
+Python reference into the remote MCP's `setup_guide` tool. The versioned HTTP prompt routes are
+removed. Build 10 introduced the HPKE migration described under [Migration state](#migration-state).
 
 The first real build-8 handoff was verified end to end on 2026-08-27: the local importer matched the
 reading key to the phone-created bucket, wrote owner-only files, and the local MCP answered
@@ -28,7 +27,7 @@ This is the whole flow:
 
 ```text
 phone -> sealed days -> R2
-agent -> remote MCP -> listing and sealed days
+agent -> remote MCP -> setup guide, listing and sealed days
 agent + local reading key -> decryption and analysis on the agent's machine
 ```
 
@@ -51,14 +50,12 @@ access, not the ability to forge an upload.
 
 ## What the phone hands to an agent
 
-The phone shares four fields as text:
+The phone shares three fields as text:
 
 ```text
 Instruction:
-Connect Efferent. Keep the reading key local and never pass it to a remote tool.
-
-Prompt:
-https://<public-host>/prompts/connect/v3
+Connect the supplied Efferent MCP and call setup_guide first. Keep the reading key local and never
+pass it to a remote tool.
 
 MCP:
 https://<mcp-host>/mcp/b/<bucket-id>
@@ -79,12 +76,10 @@ a separate field. It must never appear in a URL, an HTTP header, a remote MCP to
 or server-side storage. The agent keeps the handoff in an owner-only local file and does not repeat
 the key in output.
 
-The prompt URL is public, immutable and versioned. Version 3 contains a runnable Python reference
-for the HPKE envelope and is sufficient by itself: it does not require a repository checkout, Deno,
-a local MCP server or a gateway restart. It contains no user-specific bucket, key or archive data.
-Versions 1 and 2 remain byte-for-byte available for handoffs already shared; changing an immutable
-prompt in place would leave different agents following different cached instructions under the same
-URL.
+The setup guide is ordinary MCP tool output. `setup_guide` takes no arguments, so the reading key
+cannot be passed to it, and returns the current runnable Python reference. There is no separate
+prompt URL and no prompt-version compatibility surface. The guide does not require a repository
+checkout, Deno, a local MCP server or a gateway restart.
 
 ## Responsibilities
 
@@ -100,25 +95,25 @@ URL.
 - Address an archive by bucket id.
 - List sealed days and return sealed objects or links to them.
 - Keep the existing upload signature boundary.
-- Never accept a reading key through configuration, authorization, prompts or tool arguments.
+- Never accept a reading key through configuration, authorization or tool arguments.
 - Never return plaintext or answer a question about the contents of a day.
 
 The remote MCP server is discovery and ciphertext transport. It is deliberately unable to perform
 the health analysis tools.
 
-The implemented remote tools are `archive_status`, `list_sealed_days` and `get_sealed_day`. The last
+The implemented remote tools are `setup_guide`, `archive_status`, `list_sealed_days` and
+`get_sealed_day`. The first returns the complete local setup procedure and Python source; the last
 returns a resource link to `application/octet-stream`, not the bytes decoded into another shape.
-The current public prompt is served at `/prompts/connect/v3` with an immutable one-year cache
-policy, beside the retained `/v1` and `/v2` prompts. The phone claims an empty archive with a signed
-`PUT /b/<bucket-id>` before any Health day exists.
+The phone claims an empty archive with a signed `PUT /b/<bucket-id>` before any Health day exists.
 
 ### Agent machine
 
-- Read the public connection prompt.
+- Read the phone instruction.
 - Store the complete handoff in an owner-only local file.
 - Connect to the keyless remote MCP endpoint using the bucket id only.
+- Call `setup_guide` first and save its embedded Python reference locally.
 - Use the remote tools to select dates.
-- Save and run the Python reference embedded in the prompt to fetch and decrypt each selected day.
+- Run the Python reference to fetch and decrypt each selected day.
 - Analyse the resulting NDJSON locally and never send plaintext to a remote tool.
 
 An agent that cannot execute code locally cannot read an Efferent archive under this security model.
@@ -133,7 +128,7 @@ The HPKE info is `efferent/v2 hpke`; the authenticated data remains
 payload inside is raw-deflate-compressed NDJSON.
 
 CryptoKit implements the sender on iOS. The optional TypeScript development reader uses `hpke-js`;
-the exact Python source embedded in prompt v3 uses PyHPKE 0.6.3. The three implementations are
+the exact Python source returned by `setup_guide` uses PyHPKE 0.6.3. The three implementations are
 tested against each other. PyHPKE and hpke-js report passing the RFC vectors but have not had a
 formal independent audit; they are local readers and never expand what Cloudflare can see.
 

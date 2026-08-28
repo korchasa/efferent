@@ -1,10 +1,10 @@
-/** Prove that the exact Python source in connect prompt v3 opens a TypeScript HPKE day. */
+/** Prove that the exact Python source in setup_guide opens a TypeScript HPKE day. */
 
 import { bucketId } from "../protocol/ids.ts";
 import { compress } from "../protocol/framing.ts";
 import { base64url } from "../protocol/signing.ts";
 import { associatedData, seal } from "../protocol/sealedbox.ts";
-import { PYTHON_HPKE_REFERENCE_V3 } from "../server/src/python-reference.ts";
+import { PYTHON_HPKE_REFERENCE } from "../server/src/python-reference.ts";
 
 const DAY = "2026-08-28";
 const plaintext = new TextEncoder().encode(
@@ -39,15 +39,12 @@ const root = await Deno.makeTempDir({ prefix: "efferent-python-interop-" });
 try {
   const source = `${root}/efferent_hpke.py`;
   const handoff = `${root}/handoff.txt`;
-  await Deno.writeTextFile(source, PYTHON_HPKE_REFERENCE_V3);
+  await Deno.writeTextFile(source, PYTHON_HPKE_REFERENCE);
   await Deno.writeTextFile(
     handoff,
     [
       "Instruction:",
-      "Connect Efferent. Keep the reading key local and never pass it to a remote tool.",
-      "",
-      "Prompt:",
-      `http://127.0.0.1:${address.port}/prompts/connect/v3`,
+      "Connect the supplied Efferent MCP and call setup_guide first. Keep the reading key local and never pass it to a remote tool.",
       "",
       "MCP:",
       `http://127.0.0.1:${address.port}/mcp/b/${bucket}`,
@@ -76,7 +73,7 @@ try {
   ) {
     throw new Error("Python reference changed the plaintext");
   }
-  console.log(`Python opened the exact HPKE prompt fixture: ${plaintext.length} bytes`);
+  console.log(`Python opened the exact HPKE setup-guide fixture: ${plaintext.length} bytes`);
 } finally {
   await server.shutdown();
   await Deno.remove(root, { recursive: true });

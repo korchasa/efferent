@@ -7,7 +7,7 @@ import Foundation
 /// discards the sender's ephemeral key inside CryptoKit, so the phone cannot
 /// open either the new ciphertext or anything it uploaded before. This must
 /// stay byte-compatible with `protocol/sealedbox.ts` and the Python reference
-/// in the versioned connection prompt.
+/// in the MCP setup guide.
 public enum SealedBox {
     public static let version: UInt8 = 2
 

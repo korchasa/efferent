@@ -93,7 +93,6 @@ final class InteropTests: XCTestCase {
         )
         let deployment = try Deployment(
             serviceURL: destination.endpoint,
-            promptURL: XCTUnwrap(URL(string: "https://efferent.example/prompts/connect/v3")),
             mcpBaseURL: XCTUnwrap(URL(string: "https://efferent.example/mcp/b"))
         )
         let handoff = ConnectionHandoff(

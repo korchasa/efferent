@@ -100,9 +100,9 @@ This file is the rulebook.
 `protocol/` is the single description of what goes on the wire, and the Swift side has to match it
 byte for byte. When you change anything there, change both sides in the same commit and run
 `deno task interop` — Swift agreeing with Swift proves only that Swift is consistent, and that check
-is the only thing that catches drift before a phone does. The public Python reference is a third
-implementation: after changing HPKE or the prompt, also run `deno task interop:python` with PyHPKE
-0.6.3 in the selected local interpreter.
+is the only thing that catches drift before a phone does. The MCP setup guide's Python reference is
+a third implementation: after changing HPKE or the guide, also run `deno task interop:python` with
+PyHPKE 0.6.3 in the selected local interpreter.
 
 - **The phone creates the archive and the reading key; the agent only connects.** The phone derives
   the bucket id from the reading public key, seals days with that public half, and keeps the private
@@ -129,15 +129,15 @@ implementation: after changing HPKE or the prompt, also run `deno task interop:p
   works one way tends to be discovered on a phone.
 - **New days are RFC 9180 HPKE version 2; old days remain readable as version 1.** The current suite
   is DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 and ChaCha20-Poly1305. Changing it requires a new
-  envelope byte, a new immutable connection prompt URL, Swift/TypeScript/Python interoperability
-  proof and a one-time ledger reset that makes the phone replace every known day.
+  envelope byte, an updated MCP setup guide, Swift/TypeScript/Python interoperability proof and a
+  one-time ledger reset that makes the phone replace every known day.
 - The service must never gain a way to read a day. If a feature seems to need one, it belongs in
   local reading code instead.
 - **Anything that answers a question runs on the agent's machine.** The remote MCP server is only a
-  catalogue and transport for ciphertext. The public prompt's Python reference is the complete
-  default connection path; the repository's TypeScript reader is optional. If an agent cannot
-  execute local code, it cannot read this archive; do not work around that by sending the reading
-  key to the service.
+  catalogue and transport for ciphertext. The remote MCP's `setup_guide` Python reference is the
+  complete default connection path; the repository's TypeScript reader is optional. If an agent
+  cannot execute local code, it cannot read this archive; do not work around that by sending the
+  reading key to the service.
 
 ## Answering on behalf of a reader
 
@@ -158,9 +158,9 @@ it exists because the wrong version fails quietly.
   replaced by a smaller one, and nothing in it says so.
 - **An answer from a stale local copy says it is stale.** The archive being unreachable is not a
   reason to fail, and it is not a reason to keep quiet either.
-- **The public bootstrap is self-contained.** The public, immutable, versioned connection prompt
-  teaches an unprepared agent how to connect the keyless remote MCP endpoint and contains the exact
-  Python source that decrypts selected days. It must never require a repository checkout, Deno, a
+- **The MCP bootstrap is self-contained.** The phone instruction tells an unprepared agent to call
+  the argument-free `setup_guide` tool first. That tool contains the exact Python source that
+  decrypts selected days. It must never require a separate prompt URL, repository checkout, Deno, a
   second MCP server or a gateway restart.
 - **The server's `serve()` call stays the last line of `tools/mcp.ts`.** It never returns, so
   anything below it never initialises; importing the module hides this entirely, and only the test
