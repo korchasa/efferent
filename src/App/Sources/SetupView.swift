@@ -3,19 +3,21 @@ import UIKit
 
 /// First launch, from an empty app to one that is sending.
 ///
-/// Four screens and a pause: what this is, what it reads, how far back to go,
-/// and which agent may read it afterwards. The archive is made in the pause —
-/// that is not a decision anybody can make wrongly, so it is told rather than
-/// asked.
+/// Three screens and a pause: what this is, what it reads, and how far back to
+/// go. The archive is made in the pause — that is not a decision anybody can
+/// make wrongly, so it is told rather than asked. Handing the archive to an
+/// agent is not part of the walkthrough: it needs a decision about somebody
+/// else's software, it can be done at any time, and a setup that ends on it
+/// leaves the phone waiting on a step nobody has to take today. The everyday
+/// screen asks for it instead, and keeps asking until it is done.
 struct SetupView: View {
     @EnvironmentObject private var services: Services
 
-    private enum Step { case welcome, access, range, preparing, connect }
+    private enum Step { case welcome, access, range, preparing }
 
     @State private var step: Step = .welcome
     @State private var earliest: String?
     @State private var probed = false
-    @State private var sharing = false
     @State private var selection: RangeSelection = .everything
 
     var body: some View {
@@ -25,7 +27,6 @@ struct SetupView: View {
             case .access: access
             case .range: range
             case .preparing: preparing
-            case .connect: connect
             }
         }
         .pageBackground()
@@ -70,7 +71,7 @@ struct SetupView: View {
             VStack(spacing: 10) {
                 Button("Begin setup") { step = .access }
                     .buttonStyle(ProminentButton())
-                Legend("4 steps · about 2 minutes", size: 9)
+                Legend("3 steps · about a minute", size: 9)
                     .frame(maxWidth: .infinity)
             }
         }
@@ -190,12 +191,15 @@ struct SetupView: View {
                     step = .preparing
                     Task {
                         await services.prepareArchive(startingFrom: startDay)
-                        // Only an archive that exists earns the next screen.
-                        // Walking on regardless is how somebody ends up being
-                        // offered a setup text for an archive that was never
-                        // made — a screen with a dash where the address goes
-                        // and no way to tell that anything went wrong.
-                        step = services.destination == nil ? .range : .connect
+                        // Only an archive that exists ends the walkthrough.
+                        // Walking on regardless would drop somebody onto the
+                        // everyday screen with nowhere to send and no way to
+                        // tell that anything went wrong.
+                        if services.destination == nil {
+                            step = .range
+                        } else {
+                            services.finishSetup()
+                        }
                     }
                 }
                 .buttonStyle(ProminentButton())
@@ -262,75 +266,6 @@ struct SetupView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - Which agent may read it
-
-    /// What the phone hands over is one text, exactly as the app composes it.
-    /// Split into fields on screen, it invites pasting a part of it — and a part
-    /// of it opens nothing.
-    private var connect: some View {
-        stepLayout(
-            step: 4,
-            back: nil,
-            title: "Connect your agent",
-            blurb: "Paste this whole text to your agent — ChatGPT, Claude, Gemini, whatever you "
-                + "use. The text says what to do, where the archive is and what opens it."
-        ) {
-            VStack(alignment: .leading, spacing: 14) {
-                handoffPanel
-                HStack(spacing: 8) {
-                    Image(systemName: "lock")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Palette.legend)
-                    Legend("give it only to an agent you trust", size: 9)
-                }
-            }
-        } actions: {
-            VStack(spacing: 6) {
-                if let handoff = services.connectionHandoff {
-                    Button("Share this text") { sharing = true }
-                        .buttonStyle(ProminentButton())
-                        .sheet(isPresented: $sharing) {
-                            ShareSheet(text: handoff.text) { shared in
-                                sharing = false
-                                // Only a share that went through ends the step.
-                                // A cancelled one leaves the screen exactly as
-                                // it was, because nothing happened.
-                                if shared {
-                                    services.finishSetup()
-                                }
-                            }
-                        }
-                    Button("Copy instead") {
-                        UIPasteboard.general.string = handoff.text
-                        services.finishSetup()
-                    }
-                    .buttonStyle(QuietButton())
-                }
-                // The way past this screen for somebody who does not want to
-                // hand the key to anything yet. The text stays in the menu on
-                // the everyday screen.
-                Button("Later") { services.finishSetup() }
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundStyle(Palette.legend)
-            }
-        }
-    }
-
-    private var handoffPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Legend("agent connection", size: 9, colour: Color(white: 0.51))
-            Text(services.connectionHandoff?.text ?? "—")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.white)
-                .lineSpacing(4)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Palette.ink, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
-    }
-
     // MARK: - The shape every step shares
 
     private func stepHeader(step: Int, back: (() -> Void)?) -> some View {
@@ -346,7 +281,7 @@ struct SetupView: View {
                 .font(.system(size: 14, weight: .medium, design: .monospaced))
                 .foregroundStyle(Palette.ink)
             Spacer(minLength: 8)
-            StepBar(step: step, total: 4)
+            StepBar(step: step, total: 3)
         }
         .frame(height: 34)
     }
@@ -395,26 +330,4 @@ struct SetupView: View {
                 .padding(.bottom, 24)
         }
     }
-}
-
-/// The system share sheet, with the one thing `ShareLink` cannot give: an
-/// answer.
-///
-/// The setup's last step is over the moment the text has gone somewhere, and
-/// `ShareLink` never says whether it did — so the screen stayed put behind a
-/// finished share, with a button reading "Later" at somebody who had just done
-/// it. `UIActivityViewController` reports the outcome, and that is the whole
-/// reason for the detour through UIKit.
-struct ShareSheet: UIViewControllerRepresentable {
-    let text: String
-    /// `true` when an activity finished, `false` when the sheet was dismissed.
-    let done: (Bool) -> Void
-
-    func makeUIViewController(context _: Context) -> UIActivityViewController {
-        let controller = UIActivityViewController(activityItems: [text], applicationActivities: nil)
-        controller.completionWithItemsHandler = { _, completed, _, _ in done(completed) }
-        return controller
-    }
-
-    func updateUIViewController(_: UIActivityViewController, context _: Context) {}
 }

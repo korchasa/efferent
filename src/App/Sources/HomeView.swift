@@ -15,6 +15,8 @@ import UIKit
 struct HomeView: View {
     @EnvironmentObject private var services: Services
 
+    @State private var connecting = false
+    @State private var sharing = false
     @State private var reachingBack = false
     @State private var explainingAccess = false
     @State private var confirmingDisconnect = false
@@ -31,6 +33,10 @@ struct HomeView: View {
                 header
                 Spacer(minLength: 0)
                 footer
+                connect
+                    .padding(.top, 14)
+                keys
+                    .padding(.top, 16)
             }
 
             instrument.overlay(alignment: .top) { caption.offset(y: 286) }
@@ -39,6 +45,16 @@ struct HomeView: View {
         .padding(.bottom, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .pageBackground()
+        .onAppear {
+            // Straight out of the walkthrough, the one thing left to do is hand
+            // the archive over, so the screen opens on it rather than leaving a
+            // lit key for somebody to find. Once only: an archive nobody chose
+            // to connect is a decision, not an oversight to nag about.
+            if services.offerHandoff {
+                services.handoffOffered()
+                connecting = true
+            }
+        }
         .task {
             // The counters move on the upload session's own queue while this
             // screen is open, most visibly during a first export. Cancelled
@@ -48,6 +64,7 @@ struct HomeView: View {
                 try? await Task.sleep(for: .seconds(2))
             }
         }
+        .sheet(isPresented: $connecting) { connectSheet }
         .sheet(isPresented: $reachingBack) { reachBackSheet }
         .sheet(isPresented: $explainingAccess) { accessSheet }
         .alert("Disconnect?", isPresented: $confirmingDisconnect) {
@@ -74,51 +91,126 @@ struct HomeView: View {
                 .frame(width: 7, height: 7)
             Legend(state.status, size: 9)
             Spacer(minLength: 8)
-            menu
+            if let reached = services.stats?.backfillReached {
+                Legend("since \(spoken(day: reached))", size: 9)
+            }
         }
         .frame(height: 34)
     }
 
-    /// The rare things, behind one key. Everything a person does daily is the
-    /// dial itself, so this holds what is done once a year: reaching further
-    /// back, the Health switches, the setup text, and giving the archive up.
-    private var menu: some View {
-        Menu {
-            Button {
-                reachSelection = .everything
-                reachingBack = true
-            } label: {
-                Label("Reach further back…", systemImage: "clock.arrow.circlepath")
-            }
-            Button {
-                explainingAccess = true
-            } label: {
-                Label("Health access", systemImage: "heart.text.square")
-            }
-            if let handoff = services.connectionHandoff {
-                ShareLink(item: handoff.text) {
-                    Label("Connect an agent", systemImage: "square.and.arrow.up")
+    /// The rare things, printed on keys along the bottom: reaching further
+    /// back, the Health switches, and giving the archive up. Everything a
+    /// person does daily is the dial itself, so nothing else belongs here.
+    private var keys: some View {
+        VStack(spacing: 0) {
+            RowDivider()
+            HStack(alignment: .top, spacing: 8) {
+                KeyButton(label: "reach back", symbol: "clock.arrow.circlepath") {
+                    reachSelection = .everything
+                    reachingBack = true
+                }
+                KeyButton(label: "health access", symbol: "heart.text.square") {
+                    explainingAccess = true
+                }
+                KeyButton(label: "disconnect", symbol: "power") {
+                    confirmingDisconnect = true
                 }
             }
-            Divider()
-            Button(role: .destructive) {
-                confirmingDisconnect = true
-            } label: {
-                Label("Disconnect this phone", systemImage: "xmark.circle")
-            }
-        } label: {
-            HStack(spacing: 3) {
-                ForEach(0 ..< 3, id: \.self) { _ in
-                    Circle().fill(Palette.ink).frame(width: 3, height: 3)
-                }
-            }
-            .frame(width: 34, height: 34)
-            .background(Palette.panel, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .strokeBorder(Palette.hairline, lineWidth: 1)
-            )
+            .padding(.top, 14)
         }
+    }
+
+    // MARK: - Handing the archive to an agent
+
+    /// The one thing on this screen that is not the dial. An archive nobody can
+    /// read is the state this app is least useful in, so the way out of it is a
+    /// key of its own rather than a line in the menu — lit until the text has
+    /// gone somewhere, printed afterwards.
+    private var connect: some View {
+        Button("Connect agent") { connecting = true }
+            .buttonStyle(ConnectButton(lit: !services.agentConnected))
+    }
+
+    private var connectSheet: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("Paste this whole text to your agent — ChatGPT, Claude, Gemini, "
+                            + "whatever you use. The text says what to do, where the archive is "
+                            + "and what opens it.")
+                            .font(.system(size: 15))
+                            .foregroundStyle(Palette.body)
+                            .fixedSize(horizontal: false, vertical: true)
+                        handoffPanel
+                        HStack(spacing: 8) {
+                            Image(systemName: "lock")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(Palette.legend)
+                            Legend("give it only to an agent you trust", size: 9)
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 8)
+                    .padding(.bottom, 18)
+                }
+                .scrollBounceBehavior(.basedOnSize)
+
+                if let handoff = services.connectionHandoff {
+                    VStack(spacing: 6) {
+                        Button("Share this text") { sharing = true }
+                            .buttonStyle(ProminentButton())
+                            .sheet(isPresented: $sharing) {
+                                ShareSheet(text: handoff.text) { shared in
+                                    sharing = false
+                                    // Only a share that went through counts as
+                                    // handed over. A cancelled one changes
+                                    // nothing, because nothing happened.
+                                    if shared {
+                                        services.markAgentConnected()
+                                        connecting = false
+                                    }
+                                }
+                            }
+                        Button("Copy instead") {
+                            UIPasteboard.general.string = handoff.text
+                            services.markAgentConnected()
+                            connecting = false
+                        }
+                        .buttonStyle(QuietButton())
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 20)
+                }
+            }
+            .pageBackground()
+            .navigationTitle("Connect your agent")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { connecting = false }
+                        .foregroundStyle(Palette.accent)
+                }
+            }
+        }
+    }
+
+    /// What the phone hands over is one text, exactly as the app composes it.
+    /// Split into fields on screen, it invites pasting a part of it — and a
+    /// part of it opens nothing.
+    private var handoffPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Legend("agent connection", size: 9, colour: Color(white: 0.51))
+            Text(services.connectionHandoff?.text ?? "—")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.white)
+                .lineSpacing(4)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.ink, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
     }
 
     // MARK: - The dial and its face
@@ -202,19 +294,11 @@ struct HomeView: View {
     }
 
     private var footer: some View {
-        VStack(spacing: 0) {
-            RowDivider()
-            HStack(spacing: 8) {
-                Image(systemName: "lock")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Palette.legend)
-                Legend("encrypted on device", size: 9)
-                Spacer(minLength: 8)
-                if let reached = services.stats?.backfillReached {
-                    Legend("since \(spoken(day: reached))", size: 9)
-                }
-            }
-            .padding(.top, 12)
+        HStack(spacing: 8) {
+            Image(systemName: "lock")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Palette.legend)
+            Legend("encrypted on device", size: 9)
         }
     }
 
@@ -444,4 +528,25 @@ struct SyncState {
         let days = Int(Date().timeIntervalSince(last) / (24 * 60 * 60))
         return days >= 3 ? days : nil
     }
+}
+
+/// The system share sheet, with the one thing `ShareLink` cannot give: an
+/// answer.
+///
+/// Whether the setup text actually went somewhere is what dims the key on the
+/// everyday screen, and `ShareLink` never reports the outcome — so a cancelled
+/// share would count as a handed-over archive. `UIActivityViewController` says
+/// what happened, and that is the whole reason for the detour through UIKit.
+struct ShareSheet: UIViewControllerRepresentable {
+    let text: String
+    /// `true` when an activity finished, `false` when the sheet was dismissed.
+    let done: (Bool) -> Void
+
+    func makeUIViewController(context _: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+        controller.completionWithItemsHandler = { _, completed, _, _ in done(completed) }
+        return controller
+    }
+
+    func updateUIViewController(_: UIActivityViewController, context _: Context) {}
 }

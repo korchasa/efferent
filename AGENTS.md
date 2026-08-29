@@ -240,19 +240,28 @@ supporting dark mode is worse than not supporting it: the system turns its own t
 it on a light background, which is a screen of invisible words. Every colour lives in `Design.swift`
 as a literal, and nothing may read a system colour that changes underneath it.
 
-The setup's last step ends itself when the setup text has actually gone somewhere, which is why it
-shares through `UIActivityViewController` and not `ShareLink`: `ShareLink` never reports the outcome,
-so the screen used to sit there behind a finished share with a button reading "Later" at somebody who
-had just done it. A cancelled share changes nothing, and a step whose archive was never created does
-not walk on — a setup text for an archive that does not exist is a screen nobody can act on.
+The walkthrough is three steps and ends at the archive: what this is, what it reads, how far back to
+go. Handing the archive to an agent is not one of them. It needs a decision about somebody else's
+software, it can be done any day, and a walkthrough that ends on it leaves the phone waiting on a
+step nobody has to take today. A step whose archive was never created does not walk on either — an
+everyday screen with nowhere to send is a screen nobody can act on.
+
+The everyday screen asks for the handoff instead, and keeps asking. It opens the sheet by itself once,
+straight out of the walkthrough, and afterwards the key stays lit: an archive nobody can read is the
+state this app is least useful in. Once the text has gone somewhere the same key is still there,
+printed rather than lit — doing it again is a thing you may do, not a thing left undone. What counts
+as gone is a share that reported completion or a copy to the clipboard, which is why the sheet shares
+through `UIActivityViewController` and not `ShareLink`: `ShareLink` never reports the outcome, so a
+cancelled share would count as an archive handed over.
 
 The setup text goes to an agent — ChatGPT, Claude, Gemini — and it goes whole, as one block of text
 in the shape the app composes it. Presented as three fields it invites pasting one of them, and a
 part of it opens nothing: the instruction says what to do first, the address says where the archive
 is, and only the key opens it.
 
-Anything that is needed but rarely — Health access, reaching further back, connecting an agent,
-disconnecting — lives in the one menu in the corner. Nothing may claim that Health access was
+Anything that is needed but rarely — reaching further back, Health access, disconnecting — is a
+labelled key in the row along the bottom. Three keys, printed with their names: a menu hides how many
+there are, and a key can be read without being pressed. Nothing may claim that Health access was
 granted: Health does not say, so that screen offers where to look instead of an answer it cannot
 have.
 
