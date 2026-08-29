@@ -189,18 +189,7 @@ struct SetupView: View {
                 }
                 Button("Start syncing") {
                     step = .preparing
-                    Task {
-                        await services.prepareArchive(startingFrom: startDay)
-                        // Only an archive that exists ends the walkthrough.
-                        // Walking on regardless would drop somebody onto the
-                        // everyday screen with nowhere to send and no way to
-                        // tell that anything went wrong.
-                        if services.destination == nil {
-                            step = .range
-                        } else {
-                            services.finishSetup()
-                        }
-                    }
+                    Task { await services.prepareArchive(startingFrom: startDay) }
                 }
                 .buttonStyle(ProminentButton())
             }
@@ -247,23 +236,86 @@ struct SetupView: View {
             + "Wi-Fi and power. After that Efferent sends only new days."
     }
 
-    // MARK: - Making the archive
+    // MARK: - Making the archive, and watching it start
 
+    /// Sending begins here, and the walkthrough waits.
+    ///
+    /// The pass runs whether or not anybody is looking, so this screen could
+    /// simply move on — but the one thing a person wants after pressing "start"
+    /// is to see that it started. It shows the archive being made, then the
+    /// count going up, and moves on only when they say so. An archive that
+    /// could not be made stops here too: the everyday screen with nowhere to
+    /// send is a screen nobody can act on.
     private var preparing: some View {
-        VStack(spacing: 28) {
-            Dial(progress: 0.18, mood: .alight, side: 92)
-            VStack(spacing: 8) {
-                Text("Creating your archive")
-                    .font(.system(size: 24, weight: .semibold))
-                    .foregroundStyle(Palette.ink)
-                Text("Making the key that opens it, and claiming a place to keep the sealed days.")
-                    .font(.system(size: 15))
-                    .foregroundStyle(Palette.body)
-                    .multilineTextAlignment(.center)
+        VStack(spacing: 0) {
+            stepHeader(step: 3, back: nil)
+                .padding(.horizontal, 20)
+
+            Spacer(minLength: 0)
+
+            VStack(spacing: 24) {
+                Dial(progress: archiveReady ? services.syncProgress : 0.08, mood: .alight, side: 132)
+                VStack(spacing: 10) {
+                    Text(archiveReady ? "Sending has started" : "Creating your archive")
+                        .font(.system(size: 26, weight: .semibold))
+                        .foregroundStyle(Palette.ink)
+                    Text(preparingBlurb)
+                        .font(.system(size: 15))
+                        .foregroundStyle(Palette.body)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if archiveReady {
+                    Legend(queueLine, size: 11, colour: Palette.ink)
+                }
+            }
+            .padding(.horizontal, 28)
+
+            Spacer(minLength: 0)
+
+            VStack(spacing: 12) {
+                if let problem = services.lastError {
+                    Text(problem)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Palette.alarm)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if archiveReady {
+                    Button("Continue") { services.finishSetup() }
+                        .buttonStyle(ProminentButton())
+                } else if services.lastError != nil {
+                    Button("Try again") { step = .range }
+                        .buttonStyle(ProminentButton())
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 24)
+        }
+        .task {
+            // The count moves on the upload session's own queue, and watching
+            // it move is the whole point of this screen.
+            while !Task.isCancelled {
+                services.refreshStats()
+                try? await Task.sleep(for: .seconds(1))
             }
         }
-        .padding(.horizontal, 40)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var archiveReady: Bool {
+        services.destination != nil
+    }
+
+    private var preparingBlurb: String {
+        archiveReady
+            ? "Efferent is sending in the background. You can leave this screen — it carries on "
+            + "without you, on Wi-Fi and power."
+            : "Making the key that opens it, and claiming a place to keep the sealed days."
+    }
+
+    private var queueLine: String {
+        guard let pending = services.stats?.pendingDays, pending > 0 else { return "nothing waiting" }
+        return "\(grouped(pending)) days waiting"
     }
 
     // MARK: - The shape every step shares

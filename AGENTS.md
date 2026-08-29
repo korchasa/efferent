@@ -255,13 +255,18 @@ share that reported completion or a copy to the clipboard, which is why the shee
 `UIActivityViewController` and not `ShareLink`: `ShareLink` never reports the outcome, so a cancelled
 share would count as an archive handed over.
 
-"Start syncing" starts it. The walkthrough clears any pause before it queues the history, because a
-pause left over from an earlier life of this install swallows the whole first export in silence — the
-days are marked, nothing goes, and the only clue is a play symbol on a dial nobody has learnt to read
-yet.
+"Start syncing" starts it, and the walkthrough then waits. Sending runs whether or not anybody is
+looking, so the last screen could simply move on — but the one thing a person wants after pressing
+"start" is to see that it started, so the screen shows the archive being made and then the count, and
+goes no further until they say Continue. An archive that could not be made stops there too, with the
+error and a way back: an everyday screen with nowhere to send is a screen nobody can act on. The
+walkthrough also clears any pause before it queues the history, because a pause left over from an
+earlier life of this install swallows the whole first export in silence — the days are marked,
+nothing goes, and the only clue is a play symbol on a dial nobody has learnt to read yet.
 
-The setup text goes to an agent — ChatGPT, Claude, Gemini — and it goes whole, as one block of text
-in the shape the app composes it. Presented as three fields it invites pasting one of them, and a
+On screen the setup text is called the prompt, because that is what a person does with it: they send
+it to an agent — ChatGPT, Claude, Gemini — and it goes whole, as one block of text in the shape the
+app composes it. Presented as three fields it invites pasting one of them, and a
 part of it opens nothing: the instruction says what to do first, the address says where the archive
 is, and only the key opens it.
 
