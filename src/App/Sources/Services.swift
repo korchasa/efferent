@@ -316,6 +316,9 @@ final class Services: ObservableObject {
     /// starts again from the beginning rather than dropping the person into a
     /// screen about an archive that was never made.
     func finishSetup() {
+        // Nothing to finish without an archive: the everyday screen is about
+        // one, and would have nothing to say and nowhere to send.
+        guard destination != nil else { return }
         UserDefaults.standard.set(true, forKey: Self.setupKey)
         setupComplete = true
     }
