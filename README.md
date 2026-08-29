@@ -298,6 +298,11 @@ deno task check
   from standard input without putting the key in a process argument.
 - `mcp` — the same archive as an MCP server on stdio, for an agent to read.
 
+`EFFERENT_HOME` is not optional in practice. Unset, the reading side falls back to `.efferent`
+relative to the working directory, so a stale profile left in a checkout answers as if it were the
+live one — with a retired bucket's days, a plausible day count and no error at all. Name the profile
+directory on every run, and keep retired profiles under a name the fallback cannot reach.
+
 Trying the phone-first path without a phone:
 
 ```bash
