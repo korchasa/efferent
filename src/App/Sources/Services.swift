@@ -357,7 +357,9 @@ final class Services: ObservableObject {
         // an earlier life of this install would otherwise swallow the whole
         // first export in silence, and the uploader's own stop flag with it.
         // Nobody should have to find the button on the dial to begin.
-        if paused { setPaused(false) }
+        if paused {
+            setPaused(false)
+        }
         await exportHistory(from: day)
     }
 

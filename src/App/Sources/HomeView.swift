@@ -144,9 +144,9 @@ struct HomeView: View {
             VStack(spacing: 0) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        Text("Paste this whole text to your agent — ChatGPT, Claude, Gemini, "
-                            + "whatever you use. The text says what to do, where the archive is "
-                            + "and what opens it.")
+                        Text("Send this whole prompt to your agent — ChatGPT, Claude, Gemini, "
+                            + "whatever you use. The prompt says what to do, where the archive "
+                            + "is and what opens it.")
                             .font(.system(size: 15))
                             .foregroundStyle(Palette.body)
                             .fixedSize(horizontal: false, vertical: true)
@@ -155,7 +155,7 @@ struct HomeView: View {
                             Image(systemName: "lock")
                                 .font(.system(size: 10, weight: .semibold))
                                 .foregroundStyle(Palette.legend)
-                            Legend("give it only to an agent you trust", size: 9)
+                            Legend("send this prompt only to an agent you trust", size: 9)
                         }
                     }
                     .padding(.horizontal, 20)
@@ -166,7 +166,7 @@ struct HomeView: View {
 
                 if let handoff = services.connectionHandoff {
                     VStack(spacing: 6) {
-                        Button("Share this text") { sharing = true }
+                        Button("Send the prompt to your agent") { sharing = true }
                             .buttonStyle(ProminentButton())
                             .sheet(isPresented: $sharing) {
                                 ShareSheet(text: handoff.text) { shared in
@@ -180,7 +180,7 @@ struct HomeView: View {
                                     }
                                 }
                             }
-                        Button("Copy instead") {
+                        Button("Copy the prompt") {
                             UIPasteboard.general.string = handoff.text
                             services.markAgentConnected()
                             connecting = false
@@ -203,12 +203,12 @@ struct HomeView: View {
         }
     }
 
-    /// What the phone hands over is one text, exactly as the app composes it.
+    /// What the phone hands over is one prompt, exactly as the app composes it.
     /// Split into fields on screen, it invites pasting a part of it — and a
     /// part of it opens nothing.
     private var handoffPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Legend("agent connection", size: 9, colour: Color(white: 0.51))
+            Legend("prompt for your agent", size: 9, colour: Color(white: 0.51))
             Text(services.connectionHandoff?.text ?? "—")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.white)
