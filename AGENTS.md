@@ -247,12 +247,18 @@ step nobody has to take today. A step whose archive was never created does not w
 everyday screen with nowhere to send is a screen nobody can act on.
 
 The everyday screen asks for the handoff instead, and keeps asking. It opens the sheet by itself once,
-straight out of the walkthrough, and afterwards the key stays lit: an archive nobody can read is the
-state this app is least useful in. Once the text has gone somewhere the same key is still there,
-printed rather than lit — doing it again is a thing you may do, not a thing left undone. What counts
-as gone is a share that reported completion or a copy to the clipboard, which is why the sheet shares
-through `UIActivityViewController` and not `ShareLink`: `ShareLink` never reports the outcome, so a
-cancelled share would count as an archive handed over.
+straight out of the walkthrough, and while the text has never gone anywhere the ask is a lit key
+across the whole shell: an archive nobody can read is the state this app is least useful in. Once the
+text has gone somewhere that invitation is not news, so it steps down into the row of keys along the
+bottom — doing it again is a thing you may do, not a thing left undone. What counts as gone is a
+share that reported completion or a copy to the clipboard, which is why the sheet shares through
+`UIActivityViewController` and not `ShareLink`: `ShareLink` never reports the outcome, so a cancelled
+share would count as an archive handed over.
+
+"Start syncing" starts it. The walkthrough clears any pause before it queues the history, because a
+pause left over from an earlier life of this install swallows the whole first export in silence — the
+days are marked, nothing goes, and the only clue is a play symbol on a dial nobody has learnt to read
+yet.
 
 The setup text goes to an agent — ChatGPT, Claude, Gemini — and it goes whole, as one block of text
 in the shape the app composes it. Presented as three fields it invites pasting one of them, and a

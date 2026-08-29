@@ -353,6 +353,11 @@ final class Services: ObservableObject {
     func prepareArchive(startingFrom day: String?) async {
         if destination == nil { await createArchive() }
         guard destination != nil else { return }
+        // The button says "start syncing", so it starts: a pause left over from
+        // an earlier life of this install would otherwise swallow the whole
+        // first export in silence, and the uploader's own stop flag with it.
+        // Nobody should have to find the button on the dial to begin.
+        if paused { setPaused(false) }
         await exportHistory(from: day)
     }
 

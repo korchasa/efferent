@@ -33,8 +33,10 @@ struct HomeView: View {
                 header
                 Spacer(minLength: 0)
                 footer
-                connect
-                    .padding(.top, 14)
+                if !services.agentConnected {
+                    connect
+                        .padding(.top, 14)
+                }
                 keys
                     .padding(.top, 16)
             }
@@ -112,6 +114,11 @@ struct HomeView: View {
                 KeyButton(label: "health access", symbol: "heart.text.square") {
                     explainingAccess = true
                 }
+                if services.agentConnected {
+                    KeyButton(label: "connect agent", symbol: "square.and.arrow.up") {
+                        connecting = true
+                    }
+                }
                 KeyButton(label: "disconnect", symbol: "power") {
                     confirmingDisconnect = true
                 }
@@ -122,13 +129,14 @@ struct HomeView: View {
 
     // MARK: - Handing the archive to an agent
 
-    /// The one thing on this screen that is not the dial. An archive nobody can
-    /// read is the state this app is least useful in, so the way out of it is a
-    /// key of its own rather than a line in the menu — lit until the text has
-    /// gone somewhere, printed afterwards.
+    /// An archive nobody can read is the state this app is least useful in, so
+    /// while the setup text has never gone anywhere the way out of it is a key
+    /// across the whole shell, lit. Once it has gone, that key is not news any
+    /// more: it steps down into the row with the other things you may do again
+    /// one day, and the screen goes back to being the dial.
     private var connect: some View {
         Button("Connect agent") { connecting = true }
-            .buttonStyle(ConnectButton(lit: !services.agentConnected))
+            .buttonStyle(ConnectButton())
     }
 
     private var connectSheet: some View {
