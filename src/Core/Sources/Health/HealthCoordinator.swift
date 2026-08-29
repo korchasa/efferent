@@ -25,7 +25,7 @@ public final class HealthCoordinator {
     private let reader: HealthReader
     private let healthStore: HKHealthStore
     private let calendar: Calendar
-    private let log = Logger(subsystem: "dev.korchasa.efferent", category: "health")
+    private let log = Log(category: "health")
     private var observers: [HKObserverQuery] = []
 
     /// Called after days are marked as needing to go.
@@ -87,23 +87,28 @@ public final class HealthCoordinator {
     ) {
         healthStore.enableBackgroundDelivery(for: type, frequency: frequency) { [log] enabled, error in
             if let error {
-                log.error("background delivery for \(type.identifier, privacy: .public) refused: \(error.localizedDescription, privacy: .public)")
+                log.error("background delivery for \(type.identifier) refused: \(error.localizedDescription)")
             } else if !enabled {
-                log.error("background delivery for \(type.identifier, privacy: .public) was not enabled")
+                log.error("background delivery for \(type.identifier) was not enabled")
             }
         }
 
         let query = HKObserverQuery(sampleType: type, predicate: nil) { [log, weak self] _, completion, error in
             if let error {
-                log.error("observer for \(type.identifier, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+                log.error("observer for \(type.identifier) failed: \(error.localizedDescription)")
                 completion()
                 return
             }
             Task {
+                // Written down even when nothing changed. "Health woke the app
+                // and there was nothing new" and "Health never woke the app"
+                // look identical from the outside, and they are the two halves
+                // of every strange sending problem.
+                log.info("Health woke us about \(type.identifier)")
                 do {
                     try await work()
                 } catch {
-                    log.error("collection failed: \(String(describing: error), privacy: .public)")
+                    log.error("collection failed: \(String(describing: error))")
                 }
                 // Always, and before anything slow. HealthKit treats a missing
                 // acknowledgement as a failed delivery, retries, and after a few
@@ -147,7 +152,7 @@ public final class HealthCoordinator {
             )
         )
         if marked > 0 {
-            log.info("\(metric.name, privacy: .public): \(marked) days to re-read")
+            log.info("\(metric.name): \(marked) days to re-read")
         }
         return marked
     }
@@ -211,7 +216,7 @@ public final class HealthCoordinator {
         let marked = try store.markDirty(days)
         let reached = try store.backfillReached()
         try store.recordBackfillReached(min(reached ?? first, first))
-        log.info("history back to \(first, privacy: .public): \(marked) days to send")
+        log.info("history back to \(first): \(marked) days to send")
         onNewData?()
         return marked
     }
@@ -249,7 +254,8 @@ public final class HealthCoordinator {
 
         let marked = try store.markMissing(missing)
         log.error(
-            "archive is missing \(missing.count) of \(expected.count) days (\(missing.first ?? "", privacy: .public) … \(missing.last ?? "", privacy: .public)); \(marked) owed again"
+            "archive is missing \(missing.count) of \(expected.count) days "
+                + "(\(missing.first ?? "") … \(missing.last ?? "")); \(marked) owed again"
         )
         onNewData?()
         return marked

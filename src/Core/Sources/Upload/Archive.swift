@@ -35,7 +35,7 @@ public struct Archive {
 
     private let destination: Destination
     private let fetch: (URL) async throws -> Data
-    private let log = Logger(subsystem: "dev.korchasa.efferent", category: "archive")
+    private let log = Log(category: "archive")
 
     public init(destination: Destination, fetch: @escaping (URL) async throws -> Data) {
         self.destination = destination

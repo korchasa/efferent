@@ -16,6 +16,8 @@ struct EfferentApp: App {
 final class AppDelegate: NSObject, UIApplicationDelegate {
     static let refreshTaskIdentifier = "dev.korchasa.efferent.refresh"
 
+    private let log = Log(category: "app")
+
     func application(
         _: UIApplication,
         didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]? = nil
@@ -24,6 +26,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // background with no interface; an observer registered from a `Task` or
         // when a view appears would not exist during that launch, and the
         // delivery that caused it would be lost.
+        log.info("launched \(UIApplication.shared.applicationState == .background ? "in the background" : "by hand")")
         Services.shared.health.startObserving()
 
         BGTaskScheduler.shared.register(
@@ -44,8 +47,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // it was gone. Re-create the session so its delegate can be called, and
         // hold on to the handler until it says it has reported everything —
         // returning early makes the system count the app as unresponsive.
+        log.info("relaunched to finish transfers started earlier")
         Task { @MainActor in
             guard let uploader = Services.shared.uploaderIfPaired() else {
+                self.log.error("relaunched for transfers, but this phone has no archive to send to")
                 completionHandler()
                 return
             }
@@ -69,12 +74,17 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 
     private func handleRefresh(_ task: BGTask) {
         scheduleRefresh() // always re-arm first; an early return would end the chain
+        log.info("the system ran the catch-up task")
 
         let work = Task { @MainActor in
             await Services.shared.refreshNow()
             await Services.shared.sendNow()
+            self.log.info("catch-up task finished")
             task.setTaskCompleted(success: true)
         }
-        task.expirationHandler = { work.cancel() }
+        task.expirationHandler = {
+            self.log.error("the system took the catch-up task back before it finished")
+            work.cancel()
+        }
     }
 }
