@@ -16,7 +16,7 @@ final class Services: ObservableObject {
     let readingIdentity = ReadingIdentity()
     let deployment: Deployment?
     let deploymentError: String?
-    private let log = Logger(subsystem: "dev.korchasa.efferent", category: "services")
+    private let log = Log(category: "services")
 
     @Published private(set) var stats: Stats?
     @Published private(set) var lastError: String?
@@ -123,7 +123,7 @@ final class Services: ObservableObject {
             lastError = nil
             refreshConnectionHandoff()
             refreshStats()
-            log.info("created bucket \(created.bucket, privacy: .public)")
+            log.info("created bucket \(created.bucket)")
             await sendNow()
         } catch {
             lastError = "Could not create the archive. (\(error))"
@@ -152,6 +152,7 @@ final class Services: ObservableObject {
     /// Forget where to send and both phone-owned keys. A phone-owned archive
     /// becomes unreadable if its reading key was not already moved elsewhere.
     func disconnect() {
+        log.info("disconnected: this phone forgets the archive and its keys")
         UserDefaults.standard.removeObject(forKey: Self.destinationKey)
         // Back to the beginning, not to an everyday screen with nowhere to
         // send: without an archive there is nothing for that screen to show.
@@ -298,16 +299,21 @@ final class Services: ObservableObject {
         // The one place a pause is honoured. Every route into sending — the
         // button, the Health observer, the background refresh — arrives here,
         // so a single guard covers all of them and none of them can forget.
-        guard !paused else { return }
+        guard !paused else {
+            log.info("asked to send while held back; nothing was sent")
+            return
+        }
         guard let uploader = uploaderIfPaired() else {
+            log.error("asked to send with no archive to send to")
             lastError = "No archive has been created yet."
             return
         }
         do {
             let outcome = try await uploader.send()
-            log.info("send outcome: \(String(describing: outcome), privacy: .public)")
+            log.info("send outcome: \(String(describing: outcome))")
             lastError = nil
         } catch {
+            log.error("send failed: \(String(describing: error))")
             lastError = String(describing: error)
         }
         refreshStats()
@@ -351,7 +357,9 @@ final class Services: ObservableObject {
     /// not a question either — it happens once the person has said how far back
     /// to go, and the screen that shows it is telling, not asking.
     func prepareArchive(startingFrom day: String?) async {
-        if destination == nil { await createArchive() }
+        if destination == nil {
+            await createArchive()
+        }
         guard destination != nil else { return }
         // The button says "start syncing", so it starts: a pause left over from
         // an earlier life of this install would otherwise swallow the whole
@@ -395,6 +403,7 @@ final class Services: ObservableObject {
     func setPaused(_ value: Bool) {
         guard paused != value else { return }
         paused = value
+        log.info(value ? "sending held back by hand" : "sending let go again")
         UserDefaults.standard.set(value, forKey: Self.pausedKey)
         // The uploader stops itself, cancelling what is in the air. Without
         // this the button changed only what the next tap on it would do: every

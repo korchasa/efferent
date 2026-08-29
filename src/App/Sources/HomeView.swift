@@ -14,6 +14,7 @@ import UIKit
 /// face rather than a nought.
 struct HomeView: View {
     @EnvironmentObject private var services: Services
+    @Environment(\.scenePhase) private var phase
 
     @State private var connecting = false
     @State private var sharing = false
@@ -23,6 +24,11 @@ struct HomeView: View {
     @State private var earliest: String?
     @State private var probed = false
     @State private var reachSelection: RangeSelection = .everything
+    @State private var readingDiary = false
+    /// Taps on the name so far. The diary is not a feature of this app, so it
+    /// has no key of its own: five taps on the name open it, and putting the
+    /// app down forgets them.
+    @State private var brandTaps = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -55,6 +61,11 @@ struct HomeView: View {
         .padding(.bottom, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .pageBackground()
+        .onChange(of: phase) { _, new in
+            if new != .active {
+                brandTaps = 0
+            }
+        }
         .onAppear {
             // Straight out of the walkthrough, the one thing left to do is hand
             // the archive over, so the screen opens on it rather than leaving a
@@ -74,6 +85,7 @@ struct HomeView: View {
                 try? await Task.sleep(for: .seconds(2))
             }
         }
+        .sheet(isPresented: $readingDiary) { JournalView() }
         .sheet(isPresented: $connecting) { connectSheet }
         .sheet(isPresented: $reachingBack) { reachBackSheet }
         .sheet(isPresented: $explainingAccess) { accessSheet }
@@ -96,6 +108,7 @@ struct HomeView: View {
             Text("efferent")
                 .font(.system(size: 14, weight: .medium, design: .monospaced))
                 .foregroundStyle(Palette.ink)
+                .onTapGesture { countBrandTap() }
             Circle()
                 .fill(state.mood == .alight ? Palette.accent : Palette.legend)
                 .frame(width: 7, height: 7)
@@ -106,6 +119,17 @@ struct HomeView: View {
             }
         }
         .frame(height: 34)
+    }
+
+    /// Five taps on the name open the diary, counted within one sitting: the
+    /// count starts again whenever the app is put down, so a stray tap today
+    /// and another next week never add up to it. No stopwatch, because a rule
+    /// that also asks a person to be quick is a rule they cannot be told.
+    private func countBrandTap() {
+        brandTaps += 1
+        guard brandTaps >= 5 else { return }
+        brandTaps = 0
+        readingDiary = true
     }
 
     /// The rare things, printed on keys along the bottom: reaching further

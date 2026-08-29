@@ -116,7 +116,7 @@ public final class Uploader: NSObject {
     /// because working out which days *should* exist is a question for Health,
     /// and this type knows only about sending.
     private let reconcile: () async throws -> Int
-    private let log = Logger(subsystem: "dev.korchasa.efferent", category: "upload")
+    private let log = Log(category: "upload")
 
     /// Touched only on `delegateQueue`, which is serial.
     private var inFlightBatches: [Int: [Sending]] = [:]
@@ -275,7 +275,7 @@ public final class Uploader: NSObject {
                 log.error("the archive was missing \(owed) days; they go again now")
             }
         } catch {
-            log.error("could not check the archive: \(String(describing: error), privacy: .public)")
+            log.error("could not check the archive: \(String(describing: error))")
         }
     }
 
@@ -318,6 +318,10 @@ public final class Uploader: NSObject {
         inFlightBatches[task.taskIdentifier] = batch
         stagedFiles[task.taskIdentifier] = file
         task.resume()
+        log.info(
+            "request \(task.taskIdentifier) handed to the system: \(batch.count) days "
+                + "(\(batch.first?.day ?? "") … \(batch.last?.day ?? "")), \(body.count) bytes"
+        )
     }
 
     private func claimPass() -> Bool {
@@ -393,13 +397,13 @@ extension Uploader: URLSessionDataDelegate {
         if let error {
             // Nothing to undo: the days are still marked, so they go again next
             // pass. Retrying here would only fight the system's own backoff.
-            log.error("upload failed: \(error.localizedDescription, privacy: .public)")
+            log.error("request \(task.taskIdentifier) failed: \(error.localizedDescription)")
             return
         }
         guard let response = task.response as? HTTPURLResponse else { return }
         guard (200 ..< 300).contains(response.statusCode) else {
             let detail = String(data: body, encoding: .utf8) ?? ""
-            log.error("service answered \(response.statusCode): \(detail, privacy: .public)")
+            log.error("request \(task.taskIdentifier) answered \(response.statusCode): \(detail)")
             return
         }
         guard let carried else { return }
@@ -410,14 +414,19 @@ extension Uploader: URLSessionDataDelegate {
         // notice — the day would simply never be sent again.
         guard let accepted = try? JSONDecoder().decode(Accepted.self, from: body) else {
             log.error(
-                "could not read what the service stored: \(String(data: body, encoding: .utf8) ?? "", privacy: .public)"
+                "could not read what the service stored: \(String(data: body, encoding: .utf8) ?? "")"
             )
             return
         }
         let stored = Set(accepted.stored)
         for entry in carried where !stored.contains(entry.day) {
-            log.error("the service did not store \(entry.day, privacy: .public); it stays marked")
+            log.error("the service did not store \(entry.day); it stays marked")
         }
+
+        log.info(
+            "request \(task.taskIdentifier) answered \(response.statusCode): the archive "
+                + "took \(stored.count) of \(carried.count) days"
+        )
 
         for entry in carried where stored.contains(entry.day) {
             do {
@@ -425,7 +434,7 @@ extension Uploader: URLSessionDataDelegate {
                     day: entry.day, digest: entry.digest, sampleIdentifiers: entry.identifiers
                 )
             } catch {
-                log.error("could not record \(entry.day, privacy: .public): \(String(describing: error), privacy: .public)")
+                log.error("could not record \(entry.day): \(String(describing: error))")
             }
         }
         didStoreDay?()
