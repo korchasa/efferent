@@ -25,23 +25,31 @@ struct HomeView: View {
     @State private var reachSelection: RangeSelection = .everything
 
     var body: some View {
-        ZStack {
-            // The brand row and the footer are pinned around the outside rather
-            // than stacked with the dial, so nothing above or below it can push
-            // the dial off centre as its own text grows.
-            VStack(spacing: 0) {
-                header
-                Spacer(minLength: 0)
-                footer
-                if !services.agentConnected {
-                    connect
-                        .padding(.top, 14)
-                }
-                keys
-                    .padding(.top, 16)
-            }
+        VStack(spacing: 0) {
+            header
 
+            Spacer(minLength: 0)
+
+            // The dial is centred on the room left between the brand row and
+            // the block of keys, not on the glass: the bottom of this screen
+            // carries far more than the top, so a dial centred on the screen
+            // sits visibly low in the space it actually occupies.
+            //
+            // The line under it still hangs off the dial as an overlay, which
+            // takes no room in this stack. A caption that runs to three lines
+            // therefore grows down into the gap below instead of shoving the
+            // dial upwards, and the dial holds still while the words change.
             instrument.overlay(alignment: .top) { caption.offset(y: 286) }
+
+            Spacer(minLength: 0)
+
+            footer
+            if !services.agentConnected {
+                connect
+                    .padding(.top, 14)
+            }
+            keys
+                .padding(.top, 16)
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 24)
