@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// First launch, from an empty app to one that is sending.
 ///
@@ -13,6 +14,7 @@ struct SetupView: View {
     @State private var step: Step = .welcome
     @State private var earliest: String?
     @State private var probed = false
+    @State private var sharing = false
     @State private var selection: RangeSelection = .everything
 
     var body: some View {
@@ -189,11 +191,23 @@ struct SetupView: View {
                     .foregroundStyle(Palette.tertiary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
+                if let problem = services.lastError {
+                    Text(problem)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Palette.alarm)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Button("Start syncing") {
                     step = .preparing
                     Task {
                         await services.prepareArchive(startingFrom: startDay)
-                        step = .connect
+                        // Only an archive that exists earns the next screen.
+                        // Walking on regardless is how somebody ends up being
+                        // offered a setup text for an archive that was never
+                        // made — a screen with a dash where the address goes
+                        // and no way to tell that anything went wrong.
+                        step = services.destination == nil ? .range : .connect
                     }
                 }
                 .buttonStyle(ProminentButton())
@@ -259,7 +273,8 @@ struct SetupView: View {
                     .padding(18)
                 }
                 Text("Share it into a private note or file, never into a chat with a service. "
-                    + "Efferent keeps syncing whether or not an assistant is connected.")
+                    + "Efferent keeps syncing whether or not an assistant is connected, and the "
+                    + "text stays in the menu on the next screen.")
                     .font(.system(size: 13))
                     .foregroundStyle(Palette.tertiary)
                     .padding(.horizontal, 6)
@@ -268,10 +283,19 @@ struct SetupView: View {
         } actions: {
             VStack(spacing: 14) {
                 if let handoff = services.connectionHandoff {
-                    ShareLink(item: handoff.text) {
+                    Button { sharing = true } label: {
                         Label("Share setup text", systemImage: "square.and.arrow.up")
                     }
                     .buttonStyle(ProminentButton())
+                    .sheet(isPresented: $sharing) {
+                        ShareSheet(text: handoff.text) { shared in
+                            sharing = false
+                            // Only a share that went through ends the step. A
+                            // cancelled one leaves the screen exactly as it
+                            // was, because nothing happened.
+                            if shared { services.finishSetup() }
+                        }
+                    }
                 }
                 Button("Later") { services.finishSetup() }
                     .font(.system(size: 17))
@@ -349,4 +373,26 @@ struct SetupView: View {
                 .padding(.bottom, 20)
         }
     }
+}
+
+/// The system share sheet, with the one thing `ShareLink` cannot give: an
+/// answer.
+///
+/// The setup's last step is over the moment the text has gone somewhere, and
+/// `ShareLink` never says whether it did — so the screen stayed put behind a
+/// finished share, with a button reading "Later" at somebody who had just done
+/// it. `UIActivityViewController` reports the outcome, and that is the whole
+/// reason for the detour through UIKit.
+struct ShareSheet: UIViewControllerRepresentable {
+    let text: String
+    /// `true` when an activity finished, `false` when the sheet was dismissed.
+    let done: (Bool) -> Void
+
+    func makeUIViewController(context _: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+        controller.completionWithItemsHandler = { _, completed, _, _ in done(completed) }
+        return controller
+    }
+
+    func updateUIViewController(_: UIActivityViewController, context _: Context) {}
 }

@@ -219,6 +219,12 @@ supporting dark mode is worse than not supporting it: the system turns its own t
 it on a light background, which is a screen of invisible words. Every colour lives in `Design.swift`
 as a literal, and nothing may read a system colour that changes underneath it.
 
+The setup's last step ends itself when the setup text has actually gone somewhere, which is why it
+shares through `UIActivityViewController` and not `ShareLink`: `ShareLink` never reports the outcome,
+so the screen used to sit there behind a finished share with a button reading "Later" at somebody who
+had just done it. A cancelled share changes nothing, and a step whose archive was never created does
+not walk on — a setup text for an archive that does not exist is a screen nobody can act on.
+
 Anything that is needed but rarely — Health access, reaching further back, sharing the setup text,
 disconnecting — lives in the one menu in the corner. Nothing may claim that Health access was
 granted: Health does not say, so that screen offers where to look instead of an answer it cannot
