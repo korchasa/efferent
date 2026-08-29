@@ -53,4 +53,7 @@ description = "the local mirror: decrypted days and the reading key itself"
 # Never committed — it is in .gitignore — but a scan of the working directory
 # walks it anyway, and a hundred false hits on health data teaches people to
 # ignore the scanner. Keeping this here makes a local `gitleaks dir .` usable.
-paths = ['''^\.efferent/''', '''^\.wrangler/''', '''^server/\.wrangler/''']
+# `.efferent*` rather than `.efferent/`: a retired profile is kept under a
+# name the working-directory fallback cannot reach, and it holds the same
+# decrypted days as the live one. `.gitignore` matches the same shape.
+paths = ['''^\.efferent''', '''^\.wrangler/''', '''^server/\.wrangler/''']
