@@ -2,10 +2,10 @@
 
 Status: Worker version `efdea416-98ad-4119-aa31-c7c295bd6aaf` is live and exposes the complete
 Python reference through the remote MCP's `setup_guide` tool. The versioned HTTP prompt routes are
-removed. App build 12 contains the matching three-field handoff but is not yet uploaded to
-TestFlight; build 11 still emits the retired prompt URL and must not be used to create a new
-connection during this cutover. Build 10 introduced the HPKE migration described under
-[Migration state](#migration-state).
+removed. App build 12, which carries the matching three-field handoff, is the build installed on the
+owner's phone since 2026-08-29 — installed directly rather than through TestFlight, so the cutover
+is complete and the retired prompt URL is no longer emitted anywhere. Build 10 introduced the HPKE
+migration described under [Migration state](#migration-state).
 
 The first real build-8 handoff was verified end to end on 2026-08-27: the local importer matched the
 reading key to the phone-created bucket, wrote owner-only files, and the local MCP answered
@@ -18,23 +18,23 @@ verified on the phone after installing build 9: the new archive reached 3,912 da
 2015-12-12 through 2026-08-27, a fresh handoff imported locally without exposing its reading key,
 and `health_overview` decrypted the archive locally. The final local mirror matched all 3,912 days.
 
-## Deferred direct installation
+## How a build reaches the phone
 
-Direct installation was investigated on 2026-08-29 as a faster replacement for uploading every
-development build to TestFlight. The owner's iPhone is paired with this Mac, available over the
-local network and has Developer Mode enabled. The Mac has a valid Apple Development identity.
+Since 2026-08-29 a development build is installed straight onto the owner's paired iPhone over the
+local network, and TestFlight is used only when a build has to reach somebody else. Signing,
+packaging and installation all happen outside this repository, which keeps producing nothing but an
+unsigned archive. The whole path takes about two minutes, against an upload plus Apple's processing.
 
-A controlled probe generated the Xcode project and built configuration `Release` for that physical
-device with automatic development signing. The build completed, its signature passed strict
-verification, its development profile included the registered device, and the signed app retained
-both HealthKit and HealthKit background-delivery entitlements. Nothing was installed on the phone.
+Build 12 went onto the phone this way and was never uploaded. iOS accepted the development signature
+over the TestFlight installation as an ordinary update: the data container survived intact, keeping
+the 80.8 MB day database, the reading key and therefore the archive the phone already owns. That is
+the property that matters here — a reinstall would take the reading key with it and orphan the
+archive — so an install that fails is reported as it is and the app is never uninstalled to retry.
 
-The automation itself is deferred: there is no direct-install command in either repository. If the
-work resumes, it belongs in the private factory beside the other signing operations, not in this
-app repository. It should build `Release`, select the single paired iPhone with Developer Mode,
-verify the signed entitlements, install with `devicectl` without attaching a debugger, and never
-uninstall the existing app as an error-recovery step. Until then, TestFlight build 11 remains the
-installed build and build 12 remains unuploaded.
+A second copy of the app can also be installed beside the first, under its own bundle identifier and
+its own name. It gets a container of its own, so it creates its own reading key and its own archive
+and starts the Health history from nothing. Useful for testing a change against a clean state, but
+it is not the way to check a change against the real archive.
 
 ## The boundary
 
