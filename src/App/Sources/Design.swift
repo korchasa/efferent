@@ -221,3 +221,16 @@ func spoken(day: String) -> String {
                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     return "\(number) \(months[month - 1]) \(parts[0])"
 }
+
+/// A stretch of time as a person would say it: "about 6 min", "about 2 h 10
+/// min". Rounded on purpose — a measured rate does not deserve seconds, and a
+/// countdown that ticks invites watching something that needs nobody watching.
+func spoken(duration: TimeInterval) -> String {
+    let minutes = Int((duration / 60).rounded())
+    if minutes < 1 { return "less than a minute" }
+    if minutes < 60 { return "about \(minutes) min" }
+    let hours = minutes / 60
+    let rest = minutes % 60
+    if rest < 5 { return "about \(hours) h" }
+    return "about \(hours) h \(rest) min"
+}

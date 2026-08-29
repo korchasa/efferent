@@ -82,6 +82,9 @@ public final class Uploader: NSObject {
         /// archive already holds, and cost nothing.
         case scheduled(days: Int, unchanged: Int)
         case alreadyInFlight
+        /// Held back on purpose. The days stay marked, so nothing is lost by
+        /// stopping and nothing has to be rebuilt to start again.
+        case stopped
     }
 
     public enum UploadError: Error, Equatable {
@@ -137,6 +140,15 @@ public final class Uploader: NSObject {
     private let passLock = NSLock()
     private var passRunning = false
 
+    /// Sending held back on purpose.
+    ///
+    /// It lives here rather than only in the app because the chain restarts
+    /// itself: every finished batch starts the next pass from the session's own
+    /// delegate, far away from whatever the person last pressed. A flag checked
+    /// only on the way in would stop the button and let the chain run on.
+    private let stopLock = NSLock()
+    private var stopped = false
+
     private lazy var session: URLSession = {
         let config = URLSessionConfiguration.background(withIdentifier: configuration.sessionIdentifier)
         // The data is small and the point of the app is freshness, so let it go
@@ -166,8 +178,30 @@ public final class Uploader: NSObject {
         super.init()
     }
 
+    /// Hold sending back, or let it go again.
+    ///
+    /// Stopping also cancels what is already in the air, because a request the
+    /// system has taken finishes on its own otherwise — a stop that let a month
+    /// keep landing is not a stop. A cancelled batch fails like any other: its
+    /// days are still marked and go again on the next pass.
+    public func setStopped(_ value: Bool) {
+        stopLock.lock()
+        let changed = stopped != value
+        stopped = value
+        stopLock.unlock()
+        guard changed, value else { return }
+        session.getAllTasks { tasks in tasks.forEach { $0.cancel() } }
+    }
+
+    private var isStopped: Bool {
+        stopLock.lock()
+        defer { stopLock.unlock() }
+        return stopped
+    }
+
     /// Build the next days and hand the changed ones to the system.
     public func send() async throws -> Outcome {
+        guard !isStopped else { return .stopped }
         guard claimPass() else { return .alreadyInFlight }
         defer { releasePass() }
 
@@ -399,7 +433,10 @@ extension Uploader: URLSessionDataDelegate {
         // Only when nothing else is in the air. Starting the next pass while
         // days from this one are still flying would build them again and send
         // duplicates of work already under way.
-        if inFlightBatches.isEmpty {
+        // …and not at all while sending is held back: this is the path a pause
+        // has to close, because it starts the next pass from the session rather
+        // than from anything the person pressed.
+        if inFlightBatches.isEmpty, !isStopped {
             Task { [weak self] in _ = try? await self?.send() }
         }
     }

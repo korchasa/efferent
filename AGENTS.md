@@ -201,10 +201,17 @@ that sentence is the answer to the only question that matters: is it still worki
 when adding anything. A number that needs interpreting is not a status, and a second row of counters
 is how the sentence stops being read.
 
+The line under the button says how long the rest will take, measured from the days already going
+rather than assumed — a decade of workouts and an empty week are not the same work, and no constant
+could stand for both. Until enough days have gone to have an answer it says "sending" and no number,
+because a rate computed from three days changes every second.
+
 "Nothing waiting" is not the same fact as "nothing has ever been sent", and neither is the same as
-"stopped a week ago". That is why the device stamps when a day was last accepted, and why the screen
-distinguishes all three. Collapsing them into one cheerful row is how a silent failure gets to look
-healthy.
+"stopped a week ago". The screen still distinguishes all three, and that is why the device stamps
+when a day was last accepted — but the stamp is not on display: nobody acts on "last sent 4 minutes
+ago", and a count nobody acts on crowds out the sentence that matters. What is on display is the
+silence, once the silence is itself the news, from three days on. Collapsing the three into one
+cheerful row is how a silent failure gets to look healthy.
 
 The ring measures the run in front of it, not the archive. Ten unsent days fill it exactly as three
 thousand do — a ring measured against a decade of history would sit at ninety-nine per cent every
@@ -213,6 +220,13 @@ ordinary day and say nothing about whether anything is moving.
 Starting always begins by re-reading Health, which is why there is no separate "send now": one
 button does both. Stopping holds the days back and never drops them, so a pause costs time and never
 data.
+
+**A stop stops the chain, not only the button.** Every finished batch starts the next pass from the
+upload session's own delegate, so a pause honoured only where the person pressed looks like a pause
+and keeps sending — which is what it did until 2026-08-29. The flag lives on the uploader, is checked
+on the way into every pass and before the chain restarts itself, and setting it cancels what is
+already in the air: a request the system has taken finishes on its own otherwise. A cancelled batch
+fails like any other, so its days stay marked and nothing is lost. A test enforces it.
 
 The appearance is pinned to light, because the palette is committed rather than adaptive. Half
 supporting dark mode is worse than not supporting it: the system turns its own text white and leaves
