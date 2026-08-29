@@ -195,11 +195,11 @@ it exists because the wrong version fails quietly.
 ## The screen
 
 There are two screens and no more: a first-run walkthrough, and one everyday screen with a single
-button in the middle of it. The button carries the number it is about — the days still to send, with
-its unit — and the ring around it turns that number into progress. Underneath is one sentence, and
-that sentence is the answer to the only question that matters: is it still working. Keep it that way
-when adding anything. A number that needs interpreting is not a status, and a second row of counters
-is how the sentence stops being read.
+button in the middle of it. The button is the face of a dial: it carries the number it is about — the
+days still waiting, with its unit — and the scale of sixty marks around it turns that number into
+progress. Underneath is one sentence, and that sentence is the answer to the only question that
+matters: is it still working. Keep it that way when adding anything. A number that needs interpreting
+is not a status, and a second row of counters is how the sentence stops being read.
 
 The line under the button says how long the rest will take, measured from the days already going
 rather than assumed — a decade of workouts and an empty week are not the same work, and no constant
@@ -213,9 +213,16 @@ ago", and a count nobody acts on crowds out the sentence that matters. What is o
 silence, once the silence is itself the news, from three days on. Collapsing the three into one
 cheerful row is how a silent failure gets to look healthy.
 
-The ring measures the run in front of it, not the archive. Ten unsent days fill it exactly as three
-thousand do — a ring measured against a decade of history would sit at ninety-nine per cent every
+The scale measures the run in front of it, not the archive. Ten unsent days fill it exactly as three
+thousand do — a scale measured against a decade of history would sit at ninety-nine per cent every
 ordinary day and say nothing about whether anything is moving.
+
+Everything sent is the good state and is drawn as one: the scale closes, and the face carries a mark
+and the words "Up to date" instead of a nought. A nought is what an empty archive shows too, and the
+two mean opposite things. For the same reason the scale is lit only when it has something to report
+— with nothing ever sent it stays unlit, because arithmetic says that run is complete and a full
+orange scale over "nothing sent yet" would announce a finished job to somebody whose archive is
+empty.
 
 Starting always begins by re-reading Health, which is why there is no separate "send now": one
 button does both. Stopping holds the days back and never drops them, so a pause costs time and never
@@ -239,7 +246,12 @@ so the screen used to sit there behind a finished share with a button reading "L
 had just done it. A cancelled share changes nothing, and a step whose archive was never created does
 not walk on — a setup text for an archive that does not exist is a screen nobody can act on.
 
-Anything that is needed but rarely — Health access, reaching further back, sharing the setup text,
+The setup text goes to an agent — ChatGPT, Claude, Gemini — and it goes whole, as one block of text
+in the shape the app composes it. Presented as three fields it invites pasting one of them, and a
+part of it opens nothing: the instruction says what to do first, the address says where the archive
+is, and only the key opens it.
+
+Anything that is needed but rarely — Health access, reaching further back, connecting an agent,
 disconnecting — lives in the one menu in the corner. Nothing may claim that Health access was
 granted: Health does not say, so that screen offers where to look instead of an answer it cannot
 have.
