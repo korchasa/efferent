@@ -26,19 +26,16 @@ struct RangePicker: View {
     let probed: Bool
     @Binding var selection: RangeSelection
 
-    private var calendar: Calendar { Day.calendar() }
+    private var calendar: Calendar {
+        Day.calendar()
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Card {
-                option(.lastMonth, title: "Last 30 days", detail: detail(for: .lastMonth))
-                RowDivider(inset: 50)
-                option(.lastYear, title: "Last 12 months", detail: detail(for: .lastYear))
-                RowDivider(inset: 50)
-                option(.everything, title: "Everything Health has", detail: detail(for: .everything))
-                RowDivider(inset: 50)
-                chosenDayRow
-            }
+        VStack(spacing: 8) {
+            option(.lastMonth, title: "Last 30 days", detail: detail(for: .lastMonth))
+            option(.lastYear, title: "Last 12 months", detail: detail(for: .lastYear))
+            option(.everything, title: "Everything Health has", detail: detail(for: .everything))
+            chosenDayRow
 
             if case let .day(date) = selection {
                 DatePicker(
@@ -55,8 +52,12 @@ struct RangePicker: View {
                 .tint(Palette.accent)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 4)
-                .background(Palette.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .padding(.top, 14)
+                .background(Palette.panel, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .strokeBorder(Palette.hairline, lineWidth: 1)
+                )
+                .padding(.top, 6)
             }
         }
     }
@@ -76,51 +77,66 @@ struct RangePicker: View {
 
     private var chosenDayRow: some View {
         Button {
-            if case .day = selection { return }
+            if case .day = selection {
+                return
+            }
             selection = .day(defaultChoice)
         } label: {
             row(title: "A day I choose", detail: chosenDetail, ticked: isChosenDay) {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Palette.tertiary.opacity(0.7))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Palette.tick)
             }
         }
         .buttonStyle(.plain)
     }
 
+    /// One key on the panel: a lamp that is lit or not, the choice in the
+    /// ordinary face, and what it costs printed underneath as a legend. The
+    /// chosen one is outlined in ink, so which key is down can be seen from
+    /// across the room rather than read.
     private func row(
         title: String,
         detail: String,
         ticked: Bool,
         @ViewBuilder trailing: () -> some View
     ) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: "checkmark")
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(Palette.accent)
-                .frame(width: 22)
-                .opacity(ticked ? 1 : 0)
-            VStack(alignment: .leading, spacing: 1) {
+        HStack(spacing: 14) {
+            Circle()
+                .fill(ticked ? Palette.accent : Color.clear)
+                .frame(width: 12, height: 12)
+                .overlay(
+                    Circle().strokeBorder(ticked ? Palette.ink : Palette.tick, lineWidth: 1)
+                        .frame(width: 18, height: 18)
+                )
+                .frame(width: 18, height: 18)
+            VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Palette.ink)
-                Text(detail)
-                    .font(.system(size: 13))
-                    .foregroundStyle(Palette.tertiary)
+                Legend(detail, size: 9)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
             trailing()
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 13)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.panel, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .strokeBorder(ticked ? Palette.ink : Palette.hairline, lineWidth: 1)
+        )
         .contentShape(Rectangle())
     }
 
     // MARK: - What each choice costs
 
     private var isChosenDay: Bool {
-        if case .day = selection { return true }
+        if case .day = selection {
+            return true
+        }
         return false
     }
 
@@ -134,7 +150,7 @@ struct RangePicker: View {
             return probed ? "Health has nothing to read yet" : "Working out how far back Health goes…"
         }
         guard let count = days(from: day) else { return spoken(day: day) }
-        return "\(grouped(count)) days, back to \(spoken(day: day))"
+        return "\(grouped(count)) days · back to \(spoken(day: day))"
     }
 
     /// The floor for the calendar. Health's first record when it is known, and
