@@ -232,8 +232,8 @@ struct SetupView: View {
                 ? "Health has nothing to send yet. New readings go up as they arrive."
                 : "Working out how far back Health goes…"
         }
-        return "Everything since \(spoken(day: day)) goes up now. The first export runs on "
-            + "Wi-Fi and power. After that Efferent sends only new days."
+        return "Everything since \(spoken(day: day)) goes up now. The first export goes as soon "
+            + "as this phone has a network. After that Efferent sends only new days."
     }
 
     // MARK: - Making the archive, and watching it start
@@ -309,7 +309,7 @@ struct SetupView: View {
     private var preparingBlurb: String {
         archiveReady
             ? "Efferent is sending in the background. You can leave this screen — it carries on "
-            + "without you, on Wi-Fi and power."
+            + "without you, whenever this phone has a network."
             : "Making the key that opens it, and claiming a place to keep the sealed days."
     }
 
