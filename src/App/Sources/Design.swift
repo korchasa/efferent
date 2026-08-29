@@ -160,6 +160,34 @@ struct ProminentButton: ButtonStyle {
     }
 }
 
+/// The invitation to hand the archive to an agent, in two strengths.
+///
+/// Lit while nothing has been handed over, because an archive nobody can read
+/// is the state this app is least useful in. Once the text has gone somewhere
+/// the same key is still there, printed rather than lit: it is a thing you may
+/// do again, not a thing left undone.
+struct ConnectButton: ButtonStyle {
+    let lit: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .medium, design: .monospaced))
+            .textCase(.uppercase)
+            .kerning(2)
+            .foregroundStyle(lit ? Color.white : Palette.ink)
+            .frame(maxWidth: .infinity, minHeight: 54)
+            .background(
+                lit ? Palette.accent : Palette.panel,
+                in: RoundedRectangle(cornerRadius: 3, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .strokeBorder(lit ? Color.clear : Palette.hairline, lineWidth: 1)
+            )
+            .opacity(configuration.isPressed ? 0.85 : 1)
+    }
+}
+
 /// The way out of a screen that is not the way forward: the same typography,
 /// printed rather than lit.
 struct QuietButton: ButtonStyle {
@@ -171,6 +199,37 @@ struct QuietButton: ButtonStyle {
             .foregroundStyle(Palette.legend)
             .frame(maxWidth: .infinity, minHeight: 46)
             .opacity(configuration.isPressed ? 0.6 : 1)
+    }
+}
+
+/// One key in the row along the bottom: the symbol on the key, the name of the
+/// thing printed underneath it.
+///
+/// The rare actions are keys rather than a menu because a menu hides how many
+/// there are, and there are only three. A key can be read without being
+/// pressed, which is the point of printing its name on the shell.
+struct KeyButton: View {
+    let label: String
+    let symbol: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Image(systemName: symbol)
+                    .font(.system(size: 16, weight: .regular))
+                    .foregroundStyle(Palette.ink)
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .background(Palette.panel, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                            .strokeBorder(Palette.hairline, lineWidth: 1)
+                    )
+                Legend(label, size: 8)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 }
 

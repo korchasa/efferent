@@ -26,6 +26,14 @@ final class Services: ObservableObject {
     /// archive has walked it by definition, so the flag is only ever written
     /// for phones that have not.
     @Published private(set) var setupComplete: Bool
+    /// Whether the setup text has ever left the phone. It only ever dims the
+    /// invitation to hand it over: an archive nobody can read is the state this
+    /// app is least useful in, so the way out of it stays lit until it is done.
+    @Published private(set) var agentConnected: Bool
+    /// The walkthrough has just ended and the archive has never been handed to
+    /// an agent. Lives only in memory: it is about this launch, not about the
+    /// phone, and a person who closed the sheet has answered the question.
+    @Published private(set) var offerHandoff = false
     /// Sending held back on purpose. Days stay marked while it is on, so a
     /// pause costs time and never data.
     @Published private(set) var paused: Bool
@@ -52,6 +60,7 @@ final class Services: ObservableObject {
         let loaded = Self.loadDestination()
         destination = loaded
         let defaults = UserDefaults.standard
+        agentConnected = defaults.bool(forKey: Self.connectedKey)
         paused = defaults.bool(forKey: Self.pausedKey)
         batchTotal = defaults.integer(forKey: Self.batchKey)
         // A phone that already has somewhere to send has been through setup,
@@ -148,6 +157,8 @@ final class Services: ObservableObject {
         // send: without an archive there is nothing for that screen to show.
         UserDefaults.standard.removeObject(forKey: Self.setupKey)
         UserDefaults.standard.removeObject(forKey: Self.batchKey)
+        UserDefaults.standard.removeObject(forKey: Self.connectedKey)
+        agentConnected = false
         setupComplete = false
         batchTotal = 0
         destination = nil
@@ -353,7 +364,23 @@ final class Services: ObservableObject {
         // one, and would have nothing to say and nowhere to send.
         guard destination != nil else { return }
         UserDefaults.standard.set(true, forKey: Self.setupKey)
+        offerHandoff = !agentConnected
         setupComplete = true
+    }
+
+    /// The everyday screen has opened the handoff sheet; it must not open it
+    /// again by itself.
+    func handoffOffered() {
+        offerHandoff = false
+    }
+
+    /// The setup text has gone somewhere. Written down only when the share
+    /// actually completed or the text was copied, never when a sheet was opened
+    /// and dismissed.
+    func markAgentConnected() {
+        guard !agentConnected else { return }
+        UserDefaults.standard.set(true, forKey: Self.connectedKey)
+        agentConnected = true
     }
 
     // MARK: - Stopping and starting
@@ -385,6 +412,7 @@ final class Services: ObservableObject {
 
     private static let destinationKey = "destination"
     private static let setupKey = "setupComplete"
+    private static let connectedKey = "agentConnected"
     private static let pausedKey = "sendingPaused"
     private static let batchKey = "batchTotal"
 
