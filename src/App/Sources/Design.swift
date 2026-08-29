@@ -160,30 +160,21 @@ struct ProminentButton: ButtonStyle {
     }
 }
 
-/// The invitation to hand the archive to an agent, in two strengths.
+/// The invitation to hand the archive to an agent, across the whole shell.
 ///
-/// Lit while nothing has been handed over, because an archive nobody can read
-/// is the state this app is least useful in. Once the text has gone somewhere
-/// the same key is still there, printed rather than lit: it is a thing you may
-/// do again, not a thing left undone.
+/// It exists only while nothing has been handed over, because an archive nobody
+/// can read is the state this app is least useful in. Once the text has gone
+/// somewhere the invitation is not news any more, and the same action steps
+/// down into the row of keys along the bottom.
 struct ConnectButton: ButtonStyle {
-    let lit: Bool
-
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .medium, design: .monospaced))
             .textCase(.uppercase)
             .kerning(2)
-            .foregroundStyle(lit ? Color.white : Palette.ink)
+            .foregroundStyle(Color.white)
             .frame(maxWidth: .infinity, minHeight: 54)
-            .background(
-                lit ? Palette.accent : Palette.panel,
-                in: RoundedRectangle(cornerRadius: 3, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .strokeBorder(lit ? Color.clear : Palette.hairline, lineWidth: 1)
-            )
+            .background(Palette.accent, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
             .opacity(configuration.isPressed ? 0.85 : 1)
     }
 }
