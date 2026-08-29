@@ -83,6 +83,35 @@ final class UploaderTests: XCTestCase {
         XCTAssertEqual(outcome, .scheduled(days: 1, unchanged: 0))
     }
 
+    /// A stop has to stop the chain, not only the button.
+    ///
+    /// Every finished batch starts the next pass from the upload session's own
+    /// delegate, so a pause honoured only where the person pressed would look
+    /// like a pause and keep sending — which is exactly what it did.
+    func testAStoppedUploaderSendsNothingAndBuildsNothing() async throws {
+        let store = try Store.inMemory()
+        try store.markDirty(["2026-08-07"])
+        var built = 0
+        let uploader = try makeUploader(store: store, identifier: "test.stopped.\(UUID().uuidString)") { days in
+            built += 1
+            return Dictionary(uniqueKeysWithValues: days.map {
+                ($0, DayContents(events: [], sampleIdentifiers: []))
+            })
+        }
+
+        uploader.setStopped(true)
+        let held = try await uploader.send()
+        XCTAssertEqual(held, .stopped)
+        XCTAssertEqual(built, 0, "a stopped pass still read Health")
+        XCTAssertEqual(try store.pendingDays(limit: 10), ["2026-08-07"], "a stopped day stopped waiting")
+
+        // And starting again is just that: the day is still marked, so nothing
+        // had to be remembered for it to go.
+        uploader.setStopped(false)
+        let resumed = try await uploader.send()
+        XCTAssertEqual(resumed, .scheduled(days: 1, unchanged: 0))
+    }
+
     // MARK: - Checking the archive before trusting the ledger
 
     /// The check runs before the pass decides there is nothing to do, because

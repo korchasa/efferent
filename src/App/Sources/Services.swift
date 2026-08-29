@@ -186,6 +186,9 @@ final class Services: ObservableObject {
         built.didStoreDay = { [weak self] in
             Task { @MainActor in self?.refreshStats() }
         }
+        // A pause set before anything was ever sent has to survive the first
+        // uploader being built, or the first send would start under it.
+        built.setStopped(paused)
         uploader = built
         return built
     }
@@ -216,12 +219,42 @@ final class Services: ObservableObject {
         if pending == 0 {
             guard batchTotal != 0 else { return }
             batchTotal = 0
+            runStartedAt = nil
         } else if pending > batchTotal {
             batchTotal = pending
+            runStartedAt = Date()
+            runStartPending = pending
         } else {
             return
         }
         UserDefaults.standard.set(batchTotal, forKey: Self.batchKey)
+    }
+
+    /// When the measurement behind the time left began, and what was waiting
+    /// then. Not persisted: a phone that was away has no idea how much of the
+    /// gap was spent sending, and a rate worked out across it would be fiction.
+    private var runStartedAt: Date?
+    private var runStartPending = 0
+
+    private func markRunStart() {
+        runStartedAt = Date()
+        runStartPending = stats?.pendingDays ?? 0
+    }
+
+    /// How long the days still waiting will take, once the phone has watched
+    /// enough of them go to have an answer.
+    ///
+    /// Nil until then, and nil is shown as nothing rather than as a guess: a
+    /// rate computed from three days changes every second, and a number that
+    /// keeps changing teaches nobody anything. It is measured rather than
+    /// assumed because the real rate depends on the day — a decade of workouts
+    /// and an empty week are not the same work.
+    var timeLeft: TimeInterval? {
+        guard let started = runStartedAt, let stats, stats.pendingDays > 0 else { return nil }
+        let done = runStartPending - stats.pendingDays
+        let elapsed = Date().timeIntervalSince(started)
+        guard done >= 10, elapsed >= 5 else { return nil }
+        return Double(stats.pendingDays) * elapsed / Double(done)
     }
 
     /// How much of the run in front of the ring is done, from nothing to all.
@@ -329,7 +362,16 @@ final class Services: ObservableObject {
         guard paused != value else { return }
         paused = value
         UserDefaults.standard.set(value, forKey: Self.pausedKey)
+        // The uploader stops itself, cancelling what is in the air. Without
+        // this the button changed only what the next tap on it would do: every
+        // finished batch starts the next pass from the upload session, which
+        // never passes through here.
+        uploaderIfPaired()?.setStopped(value)
         guard !value else { return }
+        // Nothing was moving while it was held back, so the measurement behind
+        // the time left has to begin again — carrying the pause into it would
+        // read as an upload that had slowed to a crawl.
+        markRunStart()
         // Starting again begins by re-reading Health, not by sending what is
         // already marked. That is what makes a separate "read and send now"
         // unnecessary: one button does both.

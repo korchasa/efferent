@@ -116,9 +116,9 @@ struct HomeView: View {
                         .monospacedDigit()
                         .foregroundStyle(Palette.ink)
                         .contentTransition(.numericText())
-                    // The unit belongs next to the number: inside a circle, a
-                    // bare figure could be days, readings or per cent.
-                    Text("days left")
+                    // "days left" read as time — the one thing this number is
+                    // not. It says what the days are: work still to do.
+                    Text("days to send")
                         .font(.system(size: 14))
                         .foregroundStyle(Palette.secondary)
                     Image(systemName: services.paused ? "play.fill" : "pause.fill")
@@ -131,7 +131,7 @@ struct HomeView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(services.paused ? "Start sending" : "Stop sending")
-            .accessibilityValue("\(state.remaining) days left")
+            .accessibilityValue("\(state.remaining) days to send")
         }
         .frame(width: 270, height: 270)
     }
@@ -166,7 +166,8 @@ struct HomeView: View {
         SyncState(
             stats: services.stats,
             paused: services.paused,
-            problem: services.lastError
+            problem: services.lastError,
+            timeLeft: services.timeLeft
         )
     }
 
@@ -275,16 +276,18 @@ struct HomeView: View {
 /// What the screen says, worked out in one place so the wording is one thing to
 /// read and to change.
 ///
-/// The button answers "how much is left"; this answers "and how is it going",
-/// which a number on its own never can. The order of the questions is the order
-/// they matter in: something broke, somebody stopped it, or it is running.
+/// The button answers "how much is left"; this answers "and how long will that
+/// take", which is the only other thing anybody wants to know while it runs.
+/// How many days are already in the archive, and when the last one went, are
+/// not questions the everyday screen exists to answer — a count nobody acts on
+/// is furniture, and it was crowding out the sentence that matters.
 struct SyncState {
     /// The figure inside the button: days still to send.
     let remaining: String
     let caption: String
     let mood: RingMood
 
-    init(stats: Stats?, paused: Bool, problem: String?) {
+    init(stats: Stats?, paused: Bool, problem: String?, timeLeft: TimeInterval?) {
         let sentDays = stats?.sentDays ?? 0
         let pending = stats?.pendingDays ?? 0
         remaining = grouped(pending)
@@ -296,28 +299,37 @@ struct SyncState {
         }
 
         if paused {
-            caption = "paused · \(grouped(sentDays)) days on your server"
+            caption = "paused"
             mood = .resting
             return
         }
 
         mood = .alight
-        // The three states that must never look alike. "Nothing waiting" after
-        // a decade has gone up and "nothing waiting" because nothing was ever
-        // read are the same empty button and opposite facts.
-        if sentDays == 0 {
+        if pending > 0 {
+            // No estimate until the phone has watched enough days go to have
+            // one. "Sending" is the honest thing to say meanwhile.
+            caption = timeLeft.map { "\(spoken(duration: $0)) left" } ?? "sending"
+        } else if sentDays == 0 {
+            // Not the same fact as "nothing waiting": nothing has ever gone,
+            // and the usual reason is that Health is not sharing anything.
             caption = "nothing sent yet · check Health access"
-        } else if let last = stats?.lastUploadAt {
-            caption = "\(grouped(sentDays)) days on your server · last sent \(ago(last))"
+        } else if let last = stats?.lastUploadAt, let quiet = Self.daysQuiet(since: last) {
+            // The screen does not report when the last day went — nobody acts
+            // on that. It reports the silence, and only once the silence is
+            // itself the news: an archive that quietly stopped growing looks
+            // exactly like one that is up to date.
+            caption = "nothing sent for \(quiet) days"
         } else {
-            caption = "\(grouped(sentDays)) days on your server"
+            caption = "up to date"
         }
+    }
+
+    /// How long the archive has been silent, when that is long enough to say.
+    /// Three days: a phone in a drawer for a weekend is not news, and a week is
+    /// too late to hear about it.
+    private static func daysQuiet(since last: Date) -> Int? {
+        let days = Int(Date().timeIntervalSince(last) / (24 * 60 * 60))
+        return days >= 3 ? days : nil
     }
 }
 
-/// "4 minutes ago", in the phone's own words.
-private func ago(_ moment: Date) -> String {
-    let formatter = RelativeDateTimeFormatter()
-    formatter.unitsStyle = .full
-    return formatter.localizedString(for: moment, relativeTo: Date())
-}
