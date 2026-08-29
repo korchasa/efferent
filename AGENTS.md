@@ -194,14 +194,35 @@ it exists because the wrong version fails quietly.
 
 ## The screen
 
-One question matters more than everything else — is it still working — so it is answered first, in a
-sentence, and the counters sit underneath for when the answer is not the expected one. Keep it that
-way when adding anything: a number that needs interpreting is not a status.
+There are two screens and no more: a first-run walkthrough, and one everyday screen with a single
+button in the middle of it. The button carries the number it is about — the days still to send, with
+its unit — and the ring around it turns that number into progress. Underneath is one sentence, and
+that sentence is the answer to the only question that matters: is it still working. Keep it that way
+when adding anything. A number that needs interpreting is not a status, and a second row of counters
+is how the sentence stops being read.
 
 "Nothing waiting" is not the same fact as "nothing has ever been sent", and neither is the same as
 "stopped a week ago". That is why the device stamps when a day was last accepted, and why the screen
 distinguishes all three. Collapsing them into one cheerful row is how a silent failure gets to look
 healthy.
+
+The ring measures the run in front of it, not the archive. Ten unsent days fill it exactly as three
+thousand do — a ring measured against a decade of history would sit at ninety-nine per cent every
+ordinary day and say nothing about whether anything is moving.
+
+Starting always begins by re-reading Health, which is why there is no separate "send now": one
+button does both. Stopping holds the days back and never drops them, so a pause costs time and never
+data.
+
+The appearance is pinned to light, because the palette is committed rather than adaptive. Half
+supporting dark mode is worse than not supporting it: the system turns its own text white and leaves
+it on a light background, which is a screen of invisible words. Every colour lives in `Design.swift`
+as a literal, and nothing may read a system colour that changes underneath it.
+
+Anything that is needed but rarely — Health access, reaching further back, sharing the setup text,
+disconnecting — lives in the one menu in the corner. Nothing may claim that Health access was
+granted: Health does not say, so that screen offers where to look instead of an answer it cannot
+have.
 
 ## Other traps
 

@@ -180,21 +180,38 @@ public final class HealthCoordinator {
 
     // MARK: - First export
 
-    /// Mark every day Health has anything about, back to the very first record.
+    /// The first day Health has anything about, or nil when it has nothing.
+    ///
+    /// Asked before the person is offered a starting point, so the offer can
+    /// name a real date and a real number of days rather than a guess.
+    public func firstDay() async throws -> String? {
+        try await reader.earliestDay()
+    }
+
+    /// Mark every day Health has anything about, back to its very first record
+    /// or to the day the person asked for, whichever is later.
     ///
     /// One transaction and a second of work, because marking a day is a row and
     /// nothing more. What takes the time afterwards is the sending, and that
     /// resumes on its own: a day is either still marked or it is not.
+    ///
+    /// A start earlier than Health's own first record is neither an error nor
+    /// honoured: there is nothing there to send, and writing it down as the day
+    /// reached would claim history the archive does not have. The record only
+    /// ever moves backwards for the same reason — asking for a shorter range
+    /// than one already covered adds nothing and must not un-claim the rest.
     @discardableResult
-    public func markHistory() async throws -> Int {
+    public func markHistory(from start: String? = nil) async throws -> Int {
         guard let earliest = try await reader.earliestDay() else {
             log.info("no history in Health to export")
             return 0
         }
-        let days = try Day.range(from: earliest, to: today, in: calendar)
+        let first = max(earliest, start ?? earliest)
+        let days = try Day.range(from: first, to: today, in: calendar)
         let marked = try store.markDirty(days)
-        try store.recordBackfillReached(earliest)
-        log.info("history back to \(earliest, privacy: .public): \(marked) days to send")
+        let reached = try store.backfillReached()
+        try store.recordBackfillReached(min(reached ?? first, first))
+        log.info("history back to \(first, privacy: .public): \(marked) days to send")
         onNewData?()
         return marked
     }

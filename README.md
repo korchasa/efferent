@@ -327,7 +327,7 @@ certificate, and the archive path above is the whole of the agreement with whate
 - `src/Core/Sources/Wire` — the event type, the day, NDJSON assembly, the request frame.
 - `src/Core/Sources/Store` — schema, day ledger, anchors.
 - `src/Core/Sources/Upload` — Keychain, background upload, reading the archive's listing.
-- `src/App/Sources` — the SwiftUI screen and the composition root.
+- `src/App/Sources` — the setup walkthrough, the everyday screen, the design, the composition root.
 - `src/Tests/Sources` — unit tests.
 - `protocol/` — bucket and day names, the request frame, signing, sealed envelopes.
 - `server/` — the bucket service, a Cloudflare Worker over R2.

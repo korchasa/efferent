@@ -7,7 +7,7 @@ struct EfferentApp: App {
 
     var body: some Scene {
         WindowGroup {
-            StatusView()
+            RootView()
                 .environmentObject(Services.shared)
         }
     }

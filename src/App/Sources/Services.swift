@@ -22,6 +22,17 @@ final class Services: ObservableObject {
     @Published private(set) var lastError: String?
     @Published private(set) var destination: Destination?
     @Published private(set) var connectionHandoff: ConnectionHandoff?
+    /// Whether setup has been walked through. A phone that already holds an
+    /// archive has walked it by definition, so the flag is only ever written
+    /// for phones that have not.
+    @Published private(set) var setupComplete: Bool
+    /// Sending held back on purpose. Days stay marked while it is on, so a
+    /// pause costs time and never data.
+    @Published private(set) var paused: Bool
+    /// How many days the run in front of the ring began with. Kept across
+    /// launches so a phone restarted in the middle of a first export still
+    /// knows what it is counting towards; zero means nothing is outstanding.
+    @Published private(set) var batchTotal: Int
 
     private var uploader: Uploader?
 
@@ -35,7 +46,18 @@ final class Services: ObservableObject {
             fatalError("could not open the day store: \(error)")
         }
         health = HealthCoordinator(store: store)
-        destination = Self.loadDestination()
+        // Held locally as well as stored: the flag below is decided before the
+        // rest of the properties exist, and until they do nothing may be read
+        // back off `self`.
+        let loaded = Self.loadDestination()
+        destination = loaded
+        let defaults = UserDefaults.standard
+        paused = defaults.bool(forKey: Self.pausedKey)
+        batchTotal = defaults.integer(forKey: Self.batchKey)
+        // A phone that already has somewhere to send has been through setup,
+        // whatever the flag says. Without this, the update that introduced the
+        // walkthrough would have shown it to everybody who was already running.
+        setupComplete = defaults.object(forKey: Self.setupKey) as? Bool ?? (loaded != nil)
         var archiveNeedsRewrite = false
         do {
             deployment = try Deployment.load()
@@ -122,6 +144,12 @@ final class Services: ObservableObject {
     /// becomes unreadable if its reading key was not already moved elsewhere.
     func disconnect() {
         UserDefaults.standard.removeObject(forKey: Self.destinationKey)
+        // Back to the beginning, not to an everyday screen with nowhere to
+        // send: without an archive there is nothing for that screen to show.
+        UserDefaults.standard.removeObject(forKey: Self.setupKey)
+        UserDefaults.standard.removeObject(forKey: Self.batchKey)
+        setupComplete = false
+        batchTotal = 0
         destination = nil
         connectionHandoff = nil
         uploader = nil
@@ -170,10 +198,37 @@ final class Services: ObservableObject {
 
     func refreshStats() {
         do {
-            stats = try store.stats()
+            let fresh = try store.stats()
+            stats = fresh
+            trackBatch(pending: fresh.pendingDays)
         } catch {
             lastError = String(describing: error)
         }
+    }
+
+    /// Keep the number the ring counts towards.
+    ///
+    /// It is set when work appears and cleared when there is none, rather than
+    /// held at the size of the archive: a ring measured against a decade would
+    /// sit at ninety-nine per cent for every ordinary day and say nothing about
+    /// whether anything is moving. Three new days should fill it.
+    private func trackBatch(pending: Int) {
+        if pending == 0 {
+            guard batchTotal != 0 else { return }
+            batchTotal = 0
+        } else if pending > batchTotal {
+            batchTotal = pending
+        } else {
+            return
+        }
+        UserDefaults.standard.set(batchTotal, forKey: Self.batchKey)
+    }
+
+    /// How much of the run in front of the ring is done, from nothing to all.
+    /// With no run outstanding it is full: there is nothing left to wait for.
+    var syncProgress: Double {
+        guard batchTotal > 0, let stats else { return 1 }
+        return Double(batchTotal - stats.pendingDays) / Double(batchTotal)
     }
 
     func requestHealthAccess() async {
@@ -196,6 +251,10 @@ final class Services: ObservableObject {
     }
 
     func sendNow() async {
+        // The one place a pause is honoured. Every route into sending — the
+        // button, the Health observer, the background refresh — arrives here,
+        // so a single guard covers all of them and none of them can forget.
+        guard !paused else { return }
         guard let uploader = uploaderIfPaired() else {
             lastError = "No archive has been created yet."
             return
@@ -210,14 +269,28 @@ final class Services: ObservableObject {
         refreshStats()
     }
 
-    /// The first export: find how far Health goes back and mark every day since.
+    /// The first day Health has anything about, for the screen that offers a
+    /// starting point. Nil when Health has nothing, or when it will not say.
+    func firstDayInHealth() async -> String? {
+        do {
+            let day = try await health.firstDay()
+            lastError = nil
+            return day
+        } catch {
+            lastError = "Could not work out how far back Health goes. (\(error))"
+            return nil
+        }
+    }
+
+    /// Mark everything from the chosen day onwards, or from Health's own first
+    /// record when no day was chosen.
     ///
     /// Quick, because marking a day is a row and nothing more. The sending that
     /// follows takes as long as it takes and needs nobody watching — a day is
     /// either in the archive or still marked.
-    func exportEverything() async {
+    func exportHistory(from day: String? = nil) async {
         do {
-            _ = try await health.markHistory()
+            _ = try await health.markHistory(from: day)
             lastError = nil
         } catch {
             lastError = String(describing: error)
@@ -226,9 +299,49 @@ final class Services: ObservableObject {
         await sendNow()
     }
 
+    // MARK: - Setup
+
+    /// Make the archive if there is not one yet, then queue the chosen history.
+    ///
+    /// Creating the archive is not a decision anyone can make wrongly, so it is
+    /// not a question either — it happens once the person has said how far back
+    /// to go, and the screen that shows it is telling, not asking.
+    func prepareArchive(startingFrom day: String?) async {
+        if destination == nil { await createArchive() }
+        guard destination != nil else { return }
+        await exportHistory(from: day)
+    }
+
+    /// The walkthrough is done. Written last, so a setup abandoned halfway
+    /// starts again from the beginning rather than dropping the person into a
+    /// screen about an archive that was never made.
+    func finishSetup() {
+        UserDefaults.standard.set(true, forKey: Self.setupKey)
+        setupComplete = true
+    }
+
+    // MARK: - Stopping and starting
+
+    func setPaused(_ value: Bool) {
+        guard paused != value else { return }
+        paused = value
+        UserDefaults.standard.set(value, forKey: Self.pausedKey)
+        guard !value else { return }
+        // Starting again begins by re-reading Health, not by sending what is
+        // already marked. That is what makes a separate "read and send now"
+        // unnecessary: one button does both.
+        Task { [weak self] in
+            await self?.refreshNow()
+            await self?.sendNow()
+        }
+    }
+
     // MARK: - Storage
 
     private static let destinationKey = "destination"
+    private static let setupKey = "setupComplete"
+    private static let pausedKey = "sendingPaused"
+    private static let batchKey = "batchTotal"
 
     private static func loadDestination() -> Destination? {
         guard let data = UserDefaults.standard.data(forKey: destinationKey) else { return nil }
