@@ -220,7 +220,7 @@ struct SetupView: View {
     }
 
     private var startDay: String? {
-        RangePicker.startDay(for: selection, earliest: earliest, calendar: Day.calendar())
+        RangePicker.startDay(for: selection, earliest: earliest, calendar: Services.shared.calendar)
     }
 
     private var summary: String {

@@ -66,7 +66,15 @@ public struct Archive {
     }
 
     private struct Page: Decodable {
-        struct Entry: Decodable { let day: String }
+        struct Entry: Decodable {
+            let day: String
+            /// The size of the sealed object. It is what turns "the archive has
+            /// that day" into "the archive has that day whole": a write cut
+            /// short leaves an object with the right name and the wrong length,
+            /// and the name alone can never show it.
+            let bytes: Int
+        }
+
         let days: [Entry]
         /// Where to continue, or absent at the end. Following it until it comes
         /// back null is the only way to see an archive of any size; a reader
@@ -74,9 +82,9 @@ public struct Archive {
         let next: String?
     }
 
-    /// Every day the archive holds, as names.
-    public func days() async throws -> Set<String> {
-        var held: Set<String> = []
+    /// Every day the archive holds, and how big each one is.
+    public func days() async throws -> [String: Int] {
+        var held: [String: Int] = [:]
         var after: String?
 
         for page in 0 ..< Self.maxPages {
@@ -99,7 +107,7 @@ public struct Archive {
             }
 
             for entry in answer.days {
-                held.insert(entry.day)
+                held[entry.day] = entry.bytes
             }
             log.debug("archive listing page \(page + 1): \(answer.days.count) days")
             guard let next = answer.next else {

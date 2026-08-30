@@ -129,10 +129,24 @@ public final class Uploader: NSObject {
     private let reconcile: () async throws -> Int
     private let log = Log(category: "upload")
 
-    /// Touched only on `delegateQueue`, which is serial.
+    /// What is in the air. Written by a pass when it hands a request over and by
+    /// the session's delegate when the answer comes back, so it is not the
+    /// property of either queue and is kept under a lock.
+    private let flightLock = NSLock()
     private var inFlightBatches: [Int: [Sending]] = [:]
-    private var responseBodies: [Int: Data] = [:]
     private var stagedFiles: [Int: URL] = [:]
+    /// The days those requests carry. A pass leaves them out when it picks the
+    /// next days to build: without it, a second request would be built from the
+    /// same days as the first — they are still marked, and marked is all the
+    /// ledger knows — and the archive would be written twice with one answer
+    /// left over.
+    private var inFlightDays: Set<String> = []
+    /// Requests that came back as a failure since the last one that did not.
+    /// It sets how long to wait before trying again, and nothing else.
+    private var consecutiveFailures = 0
+
+    /// Answers as they arrive, byte by byte. Delegate queue only.
+    private var responseBodies: [Int: Data] = [:]
 
     /// Handed over by the app when iOS relaunches it to deliver finished
     /// transfers; called once the session says it has reported everything.
@@ -212,16 +226,19 @@ public final class Uploader: NSObject {
 
     /// Build the next days and hand the changed ones to the system.
     ///
-    /// **A round that only cleans days runs the next round itself.** The chain
-    /// that walks through a backlog restarts from a finished upload, so a round
-    /// where every day came back unchanged sends nothing and starts nothing —
-    /// the queue then moves one round per wake-up, and a history that is
-    /// already in the archive takes a day of wake-ups to work through while the
-    /// screen says thousands of days are waiting. So a round that only cleaned
-    /// days goes straight into the next one, for as long as the system is
-    /// likely to let this launch run. A round that scheduled something still
-    /// stops and lets the upload chain carry on: building more days while the
-    /// last ones are in the air would send work already under way twice.
+    /// **A pass keeps going until the pipe is full or the queue is empty.**
+    /// Rounds are what a request is built from, and a pass that stopped after
+    /// one of them left a single request in the air and the network idle
+    /// between round trips — a decade then takes a day of wake-ups. So rounds
+    /// carry on: the days already in the air are left out of the next one, so
+    /// nothing is built twice, and the pass stops when there are as many
+    /// requests in the air as the session will run at once. The rest follows
+    /// from the answers, each of which starts the next pass.
+    ///
+    /// **A round that only cleans days keeps going too.** A backlog already in
+    /// the archive sends nothing, so nothing would come back to start the next
+    /// round; without this the queue moved one round per wake-up while the
+    /// screen said thousands of days were waiting.
     public func send() async throws -> Outcome {
         guard !isStopped else {
             log.debug("pass refused: sending is held back")
@@ -246,11 +263,20 @@ public final class Uploader: NSObject {
             cleaned += round.cleaned
             rounds += 1
 
-            guard round.scheduled == 0, round.cleaned > 0, !isStopped else { break }
+            // Nothing came back from the ledger, so there is nothing left to
+            // take — not "nothing happened", which is why both counts matter.
+            guard round.scheduled > 0 || round.cleaned > 0, !isStopped else { break }
+            guard batchesInFlight < configuration.concurrentUploads else {
+                log.debug(
+                    "\(batchesInFlight) requests are in the air, which is as many as this "
+                        + "session runs at once; the answers carry on from here"
+                )
+                break
+            }
             guard Date() < deadline else {
                 log.info(
-                    "cleared \(cleaned) days that were already in the archive and stopped there; "
-                        + "this launch has run long enough. The rest go on the next pass."
+                    "this launch has run long enough: \(scheduled) days sending, \(cleaned) "
+                        + "already in the archive. The rest go on the next pass."
                 )
                 break
             }
@@ -266,7 +292,9 @@ public final class Uploader: NSObject {
 
     /// One walk through the days at the front of the queue.
     private func runRound() async throws -> (scheduled: Int, cleaned: Int) {
-        let days = try store.pendingDays(limit: configuration.daysPerPass)
+        let days = try store.pendingDays(
+            limit: configuration.daysPerPass, excluding: daysInFlight
+        )
         log.debug(
             "pass took \(days.count) of the days waiting"
                 + (days.isEmpty ? "" : ": \(days.last ?? "") … \(days.first ?? "")")
@@ -403,8 +431,7 @@ public final class Uploader: NSObject {
                 + "signed over \(batch.count) days"
         )
         let task = session.uploadTask(with: request, fromFile: file)
-        inFlightBatches[task.taskIdentifier] = batch
-        stagedFiles[task.taskIdentifier] = file
+        hold(batch, task: task.taskIdentifier, file: file)
         task.resume()
         log.info(
             "request \(task.taskIdentifier) handed to the system: \(batch.count) days "
@@ -412,11 +439,119 @@ public final class Uploader: NSObject {
         )
     }
 
+    // MARK: - Being told the time
+
+    /// What the service's clock said, out of an answer that refused ours.
+    ///
+    /// The body first, because the service puts its own seconds there when it
+    /// refuses a signature for being out of time, and that is exact. The `Date`
+    /// header second: every HTTP answer carries one, so a service that refused
+    /// for some other reason can still be believed about the time.
+    static func serverTime(body: Data, dateHeader: String?) -> Date? {
+        if let refusal = try? JSONDecoder().decode(Refusal.self, from: body), let now = refusal.now {
+            return Date(timeIntervalSince1970: TimeInterval(now))
+        }
+        guard let dateHeader else { return nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        return formatter.date(from: dateHeader)
+    }
+
+    /// Seconds this phone is behind the service, or nil when it is close enough
+    /// that nothing needs saying.
+    ///
+    /// A minute is the threshold because the tolerance either side is five, and
+    /// a round trip is not a clock error. Below it, adjusting would be writing
+    /// down the network's latency and calling it the time.
+    static func driftWorthLearning(theirs: Date, ours: Date, known: TimeInterval) -> TimeInterval? {
+        let offset = theirs.timeIntervalSince(ours)
+        return abs(offset - known) > 60 ? offset : nil
+    }
+
+    private struct Refusal: Decodable {
+        let error: String?
+        /// The service's own clock, in seconds. Present only when it refused a
+        /// signature for being out of time.
+        let now: Int64?
+    }
+
+    /// Learn the service's clock from an answer that refused this phone's.
+    ///
+    /// Nothing else is done about it: the days in the refused request are still
+    /// marked, so the next pass rebuilds them and signs them with the corrected
+    /// clock. A pass is what retries; this only makes the retry able to succeed.
+    private func learnTheClock(from response: HTTPURLResponse, body: Data) -> Bool {
+        let header = response.value(forHTTPHeaderField: "Date")
+        guard let theirs = Self.serverTime(body: body, dateHeader: header) else { return false }
+        let known = (try? store.clockOffset()) ?? 0
+        guard let offset = Self.driftWorthLearning(theirs: theirs, ours: Date(), known: known) else {
+            return false
+        }
+        do {
+            try store.recordClockOffset(offset)
+            log.error(
+                "this phone's clock is \(Int(offset)) seconds away from the service's, which is "
+                    + "why the request was refused; requests are signed against the service's "
+                    + "clock from now on"
+            )
+            return true
+        } catch {
+            log.error("could not write down the clock difference: \(String(describing: error))")
+            return false
+        }
+    }
+
     /// How long something took, in whole milliseconds. Durations are the half
     /// of a sending problem that no count can show: a pass that took a minute
     /// to read Health and a pass that never got there look the same afterwards.
     static func milliseconds(since start: Date) -> Int {
         Int(Date().timeIntervalSince(start) * 1000)
+    }
+
+    // MARK: - What is in the air
+
+    private func hold(_ batch: [Sending], task: Int, file: URL) {
+        flightLock.lock()
+        defer { flightLock.unlock() }
+        inFlightBatches[task] = batch
+        stagedFiles[task] = file
+        inFlightDays.formUnion(batch.map(\.day))
+    }
+
+    /// Take a finished request out of the air.
+    private func release(task: Int) -> (batch: [Sending]?, file: URL?) {
+        flightLock.lock()
+        defer { flightLock.unlock() }
+        let batch = inFlightBatches.removeValue(forKey: task)
+        let file = stagedFiles.removeValue(forKey: task)
+        for day in batch ?? [] {
+            inFlightDays.remove(day.day)
+        }
+        return (batch, file)
+    }
+
+    private var batchesInFlight: Int {
+        flightLock.lock()
+        defer { flightLock.unlock() }
+        return inFlightBatches.count
+    }
+
+    private var daysInFlight: Set<String> {
+        flightLock.lock()
+        defer { flightLock.unlock() }
+        return inFlightDays
+    }
+
+    /// How many requests in a row have come back a failure, after counting this
+    /// one. Zero resets the run.
+    @discardableResult
+    private func countFailure(_ failed: Bool) -> Int {
+        flightLock.lock()
+        defer { flightLock.unlock() }
+        consecutiveFailures = failed ? consecutiveFailures + 1 : 0
+        return consecutiveFailures
     }
 
     private func claimPass() -> Bool {
@@ -443,7 +578,11 @@ public final class Uploader: NSObject {
 
     private func signedRequest(days: [String], body: Data) throws -> URLRequest {
         let key = try identity.signingKey()
-        let timestamp = Int64(Date().timeIntervalSince1970)
+        // The service's clock, not this phone's. They are the same number until
+        // the phone's is wrong, and a phone cannot tell that its own clock is
+        // wrong — it can only be told, which is what the offset is.
+        let offset = (try? store.clockOffset()) ?? 0
+        let timestamp = Int64(Date().timeIntervalSince1970 + offset)
         let signature = try key.signature(
             for: CanonicalRequest.bytes(
                 bucket: destination.bucket, days: days, timestamp: timestamp, body: body
@@ -489,24 +628,43 @@ extension Uploader: URLSessionDataDelegate {
                 + "received \(task.countOfBytesReceived)"
         )
         let body = responseBodies.removeValue(forKey: task.taskIdentifier) ?? Data()
-        let carried = inFlightBatches.removeValue(forKey: task.taskIdentifier)
-        if let staged = stagedFiles.removeValue(forKey: task.taskIdentifier) {
+        let flight = release(task: task.taskIdentifier)
+        if let staged = flight.file {
             try? FileManager.default.removeItem(at: staged)
         }
+        let carried = flight.batch
 
         if let error {
             // Nothing to undo: the days are still marked, so they go again next
             // pass. Retrying here would only fight the system's own backoff.
             log.error("request \(task.taskIdentifier) failed: \(error.localizedDescription)")
-            return
+            return carryOn(after: .transport)
         }
-        guard let response = task.response as? HTTPURLResponse else { return }
+        guard let response = task.response as? HTTPURLResponse else {
+            return carryOn(after: .transport)
+        }
         guard (200 ..< 300).contains(response.statusCode) else {
             let detail = String(data: body, encoding: .utf8) ?? ""
             log.error("request \(task.taskIdentifier) answered \(response.statusCode): \(detail)")
-            return
+
+            // A refusal the phone can act on: its clock is wrong. Learning the
+            // difference is the whole repair — the days are still marked, and
+            // the next pass signs them against the service's clock instead.
+            if learnTheClock(from: response, body: body) {
+                return carryOn(after: .recoverable)
+            }
+            // A refusal about the request itself, rather than about the network
+            // or the service's own trouble. Counted against the days it carried:
+            // a day the service will not take is not made acceptable by being
+            // sent again forever at the head of the queue.
+            if (400 ..< 500).contains(response.statusCode), let carried {
+                refuse(carried.map(\.day), status: response.statusCode)
+            }
+
+            let refused = (400 ..< 500).contains(response.statusCode)
+            return carryOn(after: refused ? .refused : .transport)
         }
-        guard let carried else { return }
+        guard let carried else { return carryOn(after: .delivered) }
 
         // Written down only for the days the answer names. A batch is not a
         // promise that every day in it landed, and marking one clean that the
@@ -516,11 +674,15 @@ extension Uploader: URLSessionDataDelegate {
             log.error(
                 "could not read what the service stored: \(String(data: body, encoding: .utf8) ?? "")"
             )
-            return
+            return carryOn(after: .refused)
         }
         let stored = Set(accepted.stored)
-        for entry in carried where !stored.contains(entry.day) {
-            log.error("the service did not store \(entry.day); it stays marked")
+        let left = carried.filter { !stored.contains($0.day) }
+        if !left.isEmpty {
+            for entry in left {
+                log.error("the service did not store \(entry.day); it stays marked")
+            }
+            refuse(left.map(\.day), status: response.statusCode)
         }
 
         log.info(
@@ -531,22 +693,82 @@ extension Uploader: URLSessionDataDelegate {
         for entry in carried where stored.contains(entry.day) {
             do {
                 try store.recordSent(
-                    day: entry.day, digest: entry.digest, sampleIdentifiers: entry.identifiers
+                    day: entry.day,
+                    digest: entry.digest,
+                    bytes: entry.blob.count,
+                    sampleIdentifiers: entry.identifiers
                 )
             } catch {
                 log.error("could not record \(entry.day): \(String(describing: error))")
             }
         }
         didStoreDay?()
+        carryOn(after: .delivered)
+    }
 
-        // Only when nothing else is in the air. Starting the next pass while
-        // days from this one are still flying would build them again and send
-        // duplicates of work already under way.
-        // …and not at all while sending is held back: this is the path a pause
-        // has to close, because it starts the next pass from the session rather
-        // than from anything the person pressed.
-        if inFlightBatches.isEmpty, !isStopped {
-            Task { [weak self] in _ = try? await self?.send() }
+    /// Count a refusal against the days it was about, and say so once when a day
+    /// has been refused often enough to be set aside.
+    private func refuse(_ days: [String], status: Int) {
+        do {
+            let parked = try store.recordRefused(days)
+            guard !parked.isEmpty else { return }
+            log.error(
+                "the service has refused \(parked.first ?? "") "
+                    + (parked.count > 1 ? "and \(parked.count - 1) more " : "")
+                    + "\(Store.attemptsBeforeParking) times (last with \(status)); they are set "
+                    + "aside and tried again by the daily check against the archive"
+            )
+        } catch {
+            log.error("could not count the refusal: \(String(describing: error))")
+        }
+    }
+
+    /// What the last request came back as, as far as what to do next is
+    /// concerned.
+    private enum Answer {
+        case delivered
+        /// The phone has just repaired something and should try again at once.
+        case recoverable
+        /// The network or the service. Waiting is the only useful reply.
+        case transport
+        /// The service understood and said no. Waiting helps as little as
+        /// hurrying, but the days it was about have been counted against.
+        case refused
+    }
+
+    /// Start the next pass, or leave it to a wake-up.
+    ///
+    /// The chain that walks a backlog is made of exactly this: every answer
+    /// starts the pass that builds the next days. Every answer, not only the
+    /// last one in the air — the days still flying are left out of what a pass
+    /// builds, so this tops the pipe back up rather than waiting for the
+    /// slowest of four requests before any of them is replaced. A pass that
+    /// finds one already running costs a claim and returns.
+    ///
+    /// It is also where a failure stops being invisible: before, a failed
+    /// request simply ended the chain, and the queue then stood still until
+    /// something outside woke the app.
+    private func carryOn(after answer: Answer) {
+        let failures = countFailure(answer == .transport || answer == .refused)
+        guard !isStopped else { return }
+
+        let delay: TimeInterval
+        switch answer {
+        case .delivered, .recoverable:
+            delay = 0
+        case .transport, .refused:
+            // Doubling, and capped. A phone with no network that retried every
+            // few seconds would spend a day of battery discovering the same
+            // thing; one that waited an hour after a blip would look broken.
+            delay = min(300, 5 * pow(2, Double(min(failures, 8) - 1)))
+            log.info("waiting \(Int(delay)) seconds after \(failures) failed requests in a row")
+        }
+
+        Task { [weak self] in
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+            _ = try? await self?.send()
         }
     }
 

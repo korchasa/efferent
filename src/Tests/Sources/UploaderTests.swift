@@ -317,6 +317,64 @@ final class UploaderTests: XCTestCase {
             ["2026-01-01"], ["2026-01-02"], ["2026-01-03"],
         ])
     }
+
+    // MARK: - Being told the time
+
+    /// The service puts its own clock in the refusal, and that is exact.
+    func testTheServiceClockIsReadOutOfTheRefusal() {
+        let body = Data(#"{"error":"timestamp is 4231s away","now":1700000000}"#.utf8)
+
+        let theirs = Uploader.serverTime(body: body, dateHeader: "Sat, 01 Jan 2000 00:00:00 GMT")
+
+        XCTAssertEqual(theirs, Date(timeIntervalSince1970: 1_700_000_000))
+    }
+
+    /// Every HTTP answer carries a `Date`, so a service that refused for some
+    /// other reason can still be believed about the time.
+    func testTheDateHeaderAnswersWhenTheBodyDoesNot() {
+        let theirs = Uploader.serverTime(
+            body: Data("not json".utf8), dateHeader: "Tue, 14 Nov 2023 22:13:20 GMT"
+        )
+
+        XCTAssertEqual(theirs, Date(timeIntervalSince1970: 1_700_000_000))
+    }
+
+    func testAnAnswerWithNoTimeInItTeachesNothing() {
+        XCTAssertNil(Uploader.serverTime(body: Data(#"{"error":"nope"}"#.utf8), dateHeader: nil))
+    }
+
+    /// A round trip is not a clock error, and writing one down would be
+    /// recording the network's latency and calling it the time.
+    func testASecondOfDifferenceIsNotWorthLearning() {
+        let ours = Date(timeIntervalSince1970: 1_700_000_000)
+
+        XCTAssertNil(
+            Uploader.driftWorthLearning(theirs: ours.addingTimeInterval(3), ours: ours, known: 0)
+        )
+    }
+
+    /// The phone cannot tell that its own clock is wrong. Told, it corrects
+    /// itself; the days are still marked, so the next pass signs them again.
+    func testAnHourOfDifferenceIsLearned() {
+        let ours = Date(timeIntervalSince1970: 1_700_000_000)
+
+        XCTAssertEqual(
+            Uploader.driftWorthLearning(theirs: ours.addingTimeInterval(3600), ours: ours, known: 0),
+            3600
+        )
+    }
+
+    /// A difference already known and unchanged is not written down again on
+    /// every refusal.
+    func testAClockAlreadyCorrectedIsNotCorrectedAgain() {
+        let ours = Date(timeIntervalSince1970: 1_700_000_000)
+
+        XCTAssertNil(
+            Uploader.driftWorthLearning(
+                theirs: ours.addingTimeInterval(3600), ours: ours, known: 3600
+            )
+        )
+    }
 }
 
 /// Counts calls from inside a `@Sendable` closure without tripping concurrency

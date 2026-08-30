@@ -257,4 +257,96 @@ final class StoreTests: XCTestCase {
 
         XCTAssertEqual(try store.stats().backfillReached, "2011-03-04")
     }
+
+    // MARK: - Days the service will not take
+
+    /// A day the service refuses is refused for a reason that does not change
+    /// by being asked again. Left in the queue it would sit at the head of it,
+    /// rebuilt on every pass, in front of the days that would go.
+    func testADayRefusedTooOftenStopsBeingOffered() throws {
+        let store = try Store.inMemory()
+        try store.markDirty(["2026-08-07", "2026-08-08"])
+
+        for _ in 1 ..< Int(Store.attemptsBeforeParking) {
+            XCTAssertEqual(try store.recordRefused(["2026-08-07"]), [])
+        }
+        XCTAssertEqual(
+            try store.recordRefused(["2026-08-07"]), ["2026-08-07"],
+            "nothing said when a day was finally set aside"
+        )
+
+        XCTAssertEqual(
+            try store.pendingDays(limit: 10), ["2026-08-08"],
+            "the refused day was still being offered"
+        )
+        XCTAssertEqual(try store.stats().pendingDays, 1)
+        XCTAssertEqual(try store.stats().stuckDays, 1, "a day set aside was counted as moving")
+    }
+
+    /// Being set aside is not being forgotten. The daily check against the
+    /// archive owes the day back, and that is evidence enough to try again.
+    func testTheArchiveCheckStartsARefusedDayOver() throws {
+        let store = try Store.inMemory()
+        try store.markDirty(["2026-08-07"])
+        for _ in 0 ..< Int(Store.attemptsBeforeParking) {
+            _ = try store.recordRefused(["2026-08-07"])
+        }
+        XCTAssertTrue(try store.pendingDays(limit: 10).isEmpty)
+
+        try store.markMissing(["2026-08-07"])
+
+        XCTAssertEqual(try store.pendingDays(limit: 10), ["2026-08-07"])
+        XCTAssertEqual(try store.stats().stuckDays, 0)
+    }
+
+    /// The days already in the air are at the head of exactly this order, so a
+    /// page that did not leave them out would come back made entirely of them
+    /// and read as "nothing else to send".
+    func testDaysAlreadyInTheAirAreNotHandedOutTwice() throws {
+        let store = try Store.inMemory()
+        try store.markDirty(["2026-08-05", "2026-08-06", "2026-08-07"])
+
+        let next = try store.pendingDays(limit: 2, excluding: ["2026-08-07", "2026-08-06"])
+
+        XCTAssertEqual(next, ["2026-08-05"])
+    }
+
+    // MARK: - The clock and where days are cut
+
+    func testTheServiceClockIsRememberedOnceItIsLearned() throws {
+        let store = try Store.inMemory()
+        XCTAssertEqual(try store.clockOffset(), 0, "a phone starts by trusting its own clock")
+
+        try store.recordClockOffset(-4231)
+
+        XCTAssertEqual(try store.clockOffset(), -4231)
+    }
+
+    /// The pin is the whole point: a fortnight abroad must not re-cut a decade
+    /// of history into different days and owe every one of them again.
+    func testTheDayZoneIsPinnedTheFirstTimeItIsAsked() throws {
+        let store = try Store.inMemory()
+        let sofia = try XCTUnwrap(TimeZone(identifier: "Europe/Sofia"))
+        let newYork = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+
+        XCTAssertEqual(try store.dayTimeZone(current: sofia), sofia)
+        XCTAssertEqual(
+            try store.dayTimeZone(current: newYork), sofia,
+            "the archive's days followed the phone abroad"
+        )
+    }
+
+    /// A day that landed cut short has the right name and the wrong length, and
+    /// the listing is the only place that shows it — so the size it was sent at
+    /// has to survive.
+    func testTheSizeOfEveryStoredDayIsKept() throws {
+        let store = try Store.inMemory()
+        try store.recordSent(day: "2026-08-07", digest: Data([0xAB]), bytes: 4096, sampleIdentifiers: [])
+        try store.recordSent(day: "2026-08-08", digest: Data([0xCD]), sampleIdentifiers: [])
+
+        XCTAssertEqual(
+            try store.sentBytes(), ["2026-08-07": 4096],
+            "a day sent before sizes were written down was suspected anyway"
+        )
+    }
 }

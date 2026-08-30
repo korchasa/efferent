@@ -374,7 +374,7 @@ struct HomeView: View {
 
                 Button("Reach back to here") {
                     let day = RangePicker.startDay(
-                        for: reachSelection, earliest: earliest, calendar: Day.calendar()
+                        for: reachSelection, earliest: earliest, calendar: services.calendar
                     )
                     reachingBack = false
                     Task { await services.exportHistory(from: day) }

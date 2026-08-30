@@ -288,10 +288,20 @@ async function putDays(request: Request, env: Env, bucket: string): Promise<Resp
     await env.BLOBS.put(signingKeyObject(bucket), authorization.claimed);
   }
 
-  await Promise.all(
+  // Settled, not all: a batch where one write failed still stored the others,
+  // and the sender marks a day as delivered only when this answer names it. An
+  // exception here would answer nothing about days that are in fact in the
+  // archive, and the phone would build and send every one of them again.
+  const writes = await Promise.allSettled(
     entries.map((entry) => env.BLOBS.put(dayKey(bucket, entry.day), entry.blob)),
   );
-  return json({ stored: entries.map((entry) => entry.day), bytes: body.length });
+  const stored = entries
+    .filter((_, index) => writes[index].status === "fulfilled")
+    .map((entry) => entry.day);
+  if (stored.length === 0) {
+    return problem(502, "the store took none of these days");
+  }
+  return json({ stored, bytes: body.length });
 }
 
 async function authorizeWriter(
@@ -309,9 +319,17 @@ async function authorizeWriter(
   if (!Number.isSafeInteger(timestamp) || timestamp < 0) {
     return problem(400, "x-efferent-timestamp must be a whole number");
   }
-  const drift = Math.abs(Math.floor(Date.now() / 1000) - timestamp);
+  // The refusal carries this server's own clock. A phone cannot tell that its
+  // clock is wrong — every request it signs is refused for the same reason, and
+  // nothing it can measure says why — so the one place the answer exists is
+  // here. With it, the phone corrects itself and the next request goes through.
+  const now = Math.floor(Date.now() / 1000);
+  const drift = Math.abs(now - timestamp);
   if (drift > TIMESTAMP_TOLERANCE_SECONDS) {
-    return problem(400, `timestamp is ${drift}s away from this server's clock`);
+    return json({
+      error: `timestamp is ${drift}s away from this server's clock`,
+      now,
+    }, 400);
   }
 
   let claimed: Uint8Array;

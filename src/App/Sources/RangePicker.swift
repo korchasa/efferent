@@ -26,8 +26,10 @@ struct RangePicker: View {
     let probed: Bool
     @Binding var selection: RangeSelection
 
+    /// The archive's own zone, not the phone's current one: the days this
+    /// picker names have to be the days that get sent.
     private var calendar: Calendar {
-        Day.calendar()
+        Services.shared.calendar
     }
 
     var body: some View {

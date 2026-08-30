@@ -556,3 +556,39 @@ Deno.test("a date that does not exist is refused", async () => {
   );
   assertEquals(response.status, 400);
 });
+
+/// A phone cannot tell that its own clock is wrong: every request it signs is
+/// refused for the same reason, and nothing it can measure says why. The
+/// refusal is the one place the answer exists, so it carries this server's own
+/// seconds — without them the phone stops sending for good.
+Deno.test("a refusal for being out of time says what the time is", async () => {
+  const env = environment();
+  const writer = await writerKey();
+  const body = packDays([{ day: "2026-08-07", blob: sealedBody(1, 2) }]);
+  const header: UploadHeader = {
+    bucket: BUCKET,
+    days: ["2026-08-07"],
+    timestamp: Math.floor(Date.now() / 1000) - 4231,
+  };
+
+  const response = await worker.fetch(
+    new Request(`https://example.invalid/b/${BUCKET}/days`, {
+      method: "PUT",
+      headers: {
+        "x-efferent-timestamp": String(header.timestamp),
+        "x-efferent-writer": writer.publicKey,
+        "x-efferent-signature": base64url(await signUpload(writer.privateKey, header, body)),
+      },
+      body: body as BodyInit,
+    }),
+    bindings(env),
+  );
+
+  assertEquals(response.status, 400);
+  const answer = await response.json() as { error: string; now: number };
+  assert(
+    Math.abs(answer.now - Math.floor(Date.now() / 1000)) < 5,
+    `the refusal did not carry this server's clock: ${JSON.stringify(answer)}`,
+  );
+  assertEquals(env.BLOBS.store.has(dayKey(BUCKET, "2026-08-07")), false);
+});

@@ -70,7 +70,7 @@ final class ArchiveTests: XCTestCase {
         let held = try await archive.days()
 
         XCTAssertEqual(held.count, 2500)
-        XCTAssertEqual(held, Set(all))
+        XCTAssertEqual(Set(held.keys), Set(all))
         XCTAssertEqual(counted.value, 7, "2500 days at 400 a page is seven requests")
     }
 
@@ -93,6 +93,18 @@ final class ArchiveTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? Archive.ArchiveError, .refused(status: 503))
         }
+    }
+
+    /// The size is what turns "that day is there" into "that day is there
+    /// whole", so a listing without it is not a listing this can use.
+    func testTheWalkCarriesTheSizeOfEveryDay() async throws {
+        let archive = try Archive(destination: destination()) { _ in
+            Data(#"{"days":[{"day":"2020-01-01","bytes":4096,"uploaded":"x"}],"next":null}"#.utf8)
+        }
+
+        let held = try await archive.days()
+
+        XCTAssertEqual(held, ["2020-01-01": 4096])
     }
 
     func testAnAnswerThatIsNotAListingIsRefused() async throws {

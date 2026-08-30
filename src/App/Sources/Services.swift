@@ -12,6 +12,10 @@ final class Services: ObservableObject {
 
     let store: Store
     let health: HealthCoordinator
+    /// Where this archive's days are cut. Pinned to the phone's zone the first
+    /// time it is asked and then left alone, so a fortnight abroad does not
+    /// silently re-cut a decade of history into different days.
+    let calendar: Calendar
     let identity = DeviceIdentity()
     let readingIdentity = ReadingIdentity()
     let deployment: Deployment?
@@ -53,7 +57,8 @@ final class Services: ObservableObject {
             // where the cause is still visible.
             fatalError("could not open the day store: \(error)")
         }
-        health = HealthCoordinator(store: store)
+        calendar = Day.calendar(timeZone: Self.dayTimeZone(in: store))
+        health = HealthCoordinator(store: store, calendar: calendar)
         // Held locally as well as stored: the flag below is decided before the
         // rest of the properties exist, and until they do nothing may be read
         // back off `self`.
@@ -436,6 +441,14 @@ final class Services: ObservableObject {
     private static let connectedKey = "agentConnected"
     private static let pausedKey = "sendingPaused"
     private static let batchKey = "batchTotal"
+
+    /// The zone the ledger's days are cut on, falling back to the phone's own
+    /// if the ledger cannot be asked. Falling back is not a silent repair: it is
+    /// what the pin would have been anyway on the first run, and a phone whose
+    /// ledger will not answer has larger trouble than a day boundary.
+    private static func dayTimeZone(in store: Store) -> TimeZone {
+        (try? store.dayTimeZone()) ?? .current
+    }
 
     private static func loadDestination() -> Destination? {
         guard let data = UserDefaults.standard.data(forKey: destinationKey) else { return nil }

@@ -91,18 +91,48 @@ This file is the rulebook.
   into the day before it. Passing `from` straight through drops the first day of every range — the
   one most likely to be the point of the question. A test enforces this.
 - **One build pass runs at a time, and the claim is released on every path.** The guard is a flag,
-  and a flag a `return` can slip past stops sending until the app is relaunched. Days themselves are
-  independent and several may be in the air at once; the next pass starts only when none are left,
-  or it would rebuild work already under way.
+  and a flag a `return` can slip past stops sending until the app is relaunched.
+- **A day in the air is left out of the next round.** The ledger knows only that a day is marked, so
+  a second round would pick the same days as the first, build them again and write the archive
+  twice with one answer left over. `Uploader` therefore keeps the days of every request it has
+  handed over and `Store.pendingDays(limit:excluding:)` skips them — fetching past the limit rather
+  than filtering after it, since those days sit at the head of exactly that order and a filtered page
+  would come back empty and read as "nothing else to send".
 - **A round that only cleans days runs the next round itself.** The chain that walks a backlog
   restarts from a finished upload, so a round in which every day came back unchanged sends nothing,
   finishes nothing and starts nothing. The queue then moves one round per wake-up: a phone with 2 794
   days waiting on 2026-08-30 was clearing 31 of them per Health delivery, all of them already in the
   archive, while the screen said thousands were waiting. So a round that scheduled nothing and
   cleaned something goes straight into the next one, until the queue is empty or the launch has run
-  long enough (`passBudget`). A round that *did* schedule something still stops and lets the upload
-  chain carry on — building more days while the last ones are in the air sends work already under way
-  twice.
+  long enough (`passBudget`).
+- **A pass fills the pipe rather than stopping at one request.** Rounds carry on until as many
+  requests are in the air as the session runs at once (`concurrentUploads`), because the days in
+  them are excluded from the next round and nothing is built twice. A pass that stopped after one
+  request left the network idle between round trips, and a decade then took a day of wake-ups.
+- **Every answer starts the next pass, a failure included.** The chain that walks a backlog is made
+  of exactly this. Before, a failed request simply ended the chain and the queue stood still until
+  something outside woke the app. A failure now waits first — doubling from five seconds, capped at
+  five minutes — so a phone with no network does not spend a day of battery rediscovering that.
+- **A day the service keeps refusing is set aside, not retried forever.** Refusals are counted per
+  day (`Store.recordRefused`) and a day refused `attemptsBeforeParking` times stops being offered:
+  it does not become acceptable by being sent a sixth time, and while it is being tried it stands at
+  the head of the queue in front of days that would go. Nothing is forgotten — `markMissing` and
+  `markDirty` both reset the count, so the daily check against the archive owes a parked day back
+  once a day. `Stats.stuckDays` counts them apart from the ones still moving.
+- **A phone cannot tell that its own clock is wrong, so the service tells it.** A signature refused
+  for being out of time is refused forever, with nothing the phone can measure to say why. The
+  service puts its own seconds in that 400 (`now`), the phone learns the difference once
+  (`clock.offset`) and signs against the service's clock from then on. The `Date` header is the
+  fallback; a difference under a minute is latency, not a clock, and is not written down.
+- **Day boundaries are pinned to one time zone, and it is never moved.** `day.timezone` is set to
+  the phone's zone the first time anything asks and left alone. A boundary that followed the phone
+  abroad would re-cut every day of history into different days — every one of them changed, every
+  one of them owed again — for a fortnight's holiday.
+- **The archive check compares sizes as well as names.** A write that landed cut short leaves an
+  object with the right name and the wrong length, and a listing of names alone can never show it.
+  The size the service accepted is written down per day (`day.bytes`) and compared against the
+  listing; days sent before that was recorded have nothing to compare and are left alone rather than
+  suspected.
 
 ## The parts that must agree across languages
 
@@ -134,6 +164,10 @@ PyHPKE 0.6.3 in the selected local interpreter.
   well as hashed inside the body on purpose: the service verifies against the days it unpacked, so a
   frame read differently from how it was packed fails there rather than storing a day under a date
   nobody meant.
+- **A refusal for being out of time carries the service's clock.** The 400 answers with `now`, its
+  own seconds. It is the only way a phone can discover that its own clock is wrong, and without it
+  such a phone stops sending for good. Any rewrite of the service keeps that field; the phone falls
+  back to the `Date` header, which every HTTP answer has.
 - **Compress before sealing, never after.** Ciphertext does not compress, and a round trip that only
   works one way tends to be discovered on a phone.
 - **New days are RFC 9180 HPKE version 2; old days remain readable as version 1.** The current suite
