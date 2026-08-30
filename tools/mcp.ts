@@ -106,12 +106,20 @@ class Reader {
   }
 
   /**
-   * Bring the mirror in line with the archive, cheaply.
+   * Bring the mirror in line with the archive.
    *
    * Two requests in the ordinary case: what the archive holds in total, and the
    * last fortnight in detail. The count catches history arriving, the fortnight
    * catches the days the phone rewrites. A mismatch that neither explains falls
    * through to a full listing, which is six requests and happens almost never.
+   *
+   * Neither of those catches a day older than the fortnight being rewritten: the
+   * recent listing does not reach it and the count does not move, so the mirror
+   * would go on answering from its old copy for good. That is not a rare shape —
+   * a workout deleted a week later, a day the phone's own archive check owed
+   * back, any correction to history at all. So a forced check reads the whole
+   * listing instead of the recent one, which is what `iphone_data_sync` is for
+   * and why it is the only caller that forces.
    */
   async refresh(force = false): Promise<void> {
     if (!force && Date.now() - this.checkedAt < FRESH_FOR_MS) return;
@@ -123,8 +131,9 @@ class Reader {
     this.checkedAt = Date.now();
 
     try {
-      await this.take(archive, state, await archive.list({ from: addDays(today(), -RECENT_DAYS) }));
-      if (remote.days !== Object.keys(state.days).length) {
+      const recent = { from: addDays(today(), -RECENT_DAYS) };
+      await this.take(archive, state, await archive.list(force ? {} : recent));
+      if (!force && remote.days !== Object.keys(state.days).length) {
         await this.take(archive, state, await archive.list({}));
       }
     } catch (error) {
