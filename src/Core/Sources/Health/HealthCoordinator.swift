@@ -5,8 +5,10 @@ import os
 /// Drives collection: subscribes to HealthKit, works out which days changed,
 /// and builds a day when one is asked for.
 ///
-/// Nothing here sends anything. It marks days and calls ``onNewData`` when
-/// there is something worth sending; the uploader decides when that happens.
+/// Nothing here sends anything. A delivery marks what moved and then calls
+/// ``onNewData``; every other way in is asked for by something that sends
+/// straight afterwards, so it marks and returns. The uploader decides when
+/// anything actually goes.
 ///
 /// The shape to keep in mind: a change is never turned into an update. It is
 /// turned into the *date* it happened on, and that day is later read out of
@@ -20,6 +22,16 @@ public final class HealthCoordinator {
     /// week costs almost nothing because a day whose contents did not change is
     /// never uploaded — see ``Uploader``.
     public static let recomputedDays = 7
+
+    /// How often a delivery may ask for the recent past to be re-read.
+    ///
+    /// Marking the week is free; the pass that follows is not — it reads those
+    /// seven days out of Health in full, thousands of readings, for the digest
+    /// to say every one is unchanged. Two deliveries twelve seconds apart did
+    /// exactly that. Totals are the only reason to re-read blindly and they are
+    /// not delivered faster than hourly, so a second look inside this window
+    /// cannot find anything the first one missed.
+    public static let recentMarkEvery: TimeInterval = 20 * 60
 
     private let store: Store
     private let reader: HealthReader
@@ -137,7 +149,7 @@ public final class HealthCoordinator {
 
         if plan.totals {
             do {
-                _ = try markRecentDays()
+                _ = try markRecentDaysIfDue()
             } catch {
                 log.error("marking the recent past failed: \(String(describing: error))")
             }
@@ -247,6 +259,24 @@ public final class HealthCoordinator {
         return marked
     }
 
+    /// ``markRecentDays()`` with that floor under it, for deliveries.
+    ///
+    /// Only totals need the blind re-read, and only deliveries arrive faster
+    /// than the data can change. A person pressing refresh gets the unthrottled
+    /// one, and samples are never throttled at all: their anchors say precisely
+    /// what moved, which is both cheap and exact.
+    @discardableResult
+    func markRecentDaysIfDue() throws -> Int {
+        if let last = try store.lastRecentMarkAt(),
+           Date().timeIntervalSince(last) < Self.recentMarkEvery
+        {
+            return 0
+        }
+        let marked = try markRecentDays()
+        try store.recordRecentMark()
+        return marked
+    }
+
     /// Everything at once, for the button and for a background refresh.
     @discardableResult
     public func refresh() async throws -> Int {
@@ -259,9 +289,6 @@ public final class HealthCoordinator {
             "asked Health for everything new: \(marked) days waiting after it, "
                 + "\(Uploader.milliseconds(since: started)) ms"
         )
-        if marked > 0 {
-            onNewData?()
-        }
         return marked
     }
 
@@ -299,7 +326,6 @@ public final class HealthCoordinator {
         let reached = try store.backfillReached()
         try store.recordBackfillReached(min(reached ?? first, first))
         log.info("history back to \(first): \(marked) days to send")
-        onNewData?()
         return marked
     }
 
@@ -360,7 +386,10 @@ public final class HealthCoordinator {
                 + "(\(missing.first ?? "") … \(missing.last ?? "")) and holds "
                 + "\(truncated.count) at the wrong size; \(marked) owed again"
         )
-        onNewData?()
+        // No ask to send from here. The only caller is the uploader's own check
+        // at the start of a pass, so an ask would be refused by the pass that
+        // made it — every time, by construction. That pass reads the queue after
+        // the check, so it takes these days in the same round anyway.
         return marked
     }
 

@@ -474,6 +474,19 @@ public final class Store {
         }
     }
 
+    public func lastRecentMarkAt() throws -> Date? {
+        try dbQueue.read { db in
+            try Self.int(db, MetaKey.lastRecentMarkAt.rawValue)
+                .map { Date(timeIntervalSince1970: TimeInterval($0)) }
+        }
+    }
+
+    public func recordRecentMark(at moment: Date = Date()) throws {
+        try dbQueue.write { db in
+            try Self.setInt(db, MetaKey.lastRecentMarkAt.rawValue, Int64(moment.timeIntervalSince1970))
+        }
+    }
+
     /// The day this app first ran, remembered the first time it is asked for.
     /// Hourly totals begin here and history before it is daily only.
     public func installedDay(defaultingTo today: String) throws -> String {

@@ -127,6 +127,15 @@ enum MetaKey: String {
     /// sent, in seconds since 1970. Absent until the first comparison, which is
     /// what makes a device check before it trusts a ledger it has never tested.
     case lastReconciledAt = "reconcile.lastAt"
+    /// When the recent past was last marked for re-reading, in seconds since
+    /// 1970.
+    ///
+    /// Totals have no anchor, so the only way to notice one moving is to build
+    /// those days again and compare — which means reading a week out of Health
+    /// in full. A delivery that arrives minutes after the last one cannot find
+    /// anything new, because totals are not delivered faster than hourly. This
+    /// is what stops the app doing that work twice for nothing.
+    case lastRecentMarkAt = "recent.markedAt"
     /// The sealed-envelope version represented by every non-null day digest.
     /// Changing it invalidates those claims and requeues the known archive.
     case sealingVersion = "sealing.version"

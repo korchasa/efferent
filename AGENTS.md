@@ -131,6 +131,21 @@ This file is the rulebook.
   days, 28 of which turned out unchanged. It happens whenever a backlog is walking backwards and the
   observers keep re-marking this week. Stopping at the gap costs nothing — the order is the same,
   nothing is skipped, and the next round starts at the gap — so `Store.pendingDays` returns a run.
+- **The recent past is re-read at most once every 20 minutes, and only for deliveries.** Totals have
+  no anchor, so the only way to notice one moving is to mark the last week and build those days
+  again — which reads a week out of Health in full, thousands of readings, usually for the digest to
+  say every day is unchanged. Two deliveries twelve seconds apart did exactly that work twice. Totals
+  are not delivered faster than hourly, so a second look inside the window cannot find anything the
+  first one missed: `HealthCoordinator.markRecentDaysIfDue` keeps the stamp in `meta` (it has to
+  survive the process — background launches are separate ones) and returns 0 inside the window. The
+  refresh button calls `markRecentDays` directly and is never throttled, and sample metrics are never
+  throttled at all: their anchors say exactly what moved.
+- **Only a delivery asks to send; every other path is asked for by a caller that sends anyway.**
+  `refresh()` and `markHistory()` used to call `onNewData` themselves, and both of their callers send
+  on the very next line — so each of them started a second pass that either landed on the pass lock or
+  ran over an empty queue. `reconcile()` was worse: its only caller is the uploader's own check at the
+  start of a pass, so its ask was refused by the pass that made it, every time, by construction. A new
+  marking path must either ask to send or be called by something that does — never both.
 - **A pass fills the pipe rather than stopping at one request.** Rounds carry on until as many
   requests are in the air as the session runs at once (`concurrentUploads`), because the days in
   them are excluded from the next round and nothing is built twice. A pass that stopped after one
