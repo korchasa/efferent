@@ -4,7 +4,7 @@ import Foundation
 /// Squeezing a batch before it is sealed.
 ///
 /// The order matters and is not negotiable: ciphertext does not compress, so
-/// this has to happen first. NDJSON of health readings shrinks by roughly ten
+/// this has to happen first. A day of health readings shrinks by roughly six
 /// times, which on a phone is battery as much as it is bandwidth.
 ///
 /// `COMPRESSION_ZLIB` here is raw deflate — despite the name, Apple's framework

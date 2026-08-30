@@ -2,9 +2,10 @@
 export const PYTHON_HPKE_REFERENCE = String.raw`#!/usr/bin/env python3
 import argparse
 import base64
-from datetime import date
+from datetime import date, datetime, timezone
 import hashlib
 import hmac
+import json
 import os
 from pathlib import Path
 import re
@@ -98,6 +99,70 @@ def read_day(handoff_path: Path, day: str) -> bytes:
     return zlib.decompress(compressed, -zlib.MAX_WBITS)
 
 
+DAY_FORMAT_VERSION = 2
+SHARED = ("metric", "bucket", "unit", "source")
+COLUMNS = ("value", "stage", "activity", "duration")
+
+
+def expand(plaintext: bytes) -> str:
+    """Turn a stored day into NDJSON: one JSON object per line.
+
+    A day is stored as columns. Rows that agree on kind, metric, bucket, unit and
+    source share a series and name all of that once; instants travel as whole
+    seconds counted from the first row. That is an eighth of the size of a line
+    per reading, and the reason there is no record id on the wire: it was 58% of
+    the bytes and nothing read it.
+
+    An identity is rebuilt here from the kind, the metric and the instant. Two
+    sleep stages can begin in the same second, so rows that land on one identity
+    are numbered #1, #2 in the order the series holds them, which the writer
+    fixes. Days written before this layout are lines already and pass through.
+    """
+    text = plaintext.decode("utf-8").strip()
+    if not text or "\n" in text or not text.startswith("{"):
+        return text + "\n" if text else ""
+
+    document = json.loads(text)
+    if "series" not in document:
+        return text + "\n"
+    if document.get("v") != DAY_FORMAT_VERSION:
+        raise SystemExit(
+            f"this day is written in layout {document.get('v')}, "
+            f"and this reader speaks {DAY_FORMAT_VERSION}"
+        )
+
+    events = []
+    for series in document["series"]:
+        moment = series["t0"]
+        for row, step in enumerate(series["t"]):
+            moment += step
+            event = {"v": 1, "start": instant(moment), "end": instant(moment + series["d"][row])}
+            for name in SHARED:
+                if name in series:
+                    event[name] = series[name]
+            for name in COLUMNS:
+                if name in series and series[name][row] is not None:
+                    event[name] = series[name][row]
+            tail = ":" + event["bucket"][0] if "bucket" in event else ""
+            event["id"] = f"{series['k']}:{event.get('metric')}:{event['start']}{tail}"
+            events.append(event)
+
+    repeated = {}
+    for event in events:
+        repeated[event["id"]] = repeated.get(event["id"], 0) + 1
+    running = {}
+    for event in events:
+        if repeated[event["id"]] > 1:
+            running[event["id"]] = seen = running.get(event["id"], 0) + 1
+            event["id"] = f"{event['id']}#{seen}"
+
+    return "".join(json.dumps(event, sort_keys=True) + "\n" for event in events)
+
+
+def instant(seconds: int) -> str:
+    return datetime.fromtimestamp(seconds, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--handoff", required=True, type=Path)
@@ -109,7 +174,7 @@ def main() -> None:
         date.fromisoformat(args.day)
     except ValueError:
         parser.error("--day must be YYYY-MM-DD")
-    sys.stdout.buffer.write(read_day(args.handoff, args.day))
+    sys.stdout.write(expand(read_day(args.handoff, args.day)))
 
 
 if __name__ == "__main__":

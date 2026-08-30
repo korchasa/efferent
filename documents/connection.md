@@ -145,7 +145,13 @@ New writes use RFC 9180 base-mode HPKE with DHKEM(X25519, HKDF-SHA256), HKDF-SHA
 ChaCha20-Poly1305. A stored day is `[0x02][32-byte encapsulated key][ciphertext and 16-byte tag]`.
 The HPKE info is `efferent/v2 hpke`; the authenticated data remains
 `efferent/v1\n<bucket>\n<day>` so the same bucket and date binding holds across the migration. The
-payload inside is raw-deflate-compressed NDJSON.
+payload inside is a raw-deflate-compressed day in layout 2: one JSON object of columns, where rows
+that share a kind, metric, bucket, unit and source device name all of that once and instants travel
+as whole seconds counted from the first row of the series. No record id is stored — a reader rebuilds
+one from the kind, the metric and the instant, numbering `#1`, `#2` where two records begin in the
+same second. All three readers unpack it into the NDJSON they always produced, so nothing above that
+layer changed. Layout 1, one JSON object per line with the HealthKit record id on it, is still read
+while the archive is replaced.
 
 CryptoKit implements the sender on iOS. The optional TypeScript development reader uses `hpke-js`;
 the exact Python source returned by `setup_guide` uses PyHPKE 0.6.3. The three implementations are

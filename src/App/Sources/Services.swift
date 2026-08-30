@@ -90,6 +90,8 @@ final class Services: ObservableObject {
                 }
                 archiveNeedsRewrite = try store.activateSealingVersion(Int64(SealedBox.version))
                     || archiveNeedsRewrite
+                archiveNeedsRewrite = try store.activateDayFormat(Int64(dayFormatVersion))
+                    || archiveNeedsRewrite
             }
         } catch {
             lastError = "Could not bind the day ledger to its archive. (\(error))"
@@ -122,6 +124,7 @@ final class Services: ObservableObject {
             try await ArchiveCreator.create(destination: created, identity: identity)
             _ = try store.activateArchive(created.bucket)
             _ = try store.activateSealingVersion(Int64(SealedBox.version))
+            _ = try store.activateDayFormat(Int64(dayFormatVersion))
             try UserDefaults.standard.set(JSONEncoder().encode(created), forKey: Self.destinationKey)
             destination = created
             uploader = nil

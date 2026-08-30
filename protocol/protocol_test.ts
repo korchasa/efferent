@@ -6,6 +6,7 @@ import { associatedData, open, seal } from "./sealedbox.ts";
 import { sealLegacy } from "./sealedbox-v1.ts";
 import { compress, decompress } from "./framing.ts";
 import { packDays, type SealedDay, unpackDays } from "./batch.ts";
+import { type DayEvent, expand, pack } from "./day.ts";
 
 const encoder = new TextEncoder();
 
@@ -310,3 +311,102 @@ Deno.test("NDJSON survives the compression it travels under", async () => {
   assertEquals(await decompress(packed), original);
   assert(packed.length < original.length / 5, `expected real compression, got ${packed.length}`);
 });
+
+// MARK: - The day's own layout
+
+Deno.test("a day says what it holds once and counts the instants from there", () => {
+  const events = [
+    beat("2026-08-07T09:00:00Z", 60),
+    beat("2026-08-07T09:01:00Z", 61),
+    beat("2026-08-07T09:03:00Z", 62),
+  ];
+
+  const series = JSON.parse(pack(events)).series;
+
+  assertEquals(series.length, 1);
+  assertEquals(series[0].source, "Watch");
+  assertEquals(series[0].t, [0, 60, 120]);
+  assertEquals(series[0].value, [60, 61, 62]);
+});
+
+Deno.test("the order events arrive in does not change a day's bytes", () => {
+  const events = [
+    beat("2026-08-07T09:03:00Z", 62),
+    beat("2026-08-07T09:00:00Z", 60),
+    beat("2026-08-07T09:01:00Z", 61),
+  ];
+
+  assertEquals(pack(events), pack(events.slice().reverse()));
+  assertEquals(pack(events), pack([events[1], events[2], events[0]]));
+});
+
+Deno.test("an instant is not a name: rows that land on one are numbered", () => {
+  const stage = (which: string, end: string) => ({
+    id: "",
+    v: 1,
+    metric: "sleep",
+    source: "Watch",
+    start: "2026-08-07T22:00:00Z",
+    end,
+    stage: which,
+  });
+
+  const back = expand(
+    pack([
+      stage("asleepCore", "2026-08-07T23:00:00Z"),
+      stage("asleepDeep", "2026-08-07T22:30:00Z"),
+    ]),
+  );
+
+  assertEquals(back.length, 2);
+  assertEquals(back.map((event) => event.id), [
+    "hk:sleep:2026-08-07T22:00:00Z#1",
+    "hk:sleep:2026-08-07T22:00:00Z#2",
+  ]);
+  assertEquals(back.map((event) => event.stage), ["asleepDeep", "asleepCore"]);
+});
+
+Deno.test("a day written the old way is still read", () => {
+  const line =
+    '{"id":"agg:steps:2026-08-07T09:00:00Z:h","v":1,"bucket":"hour","metric":"steps","value":842}';
+
+  const events = expand(line + "\n");
+
+  assertEquals(events.length, 1);
+  assertEquals(events[0].id, "agg:steps:2026-08-07T09:00:00Z:h");
+  assertEquals(events[0].value, 842);
+});
+
+Deno.test("a field with no column is refused rather than dropped", () => {
+  assertThrows(
+    () => pack([{ ...beat("2026-08-07T09:00:00Z", 60), context: "workout" }]),
+    Error,
+    "no column for context",
+  );
+});
+
+Deno.test("a column shorter than its series is refused", () => {
+  assertThrows(
+    () =>
+      expand('{"series":[{"k":"hk","metric":"m","t0":1,"t":[0,60],"d":[0,0],"value":[1]}],"v":2}'),
+    Error,
+    "column value has 1 entries for 2 rows",
+  );
+});
+
+Deno.test("a day from a layout this reader does not speak is refused", () => {
+  assertThrows(() => expand('{"series":[],"v":9}'), Error, "layout 9");
+});
+
+function beat(start: string, value: number): DayEvent {
+  return {
+    id: "",
+    v: 1,
+    metric: "heartRate",
+    source: "Watch",
+    unit: "count/min",
+    start,
+    end: start,
+    value,
+  };
+}

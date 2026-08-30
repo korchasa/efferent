@@ -101,32 +101,21 @@ public struct HealthReader {
             guard statistics.startDate >= from, statistics.startDate < to else { continue }
             guard let sum = statistics.sumQuantity() else { continue }
 
-            let payload = try Event.payload(AggregatePayload(
-                metric: metric.name,
-                bucket: bucket.label,
-                start: statistics.startDate,
-                end: statistics.endDate,
-                value: sum.doubleValue(for: metric.unit),
-                unit: metric.unit.unitString
-            ))
             try readings.append(Reading(
                 event: Event(
-                    id: Self.aggregateID(
-                        metric: metric.name, start: statistics.startDate, bucket: bucket
-                    ),
-                    payload: payload
+                    kind: .total,
+                    metric: metric.name,
+                    bucket: bucket.label,
+                    start: statistics.startDate,
+                    end: statistics.endDate,
+                    unit: metric.unit.unitString,
+                    value: sum.doubleValue(for: metric.unit)
                 ),
                 day: Day.of(statistics.startDate, in: calendar),
                 identifier: nil
             ))
         }
         return readings
-    }
-
-    /// `agg:steps:2026-08-07T09:00:00Z:h` — recomputing the same bucket always
-    /// produces the same id, which is what makes re-reading a day cheap.
-    static func aggregateID(metric: String, start: Date, bucket: Bucket) -> String {
-        "agg:\(metric):\(iso.string(from: start)):\(bucket.rawValue)"
     }
 
     // MARK: - Samples
@@ -152,10 +141,7 @@ public struct HealthReader {
 
         return try await descriptor.result(for: healthStore).map { sample in
             try Reading(
-                event: Event(
-                    id: Self.sampleID(metric: metric.name, uuid: sample.uuid),
-                    payload: metric.encode(sample)
-                ),
+                event: metric.encode(sample),
                 day: Day.of(sample.startDate, in: calendar),
                 identifier: sample.uuid
             )
@@ -187,10 +173,6 @@ public struct HealthReader {
         return (days, result.deletedObjects.map(\.uuid), result.newAnchor)
     }
 
-    static func sampleID(metric: String, uuid: UUID) -> String {
-        "hk:\(metric):\(uuid.uuidString)"
-    }
-
     /// The first day Health has anything at all about, or nil on an empty store.
     ///
     /// It is where the first export stops walking backwards. Asked of the
@@ -211,15 +193,6 @@ public struct HealthReader {
         return earliest.map { Day.of($0, in: calendar) }
     }
 }
-
-/// One formatter, created once: `ISO8601DateFormatter` is expensive to build and
-/// these ids are produced thousands at a time during the first export.
-let iso: ISO8601DateFormatter = {
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime]
-    formatter.timeZone = TimeZone(secondsFromGMT: 0)
-    return formatter
-}()
 
 // MARK: - Anchor archiving
 

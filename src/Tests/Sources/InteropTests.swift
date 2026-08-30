@@ -22,38 +22,32 @@ final class InteropTests: XCTestCase {
     func testEmitARequestForTheReaderToOpen() throws {
         let firstDay = try [
             Event(
-                id: "agg:steps:2026-08-07T09:00:00Z:h",
-                payload: Event.payload(AggregatePayload(
-                    metric: "steps",
-                    bucket: "hour",
-                    start: Date(timeIntervalSince1970: 1_754_557_200),
-                    end: Date(timeIntervalSince1970: 1_754_560_800),
-                    value: 842,
-                    unit: "count"
-                ))
+                kind: .total,
+                metric: "steps",
+                bucket: "hour",
+                start: Date(timeIntervalSince1970: 1_754_557_200),
+                end: Date(timeIntervalSince1970: 1_754_560_800),
+                unit: "count",
+                value: 842
             ),
             Event(
-                id: "hk:sleep:9A2C",
-                payload: Event.payload(SleepPayload(
-                    metric: "sleep",
-                    start: Date(timeIntervalSince1970: 1_754_517_600),
-                    end: Date(timeIntervalSince1970: 1_754_542_800),
-                    stage: "asleepCore",
-                    source: "Watch"
-                ))
+                kind: .record,
+                metric: "sleep",
+                start: Date(timeIntervalSince1970: 1_754_517_600),
+                end: Date(timeIntervalSince1970: 1_754_542_800),
+                source: "Watch",
+                stage: "asleepCore"
             ),
         ]
         let secondDay = try [
             Event(
-                id: "agg:steps:2026-08-08T09:00:00Z:h",
-                payload: Event.payload(AggregatePayload(
-                    metric: "steps",
-                    bucket: "hour",
-                    start: Date(timeIntervalSince1970: 1_754_643_600),
-                    end: Date(timeIntervalSince1970: 1_754_647_200),
-                    value: 1201,
-                    unit: "count"
-                ))
+                kind: .total,
+                metric: "steps",
+                bucket: "hour",
+                start: Date(timeIntervalSince1970: 1_754_643_600),
+                end: Date(timeIntervalSince1970: 1_754_647_200),
+                unit: "count",
+                value: 1201
             ),
         ]
 
@@ -113,7 +107,7 @@ final class InteropTests: XCTestCase {
     private func seal(_ events: [Event], on day: String) throws -> Data {
         try SealedBox.seal(
             readingPublicKey: WireTests.readingPublicKey,
-            plaintext: Deflate.compress(NDJSON.body(events)),
+            plaintext: Deflate.compress(Columnar.body(events)),
             associatedData: CanonicalRequest.associatedData(bucket: Self.bucket, day: day)
         )
     }

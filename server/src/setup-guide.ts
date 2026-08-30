@@ -20,7 +20,10 @@ ChaCha20-Poly1305. A stored day is:
     [version 0x02][32-byte encapsulated key][ciphertext and 16-byte tag]
 
 The HPKE info is \`efferent/v2 hpke\`. The authenticated data is
-\`efferent/v1\\n<bucket-id>\\n<YYYY-MM-DD>\`. The decrypted bytes are raw-deflate-compressed NDJSON.
+\`efferent/v1\\n<bucket-id>\\n<YYYY-MM-DD>\`. The decrypted bytes are a raw-deflate-compressed day: one JSON
+object holding columns, where rows that share a metric, unit and source device say all of that once.
+The script below unpacks it into NDJSON, one self-contained object per line, which is the shape to
+analyse. Days stored before this layout are lines already and pass straight through.
 
 Local reading procedure:
 

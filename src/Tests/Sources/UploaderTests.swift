@@ -51,8 +51,12 @@ final class UploaderTests: XCTestCase {
     /// otherwise the phone re-uploads a week of unchanged history every hour.
     func testARebuiltDayThatDidNotChangeIsNotSentAgain() async throws {
         let store = try Store.inMemory()
-        let events = try [Event(id: "a", payload: Event.payload(["v": "1"]))]
-        let digest = try Data(SHA256.hash(data: NDJSON.body(events)))
+        let events = try [Event(
+            kind: .total, metric: "steps", bucket: "day",
+            start: Date(timeIntervalSince1970: 0), end: Date(timeIntervalSince1970: 86400),
+            unit: "count", value: 1
+        )]
+        let digest = try Data(SHA256.hash(data: Columnar.body(events)))
         try store.recordSent(day: "2026-08-07", digest: digest, sampleIdentifiers: [])
         try store.markDirty(["2026-08-07"])
 
@@ -75,8 +79,12 @@ final class UploaderTests: XCTestCase {
     /// phone with 2 794 days waiting was doing on 2026-08-30.
     func testDaysAlreadyInTheArchiveClearInOnePass() async throws {
         let store = try Store.inMemory()
-        let events = try [Event(id: "a", payload: Event.payload(["v": "1"]))]
-        let digest = try Data(SHA256.hash(data: NDJSON.body(events)))
+        let events = try [Event(
+            kind: .total, metric: "steps", bucket: "day",
+            start: Date(timeIntervalSince1970: 0), end: Date(timeIntervalSince1970: 86400),
+            unit: "count", value: 1
+        )]
+        let digest = try Data(SHA256.hash(data: Columnar.body(events)))
         let days = try Day.range(from: "2026-05-01", to: "2026-08-08", in: Day.calendar())
         XCTAssertEqual(days.count, 100, "the backlog has to be more than one round")
         for day in days {
@@ -232,8 +240,12 @@ final class UploaderTests: XCTestCase {
     /// was found in is the pass that sends it.
     func testADayTheArchiveLostGoesInTheSamePass() async throws {
         let store = try Store.inMemory()
-        let events = try [Event(id: "a", payload: Event.payload(["v": "1"]))]
-        let digest = try Data(SHA256.hash(data: NDJSON.body(events)))
+        let events = try [Event(
+            kind: .total, metric: "steps", bucket: "day",
+            start: Date(timeIntervalSince1970: 0), end: Date(timeIntervalSince1970: 86400),
+            unit: "count", value: 1
+        )]
+        let digest = try Data(SHA256.hash(data: Columnar.body(events)))
         try store.recordSent(day: "2026-08-07", digest: digest, sampleIdentifiers: [])
 
         let uploader = try makeUploader(

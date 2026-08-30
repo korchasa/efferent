@@ -9,30 +9,12 @@ final class HealthTests: XCTestCase {
         return calendar
     }
 
-    /// The id is what makes recomputing a bucket free, so its shape is a
-    /// contract with the receiver, not an implementation detail.
-    func testAggregateIdentityIsDerivedFromTheBucket() {
-        let start = Date(timeIntervalSince1970: 1_754_557_200) // 2025-08-07T09:00:00Z
-
-        XCTAssertEqual(
-            HealthReader.aggregateID(metric: "steps", start: start, bucket: .hour),
-            "agg:steps:2025-08-07T09:00:00Z:h"
-        )
-        XCTAssertEqual(
-            HealthReader.aggregateID(metric: "steps", start: start, bucket: .day),
-            "agg:steps:2025-08-07T09:00:00Z:d"
-        )
-    }
-
-    /// A deletion reuses the id of the sample it removes: same id, different
-    /// kind. That is what lets the receiver drop the record without a lookup.
-    func testADeletionCarriesTheIdentityOfTheSampleItRemoves() throws {
-        let uuid = try XCTUnwrap(UUID(uuidString: "3F2504E0-4F89-11D3-9A0C-0305E82C3301"))
-
-        XCTAssertEqual(
-            HealthReader.sampleID(metric: "sleep", uuid: uuid),
-            "hk:sleep:3F2504E0-4F89-11D3-9A0C-0305E82C3301"
-        )
+    /// A day no longer carries an identity per event — a reader rebuilds one
+    /// from the metric and the instant. What is left on the wire is the kind,
+    /// and it is the whole of the difference between a total and a record.
+    func testAKindIsWhatSeparatesATotalFromARecord() {
+        XCTAssertEqual(Event.Kind.total.rawValue, "agg")
+        XCTAssertEqual(Event.Kind.record.rawValue, "hk")
     }
 
     func testDayBucketsAlignToTheStartOfTheLocalDay() throws {
@@ -41,7 +23,7 @@ final class HealthTests: XCTestCase {
 
         let anchor = Bucket.day.anchor(before: afternoon, calendar: calendar)
 
-        XCTAssertEqual(iso.string(from: anchor), "2025-08-07T00:00:00Z")
+        XCTAssertEqual(anchor, Date(timeIntervalSince1970: 1_754_524_800))
     }
 
     func testEveryMetricHasADistinctWireName() {
@@ -60,24 +42,31 @@ final class HealthTests: XCTestCase {
         XCTAssertTrue(aggregated.isDisjoint(with: sampled))
     }
 
-    func testAggregatePayloadCarriesTheBucketAndUnit() throws {
-        let payload = try Event.payload(AggregatePayload(
+    /// A total is the one thing that names its bucket, and that is what tells a
+    /// reader it is looking at a total rather than a record.
+    func testATotalCarriesItsBucketAndUnit() throws {
+        let event = try Event(
+            kind: .total,
             metric: "steps",
             bucket: "hour",
             start: Date(timeIntervalSince1970: 1_754_557_200),
             end: Date(timeIntervalSince1970: 1_754_560_800),
-            value: 842,
-            unit: "count"
-        ))
-
-        let object = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: payload) as? [String: Any]
+            unit: "count",
+            value: 842
         )
-        XCTAssertEqual(object["metric"] as? String, "steps")
-        XCTAssertEqual(object["bucket"] as? String, "hour")
-        XCTAssertEqual(object["value"] as? Double, 842)
-        XCTAssertEqual(object["unit"] as? String, "count")
-        XCTAssertEqual(object["start"] as? String, "2025-08-07T09:00:00Z")
+
+        let series = try XCTUnwrap(day(Columnar.body([event])).first)
+        XCTAssertEqual(series["k"] as? String, "agg")
+        XCTAssertEqual(series["metric"] as? String, "steps")
+        XCTAssertEqual(series["bucket"] as? String, "hour")
+        XCTAssertEqual(series["unit"] as? String, "count")
+        XCTAssertEqual(series["t0"] as? Int, 1_754_557_200)
+        XCTAssertEqual(series["value"] as? [Double], [842])
+    }
+
+    private func day(_ body: Data) throws -> [[String: Any]] {
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        return try XCTUnwrap(object["series"] as? [[String: Any]])
     }
 
     func testTheAppAsksToReadEveryMetricItCollects() {

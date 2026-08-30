@@ -1,58 +1,84 @@
 import Foundation
 
-/// Schema version stamped on every line this device emits.
+/// The layout a stored day is written in.
 ///
-/// The receiver reads it before anything else, so an old agent can refuse a
-/// format it does not understand instead of quietly parsing nonsense.
+/// A reader checks it before anything else, so an old agent can refuse a shape
+/// it does not understand instead of quietly parsing nonsense. Version 1 was one
+/// JSON object per line, each carrying its own HealthKit record id; version 2 is
+/// the columnar day in ``Columnar``.
+public let dayFormatVersion = 2
+
+/// The version stamped on each event a reader unpacks out of a day.
+///
+/// It has not moved and is not expected to: the fields of an event are the same
+/// fields they always were. Only the way a day packs them changed.
 public let eventSchemaVersion = 1
 
 /// One thing that happened in Health, in the shape it travels in.
 ///
-/// `id` is derived from the data itself — never from a counter — so the same
-/// fact always carries the same id whichever day it is read on and however many
-/// times. It is what a reader keys by.
+/// There is no id on it, and that is the point of the second format. A record's
+/// identity is its metric and the instant it started, which a reader rebuilds;
+/// the HealthKit uuid that used to carry it was more than half of everything
+/// this app uploaded and no reader ever looked at it.
 ///
-/// There is no kind on an event any more, and nothing lost by that. A day is
-/// sent whole and replaces the day before it, so there is nothing to say about
-/// a record being removed: it is simply not in the day the next time. What is
-/// left is a total or a reading, and a total is the one that names its bucket.
+/// There is no kind on an event either, beyond ``Kind``, and nothing lost by
+/// that. A day is sent whole and replaces the day before it, so there is nothing
+/// to say about a record being removed: it is simply not in the day the next
+/// time. What is left is a total or a reading, and a total is the one that names
+/// its bucket.
 public struct Event: Equatable, Sendable {
-    /// Stable identity of the fact, e.g. `agg:steps:2026-08-07T09:00Z:h`.
-    public let id: String
-    /// The fields, already encoded as a canonical JSON object. Build it with
-    /// ``payload(_:)`` — hand-rolled bytes will break change detection.
-    public let payload: Data
+    /// Whether this is a de-duplicated total or a single record.
+    public enum Kind: String, Sendable, Comparable {
+        case total = "agg"
+        case record = "hk"
 
-    public init(id: String, payload: Data) throws {
-        guard !id.isEmpty else {
-            throw EventError.emptyIdentifier
+        public static func < (left: Kind, right: Kind) -> Bool {
+            left.rawValue < right.rawValue
         }
-        guard payload.first == UInt8(ascii: "{"), payload.last == UInt8(ascii: "}") else {
-            throw EventError.payloadIsNotAnObject(id: id)
-        }
-        self.id = id
-        self.payload = payload
     }
 
-    /// Encode the fields into a canonical payload.
-    ///
-    /// Keys come out sorted and dates as ISO-8601, so encoding the same values
-    /// twice yields byte-identical output. A day is only re-sent when its bytes
-    /// differ from the ones already up there, and an unstable encoder would make
-    /// every re-read look like a change.
-    public static func payload(_ fields: some Encodable) throws -> Data {
-        try canonicalEncoder.encode(fields)
+    public let kind: Kind
+    public let metric: String
+    /// Present on a total, absent on a record — the only difference between the
+    /// two now that nothing carries a kind of its own.
+    public let bucket: String?
+    public let start: Date
+    public let end: Date
+    public let source: String?
+    public let unit: String?
+    public let value: Double?
+    public let stage: String?
+    public let activity: String?
+    public let duration: Double?
+
+    public init(
+        kind: Kind,
+        metric: String,
+        bucket: String? = nil,
+        start: Date,
+        end: Date,
+        source: String? = nil,
+        unit: String? = nil,
+        value: Double? = nil,
+        stage: String? = nil,
+        activity: String? = nil,
+        duration: Double? = nil
+    ) throws {
+        guard !metric.isEmpty else { throw EventError.emptyMetric }
+        self.kind = kind
+        self.metric = metric
+        self.bucket = bucket
+        self.start = start
+        self.end = end
+        self.source = source
+        self.unit = unit
+        self.value = value
+        self.stage = stage
+        self.activity = activity
+        self.duration = duration
     }
 }
 
 public enum EventError: Error, Equatable {
-    case emptyIdentifier
-    case payloadIsNotAnObject(id: String)
+    case emptyMetric
 }
-
-private let canonicalEncoder: JSONEncoder = {
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-    encoder.dateEncodingStrategy = .iso8601
-    return encoder
-}()

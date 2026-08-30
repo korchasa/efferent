@@ -13,6 +13,7 @@ import { bucketId, dayBefore, isDay } from "../protocol/ids.ts";
 import { fromBase64url } from "../protocol/signing.ts";
 import { associatedData, open, rawPrivateKey } from "../protocol/sealedbox.ts";
 import { decompress } from "../protocol/framing.ts";
+import { expand } from "../protocol/day.ts";
 
 export { dayBefore, isDay };
 
@@ -22,7 +23,11 @@ export interface ReadingKey {
   readingPublic: string;
 }
 
-/** One fact, as it left the phone. */
+/** One fact, in the shape a reader sees it.
+ *
+ * The id is not on the wire any more — ``expand`` rebuilds it from the metric
+ * and the instant the record began. Nothing above this layer can tell the
+ * difference, which is the whole reason the change was cheap. */
 export interface Event {
   id: string;
   v: number;
@@ -141,7 +146,7 @@ async function privateDirectory(path: string): Promise<void> {
 export async function readDay(day: string): Promise<Event[]> {
   try {
     const text = await Deno.readTextFile(`${HOME}/${DAYS}/${day}.ndjson`);
-    return text.split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line) as Event);
+    return expand(text) as Event[];
   } catch {
     return [];
   }
@@ -194,9 +199,7 @@ export async function openArchive(endpoint: string): Promise<Archive> {
         associatedData(bucket, name),
       ),
     );
-    const events = new TextDecoder().decode(plaintext).trim().split("\n")
-      .filter((line) => line.length > 0)
-      .map((line) => JSON.parse(line) as Event);
+    const events = expand(new TextDecoder().decode(plaintext)) as Event[];
     return { day: name, events };
   }
 
