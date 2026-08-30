@@ -163,6 +163,11 @@ public final class Uploader: NSObject {
     /// of the previous one, and at that moment the finished task may still be
     /// listed — which would refuse the send and leave days standing.
     private let passLock = NSLock()
+    /// Asks turned away since the last pass reported them. A burst of Health
+    /// deliveries is one event and arrives as fifteen, so counting is what
+    /// keeps the fact without writing it down fifteen times.
+    private var refusedWhileRunning = 0
+    private var refusedWhileStopped = 0
     private var passRunning = false
 
     /// Sending held back on purpose.
@@ -241,11 +246,11 @@ public final class Uploader: NSObject {
     /// screen said thousands of days were waiting.
     public func send() async throws -> Outcome {
         guard !isStopped else {
-            log.debug("pass refused: sending is held back")
+            countRefusal(stopped: true)
             return .stopped
         }
         guard claimPass() else {
-            log.debug("pass refused: another pass is already running")
+            countRefusal(stopped: false)
             return .alreadyInFlight
         }
         defer { releasePass() }
@@ -285,6 +290,7 @@ public final class Uploader: NSObject {
         if rounds > 1 {
             log.info("pass ran \(rounds) rounds: \(scheduled) days sending, \(cleaned) unchanged")
         }
+        reportRefusals()
         return scheduled == 0 && cleaned == 0
             ? .nothingToSend
             : .scheduled(days: scheduled, unchanged: cleaned)
@@ -320,10 +326,6 @@ public final class Uploader: NSObject {
             if try store.digest(for: day) == digest {
                 try store.markClean(day: day)
                 unchanged += 1
-                log.debug(
-                    "\(day): \(content.events.count) events, \(plaintext.count) bytes, "
-                        + "unchanged since it was last stored"
-                )
                 continue
             }
 
@@ -552,6 +554,39 @@ public final class Uploader: NSObject {
         defer { flightLock.unlock() }
         consecutiveFailures = failed ? consecutiveFailures + 1 : 0
         return consecutiveFailures
+    }
+
+    private func countRefusal(stopped: Bool) {
+        passLock.lock()
+        defer { passLock.unlock() }
+        if stopped {
+            refusedWhileStopped += 1
+        } else {
+            refusedWhileRunning += 1
+        }
+    }
+
+    /// Say once what was turned away, at the end of the pass that turned it
+    /// away. An ask refused while sending is held back has no running pass to
+    /// report it, so it waits for the next one — which is the first moment
+    /// anybody could act on it anyway.
+    private func reportRefusals() {
+        passLock.lock()
+        let running = refusedWhileRunning
+        let stopped = refusedWhileStopped
+        refusedWhileRunning = 0
+        refusedWhileStopped = 0
+        passLock.unlock()
+
+        var reasons: [String] = []
+        if running > 0 {
+            reasons.append("\(running) while this pass was running")
+        }
+        if stopped > 0 {
+            reasons.append("\(stopped) while sending was held back")
+        }
+        guard !reasons.isEmpty else { return }
+        log.debug("asks turned away: " + reasons.joined(separator: ", "))
     }
 
     private func claimPass() -> Bool {

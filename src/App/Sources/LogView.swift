@@ -9,7 +9,9 @@ import SwiftUI
 struct LogView: View {
     @Environment(\.dismiss) private var dismiss
 
-    @State private var text = LogStore.shared.read()
+    /// The end of the log, not the whole of it. Sharing still hands over the
+    /// whole file — see ``LogStore/tail(_:)``.
+    @State private var excerpt = LogStore.shared.tail()
     @State private var sharing = false
     @State private var clearing = false
 
@@ -24,7 +26,15 @@ struct LogView: View {
                             .foregroundStyle(Palette.body)
                             .fixedSize(horizontal: false, vertical: true)
 
-                        Text(text.isEmpty ? "Nothing written down yet." : text)
+                        if excerpt.hidden > 0 {
+                            Text("Showing the last \(excerpt.text.split(separator: "\n").count) lines. "
+                                + "The \(excerpt.hidden) before them are in the file that Send hands over.")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Palette.body)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        Text(excerpt.text.isEmpty ? "Nothing written down yet." : excerpt.text)
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(Palette.ink)
                             .textSelection(.enabled)
@@ -51,7 +61,7 @@ struct LogView: View {
                     Legend(measure, size: 9)
                     Button("Send the log") { sharing = true }
                         .buttonStyle(ProminentButton())
-                        .disabled(text.isEmpty)
+                        .disabled(excerpt.text.isEmpty)
                     Button("Start a fresh log") { clearing = true }
                         .buttonStyle(QuietButton())
                 }
@@ -69,12 +79,12 @@ struct LogView: View {
                 }
             }
             .sheet(isPresented: $sharing) {
-                ShareSheet(text: text) { _ in sharing = false }
+                ShareSheet(text: LogStore.shared.read()) { _ in sharing = false }
             }
             .alert("Start a fresh log?", isPresented: $clearing) {
                 Button("Clear", role: .destructive) {
                     LogStore.shared.clear()
-                    text = ""
+                    excerpt = LogStore.Excerpt(text: "", hidden: 0)
                 }
                 Button("Keep", role: .cancel) {}
             } message: {
@@ -84,8 +94,11 @@ struct LogView: View {
         }
     }
 
+    /// The whole file's size, not the excerpt's: it is the whole file that
+    /// gets sent, and a count that shrank when the screen started showing less
+    /// would read as lost lines.
     private var measure: String {
-        let lines = text.isEmpty ? 0 : text.split(separator: "\n").count
-        return "\(lines) lines"
+        let shown = excerpt.text.isEmpty ? 0 : excerpt.text.split(separator: "\n").count
+        return "\(shown + excerpt.hidden) lines"
     }
 }

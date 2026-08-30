@@ -21,6 +21,9 @@ final class Services: ObservableObject {
     let deployment: Deployment?
     let deploymentError: String?
     private let log = Log(category: "services")
+    /// Asks that arrived while sending was held back, reported once when it is
+    /// let go again rather than one line each.
+    private var asksWhileHeldBack = 0
 
     @Published private(set) var stats: Stats?
     @Published private(set) var lastError: String?
@@ -308,7 +311,10 @@ final class Services: ObservableObject {
         // button, the Health observer, the background refresh — arrives here,
         // so a single guard covers all of them and none of them can forget.
         guard !paused else {
-            log.info("asked to send while held back; nothing was sent")
+            // Counted, not written down. Health delivers each metric separately
+            // and every delivery asks; while sending is held back that is a
+            // dozen identical lines an hour saying what the button already says.
+            asksWhileHeldBack += 1
             return
         }
         guard let uploader = uploaderIfPaired() else {
@@ -319,10 +325,15 @@ final class Services: ObservableObject {
         do {
             let started = Date()
             let outcome = try await uploader.send()
-            log.info(
-                "send outcome: \(String(describing: outcome)) "
-                    + "in \(Uploader.milliseconds(since: started)) ms"
-            )
+            // Only when the pass did something. The uploader writes down what
+            // it took, what it sent and what it turned away, so repeating every
+            // outcome here doubled a burst of asks into two lines apiece.
+            if case let .scheduled(days, unchanged) = outcome {
+                log.info(
+                    "send outcome: \(days) days sending, \(unchanged) unchanged, "
+                        + "in \(Uploader.milliseconds(since: started)) ms"
+                )
+            }
             lastError = nil
         } catch {
             log.error("send failed: \(String(describing: error))")
@@ -416,7 +427,13 @@ final class Services: ObservableObject {
     func setPaused(_ value: Bool) {
         guard paused != value else { return }
         paused = value
-        log.info(value ? "sending held back by hand" : "sending let go again")
+        if value {
+            log.info("sending held back by hand")
+        } else {
+            log.info("sending let go again"
+                + (asksWhileHeldBack > 0 ? ", after turning away \(asksWhileHeldBack) asks" : ""))
+            asksWhileHeldBack = 0
+        }
         UserDefaults.standard.set(value, forKey: Self.pausedKey)
         // The uploader stops itself, cancelling what is in the air. Without
         // this the button changed only what the next tap on it would do: every

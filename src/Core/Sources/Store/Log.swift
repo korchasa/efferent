@@ -72,6 +72,37 @@ public final class LogStore: @unchecked Sendable {
         return (try? String(contentsOf: url, encoding: .utf8)) ?? ""
     }
 
+    /// The end of the log, and how much was left behind.
+    ///
+    /// The whole file is what gets shared; the screen only ever draws this. A
+    /// log at its cap is half a megabyte of monospaced text, and a view that
+    /// lays all of it out at once takes long enough to look broken. What
+    /// somebody opening the log came for is at the end of it anyway.
+    public func tail(_ limit: Int = 64 * 1024) -> Excerpt {
+        let whole = read()
+        guard whole.utf8.count > limit else {
+            return Excerpt(text: whole, hidden: 0)
+        }
+        // Cutting by bytes can land inside a character, so the first line is
+        // always dropped — it is a partial line in any case.
+        var text = String(decoding: Array(whole.utf8).suffix(limit), as: UTF8.self)
+        if let newline = text.firstIndex(of: "\n") {
+            text = String(text[text.index(after: newline)...])
+        }
+        return Excerpt(text: text, hidden: Self.lines(whole) - Self.lines(text))
+    }
+
+    /// A slice of the log with a count of the lines it does not include.
+    public struct Excerpt: Equatable, Sendable {
+        public let text: String
+        public let hidden: Int
+
+        public init(text: String, hidden: Int) {
+            self.text = text
+            self.hidden = hidden
+        }
+    }
+
     public func clear() {
         lock.lock()
         defer { lock.unlock() }
@@ -90,6 +121,10 @@ public final class LogStore: @unchecked Sendable {
     /// entries with no time on them.
     private func oneLine(_ message: String) -> String {
         message.replacingOccurrences(of: "\n", with: " ")
+    }
+
+    private static func lines(_ text: String) -> Int {
+        text.utf8.reduce(0) { $1 == UInt8(ascii: "\n") ? $0 + 1 : $0 }
     }
 
     private static func defaultURL() -> URL {
