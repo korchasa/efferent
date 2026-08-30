@@ -108,20 +108,43 @@ where the year is not 2026 and nobody else could name the day.
 
 ## The wire format
 
-NDJSON. One self-contained JSON object per line:
+A day is a set of columns, in one JSON object:
 
 ```
-{"id":"agg:steps:2026-08-07T09:00Z:h","v":1,"metric":"steps","bucket":"hour","value":842,"unit":"count"}
+{"series":[{"d":[0,0],"k":"hk","metric":"heartRate","source":"Apple Watch","t":[0,42],
+            "t0":1754557200,"unit":"count/min","value":[60,61]}],"v":2}
 ```
 
-`v` is the schema version, so an old reader can refuse a format it does not understand instead of
-quietly parsing nonsense. `id` is derived from the data itself, so the same fact always carries the
-same id. A total names its `bucket`; a record does not, and that is the only difference between the
-two — there is no kind on an event, because the third one a kind used to be for was a deletion, and
-a day sent whole says a record is gone by not containing it.
+Rows that agree on kind, metric, bucket, unit and source share a series and say all of that once.
+`t0` is the first instant in whole seconds since 1970, `t` counts each row from the one before it,
+`d` is how long each row lasted, and a column is written only when some row in the series has that
+field. `v` is the layout, so an old reader can refuse a shape it does not understand instead of
+quietly parsing nonsense. A total names its `bucket`; a record does not, and that is the only
+difference between the two — there is no kind on an event beyond `k`, because the third one a kind
+used to be for was a deletion, and a day sent whole says a record is gone by not containing it.
 
-Lines are sorted by id. The body is what decides whether a day has changed since it was last sent,
-and HealthKit does not promise to hand samples back in the same order twice.
+A reader unpacks that back into one object per line, exactly as it always was:
+
+```
+{"id":"agg:steps:2026-08-07T09:00:00Z:h","v":1,"metric":"steps","bucket":"hour","value":842,"unit":"count"}
+```
+
+`id` is not on the wire. It is rebuilt from the kind, the metric and the instant, because the
+HealthKit record id it used to carry was 58% of everything this app uploaded and no reader ever
+looked at one. Two records can begin in the same second — two sleep stages, or one heartbeat seen by
+two devices — so rows that land on one identity are numbered `#1`, `#2` in the order the day holds
+them. Over a decade of real days that is 3 620 events out of 994 336.
+
+The whole decade is 4 MiB compressed instead of 34.
+
+The bytes have to come out the same twice or the design falls over: the body is what decides whether
+a day has changed since it was last sent, and HealthKit does not promise to hand records back in the
+same order twice. Sorting by id used to do that. Now the order is over the content itself — series
+by their shared fields, rows by their instants and then their values — and tests on both sides
+shuffle real days to prove it.
+
+Instants are whole seconds. The line format said the same in ISO-8601 and truncated just as quietly;
+here it is the shape of the field.
 
 ## What the service keeps
 
@@ -236,7 +259,8 @@ stranger could overwrite history rather than merely add to it. The signing key c
 the reading key cannot write: handing an agent the ability to read must not hand it the ability to
 forge.
 
-A day on the wire is raw-deflate-compressed NDJSON inside an RFC 9180 base-mode HPKE envelope —
+A day on the wire is the raw-deflate-compressed columnar object above, inside an RFC 9180
+base-mode HPKE envelope —
 `[version 2][32-byte encapsulated key][ciphertext and tag]` — with the bucket name and the date bound
 into the authenticated data. The suite is DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 and
 ChaCha20-Poly1305. CryptoKit seals on the phone and `hpke-js` opens in the local TypeScript reader.
@@ -324,7 +348,7 @@ certificate, and the archive path above is the whole of the agreement with whate
 ## Layout
 
 - `src/Core/Sources/Health` — the metric catalogue, the readers, the day builder.
-- `src/Core/Sources/Wire` — the event type, the day, NDJSON assembly, the request frame.
+- `src/Core/Sources/Wire` — the event type, the day, the columnar body, the request frame.
 - `src/Core/Sources/Store` — schema, day ledger, anchors.
 - `src/Core/Sources/Upload` — Keychain, background upload, reading the archive's listing.
 - `src/App/Sources` — the setup walkthrough, the everyday screen, the design, the composition root.

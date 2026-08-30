@@ -117,8 +117,24 @@ public final class Store {
     /// digests and invalidates them as one transaction.
     @discardableResult
     public func activateSealingVersion(_ version: Int64) throws -> Bool {
+        try activate(MetaKey.sealingVersion, version)
+    }
+
+    /// Requeue every known day exactly once when the day's layout changes.
+    ///
+    /// Same reasoning as the sealing version, one level in: a digest is over the
+    /// plaintext, so a day repacked in a new layout hashes differently while the
+    /// archive still holds the old bytes. Left alone, the ordinary uploader would
+    /// rebuild each day, find it unchanged against a claim made about a shape it
+    /// no longer writes, and leave the old day up there for good.
+    @discardableResult
+    public func activateDayFormat(_ version: Int64) throws -> Bool {
+        try activate(MetaKey.dayFormat, version)
+    }
+
+    private func activate(_ key: MetaKey, _ version: Int64) throws -> Bool {
         try dbQueue.write { db in
-            if try Self.int(db, MetaKey.sealingVersion.rawValue) == version {
+            if try Self.int(db, key.rawValue) == version {
                 return false
             }
 
@@ -126,7 +142,7 @@ public final class Store {
                 sql: "UPDATE day SET digest = NULL, dirty = 1, updatedAt = ?",
                 arguments: [Date().timeIntervalSince1970]
             )
-            try Self.setInt(db, MetaKey.sealingVersion.rawValue, version)
+            try Self.setInt(db, key.rawValue, version)
             return true
         }
     }

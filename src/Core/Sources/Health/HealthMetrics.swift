@@ -42,7 +42,7 @@ public struct AggregateMetric: Sendable {
 public struct SampleMetric: Sendable {
     public let name: String
     public let type: HKSampleType
-    let encode: @Sendable (HKSample) throws -> Data
+    let encode: @Sendable (HKSample) throws -> Event
 
     public static let all: [SampleMetric] = [
         SampleMetric(name: "sleep", type: HKCategoryType(.sleepAnalysis), encode: encodeSleep),
@@ -61,14 +61,15 @@ public struct SampleMetric: Sendable {
             guard let quantity = (sample as? HKQuantitySample)?.quantity else {
                 throw HealthError.unexpectedSampleType(metric: name)
             }
-            return try Event.payload(QuantityPayload(
+            return try Event(
+                kind: .record,
                 metric: name,
                 start: sample.startDate,
                 end: sample.endDate,
-                value: quantity.doubleValue(for: unit),
+                source: sample.sourceRevision.source.name,
                 unit: unit.unitString,
-                source: sample.sourceRevision.source.name
-            ))
+                value: quantity.doubleValue(for: unit)
+            )
         }
     }
 }
@@ -78,56 +79,20 @@ public enum HealthError: Error, Equatable {
     case notAvailableOnThisDevice
 }
 
-// MARK: - Wire payloads
-
-struct AggregatePayload: Encodable {
-    let metric: String
-    let bucket: String
-    let start: Date
-    let end: Date
-    let value: Double
-    let unit: String
-}
-
-struct QuantityPayload: Encodable {
-    let metric: String
-    let start: Date
-    let end: Date
-    let value: Double
-    let unit: String
-    let source: String
-}
-
-struct SleepPayload: Encodable {
-    let metric: String
-    let start: Date
-    let end: Date
-    let stage: String
-    let source: String
-}
-
-struct WorkoutPayload: Encodable {
-    let metric: String
-    let start: Date
-    let end: Date
-    let activity: String
-    let duration: Double
-    let source: String
-}
-
 // MARK: - Encoders
 
-@Sendable private func encodeSleep(_ sample: HKSample) throws -> Data {
+@Sendable private func encodeSleep(_ sample: HKSample) throws -> Event {
     guard let category = sample as? HKCategorySample else {
         throw HealthError.unexpectedSampleType(metric: "sleep")
     }
-    return try Event.payload(SleepPayload(
+    return try Event(
+        kind: .record,
         metric: "sleep",
         start: sample.startDate,
         end: sample.endDate,
-        stage: sleepStageName(category.value),
-        source: sample.sourceRevision.source.name
-    ))
+        source: sample.sourceRevision.source.name,
+        stage: sleepStageName(category.value)
+    )
 }
 
 /// Since iOS 16 a night is not one interval but a set of overlapping stretches
@@ -146,16 +111,17 @@ private func sleepStageName(_ value: Int) -> String {
     }
 }
 
-@Sendable private func encodeWorkout(_ sample: HKSample) throws -> Data {
+@Sendable private func encodeWorkout(_ sample: HKSample) throws -> Event {
     guard let workout = sample as? HKWorkout else {
         throw HealthError.unexpectedSampleType(metric: "workout")
     }
-    return try Event.payload(WorkoutPayload(
+    return try Event(
+        kind: .record,
         metric: "workout",
         start: workout.startDate,
         end: workout.endDate,
+        source: workout.sourceRevision.source.name,
         activity: String(workout.workoutActivityType.rawValue),
-        duration: workout.duration,
-        source: workout.sourceRevision.source.name
-    ))
+        duration: workout.duration
+    )
 }

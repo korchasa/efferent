@@ -16,6 +16,7 @@ import { bucketId } from "../protocol/ids.ts";
 import { base64url, fromBase64url, signUpload, type UploadHeader } from "../protocol/signing.ts";
 import { associatedData, seal } from "../protocol/sealedbox.ts";
 import { compress } from "../protocol/framing.ts";
+import { pack } from "../protocol/day.ts";
 import { packDays, type SealedDay } from "../protocol/batch.ts";
 import {
   dayBefore,
@@ -143,7 +144,7 @@ async function send(url: string, dayList: string): Promise<void> {
   const batch: SealedDay[] = [];
   for (const day of wanted) {
     const events = Array.from({ length: 3 }, (_, hour) => ({
-      id: `agg:steps:${day}T${String(9 + hour).padStart(2, "0")}:00:00Z:h`,
+      id: "",
       v: 1,
       metric: "steps",
       bucket: "hour",
@@ -152,7 +153,7 @@ async function send(url: string, dayList: string): Promise<void> {
       value: 100 + hour,
       unit: "count",
     }));
-    const lines = events.map((event) => JSON.stringify(event)).join("\n") + "\n";
+    const body = pack(events);
 
     batch.push({
       day,
@@ -160,7 +161,7 @@ async function send(url: string, dayList: string): Promise<void> {
       // back as another one. The batch around them binds nothing.
       blob: await seal(
         fromBase64url(reading.readingPublic),
-        await compress(new TextEncoder().encode(lines)),
+        await compress(new TextEncoder().encode(body)),
         associatedData(bucket, day),
       ),
     });

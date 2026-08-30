@@ -23,8 +23,11 @@ This file is the rulebook.
 - **Marked days and their anchor go in one transaction.** `Store.markDirty` takes both for exactly
   this reason. An anchor saved on its own tells HealthKit that data was delivered when it was not,
   and HealthKit will never offer it again.
-- **Ids are derived from the data, never from a counter.** If you find yourself generating a UUID
-  for an event id, the design has gone wrong.
+- **Ids are derived from the data, never from a counter, and never stored.** A reader rebuilds an
+  identity from the kind, the metric and the instant a record began; the phone writes none. The
+  HealthKit record id it used to carry was 58% of everything this app uploaded and nothing ever read
+  it. If you find yourself generating a UUID for an event id, or putting one back on the wire, the
+  design has gone wrong.
 - **A day that came back unchanged must not be uploaded.** The fingerprint is of the _plaintext_,
   never of what goes on the wire: sealing uses a fresh throwaway key every time, so identical days
   never produce identical bytes and a comparison of those would re-upload a week every hour.
@@ -46,9 +49,24 @@ This file is the rulebook.
   of the archive as lost, and the caller believes it — a phone re-uploading a decade, or worse if
   the comparison ever runs the other way. A check that fails must neither stop the send behind it
   nor be stamped as done, or one bad moment buys a whole day of not looking.
-- **Payload bytes must be canonical, and the body is sorted by id.** Build payloads with
-  `Event.payload(_:)`. The comparison above is over the whole body, and HealthKit does not promise
-  to hand samples back in the same order twice.
+- **A day is built by `Columnar.body(_:)`, and its bytes must not depend on the order events
+  arrived in.** The comparison above is over the whole body, and HealthKit does not promise to hand
+  records back in the same order twice. Sorting by id used to settle that; with no id left the order
+  is over the content — series by kind, metric, bucket, unit and source, rows by their instants and
+  then their values. It has to be a _total_ order: two sleep stages beginning in the same second
+  differ only past the third field, and a comparison that stopped earlier would let one day hash two
+  ways. Tests on both sides shuffle real days to prove it.
+- **An instant is not a name, so rows that land on one are numbered.** `#1`, `#2` in the order the
+  series holds them. Over a decade of real days 3 620 events out of 994 336 share an identity with
+  another — sleep stages that start together, one heartbeat seen by two devices. A reader that
+  skipped the numbering would silently drop them into each other.
+- **An instant is a whole second.** Both ends of a record are stored as seconds since 1970, and a
+  finer `Date` is cut down. The line format said the same thing in ISO-8601 and truncated just as
+  quietly; here it is the shape of the field, so it is written down rather than discovered.
+- **The columns are a closed set, and that is enforced by the type.** A field with no column would
+  travel no further and nothing would say so. Which is why the columns are the stored properties of
+  `Event`: adding a field without adding a column does not compile. The TypeScript writer, which has
+  no such help, refuses an unknown key instead.
 - **A metric belongs to exactly one catalogue.** Cumulative quantities are totals via
   `AggregateMetric`; everything else travels record by record via `SampleMetric`. Putting one in
   both sends the total _and_ the samples behind it, which is the double count wearing a different
@@ -170,6 +188,14 @@ PyHPKE 0.6.3 in the selected local interpreter.
   back to the `Date` header, which every HTTP answer has.
 - **Compress before sealing, never after.** Ciphertext does not compress, and a round trip that only
   works one way tends to be discovered on a phone.
+- **New days are written in layout 2; old days remain readable as layout 1.** Layout 2 is the
+  columnar day above; layout 1 was one JSON object per line carrying the HealthKit record id. Every
+  reader — Swift, TypeScript, the `setup_guide` Python — accepts both and unpacks either into the
+  same NDJSON, because an archive is replaced a day at a time and nothing above that layer should
+  notice. Changing the layout again means a new `dayFormatVersion`, all three readers, and a ledger
+  reset through `Store.activateDayFormat`: a digest is over the plaintext, so a day repacked in a new
+  shape hashes differently while the archive still holds the old bytes, and without the reset the
+  uploader would call every day unchanged and leave the old archive up there for good.
 - **New days are RFC 9180 HPKE version 2; old days remain readable as version 1.** The current suite
   is DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 and ChaCha20-Poly1305. Changing it requires a new
   envelope byte, an updated MCP setup guide, Swift/TypeScript/Python interoperability proof and a

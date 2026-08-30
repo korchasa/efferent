@@ -314,7 +314,7 @@ public final class Uploader: NSObject {
                 log.debug("\(day): Health returned nothing at all, not even an empty day")
                 continue
             }
-            let plaintext = try NDJSON.body(content.events)
+            let plaintext = try Columnar.body(content.events)
             let digest = Data(SHA256.hash(data: plaintext))
 
             if try store.digest(for: day) == digest {

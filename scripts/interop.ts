@@ -19,6 +19,7 @@ import { SCHEME, systemToolPath, WORKSPACE } from "./config.ts";
 import { generate } from "./generate.ts";
 import { associatedData, open, rawPrivateKey } from "../protocol/sealedbox.ts";
 import { decompress } from "../protocol/framing.ts";
+import { type DayEvent, expand, pack } from "../protocol/day.ts";
 import { unpackDays } from "../protocol/batch.ts";
 import { canonicalRequest, fromBase64url, verifyUpload } from "../protocol/signing.ts";
 import { bucketId } from "../protocol/ids.ts";
@@ -101,17 +102,18 @@ expect(
 
 section("Opening each day with the reading key");
 const lines = await read(packed[0].blob, DAY);
-expect(lines.length === 2, `expected 2 lines, got ${lines.length}`);
-// Sorted by id, which is what makes an unchanged day the same bytes twice.
-expect(lines[0].id === "agg:steps:2026-08-07T09:00:00Z:h", `first id was ${lines[0].id}`);
-expect(lines[0].metric === "steps" && lines[0].value === 842, "the payload fields did not survive");
+expect(lines.length === 2, `expected 2 events, got ${lines.length}`);
+// Totals before records, which is what makes an unchanged day the same bytes
+// twice — and the id below is rebuilt here, not carried on the wire.
+expect(lines[0].id === "agg:steps:2025-08-07T09:00:00Z:h", `first id was ${lines[0].id}`);
+expect(lines[0].metric === "steps" && lines[0].value === 842, "the fields did not survive");
 expect(lines[0].bucket === "hour", "a total has to say which bucket it is");
-expect(lines[1].id === "hk:sleep:9A2C", `second id was ${lines[1].id}`);
+expect(lines[1].id === "hk:sleep:2025-08-06T22:00:00Z", `second id was ${lines[1].id}`);
 expect(lines[1].metric === "sleep" && lines[1].stage === "asleepCore", "the sleep stage was lost");
 expect(lines[1].bucket === undefined, "a record must not look like a total");
 
 const second = await read(packed[1].blob, SECOND_DAY);
-expect(second.length === 1, `expected 1 line on the second day, got ${second.length}`);
+expect(second.length === 1, `expected 1 event on the second day, got ${second.length}`);
 expect(second[0].value === 1201, `the second day's total was ${second[0].value}`);
 
 // Each day is sealed to its own date, so the one cannot be opened as the other.
@@ -220,13 +222,22 @@ console.log(
 // MARK: - Plumbing
 
 /** Open one sealed day and read its lines back. */
-async function read(blob: Uint8Array, day: string): Promise<Record<string, unknown>[]> {
+async function read(blob: Uint8Array, day: string): Promise<DayEvent[]> {
   const plaintext = await decompress(
     await open(privateRaw, readingPublic, blob, associatedData(bucket, day)),
   );
-  return new TextDecoder().decode(plaintext).trim().split("\n").map((line) =>
-    JSON.parse(line) as Record<string, unknown>
+  const text = new TextDecoder().decode(plaintext);
+  const events = expand(text);
+
+  // The strongest thing this check can say: the two implementations do not
+  // merely agree about what a day means, they write the same bytes for it. A
+  // day whose bytes differ between them is a day the phone would re-upload for
+  // ever, because the fingerprint it compares is over exactly these bytes.
+  expect(
+    pack(events) === text,
+    `Swift and TypeScript packed ${day} differently:\n  swift ${text}\n  deno  ${pack(events)}`,
   );
+  return events;
 }
 
 function marker(output: string, name: string): string {

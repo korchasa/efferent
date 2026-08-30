@@ -130,6 +130,11 @@ enum MetaKey: String {
     /// The sealed-envelope version represented by every non-null day digest.
     /// Changing it invalidates those claims and requeues the known archive.
     case sealingVersion = "sealing.version"
+    /// The layout every non-null day digest was computed over. It changes when
+    /// the way a day packs its events changes, and then every stored day is a
+    /// day in the old shape: the digests are claims about bytes nobody writes
+    /// any more, and the whole archive is owed again.
+    case dayFormat = "day.format"
     /// Seconds to add to this device's clock to get the service's, learned from
     /// the service itself after it refused a signature for being out of time.
     ///
