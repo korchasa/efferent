@@ -127,19 +127,70 @@ class Reader {
 
     const remote = await this.stats();
     if (!remote) return;
-    const { state, archive } = await this.open();
+    const { state: held, archive } = await this.open();
+    const state = await this.reload(held);
     this.checkedAt = Date.now();
 
     try {
-      const recent = { from: addDays(today(), -RECENT_DAYS) };
-      await this.take(archive, state, await archive.list(force ? {} : recent));
-      if (!force && remote.days !== Object.keys(state.days).length) {
-        await this.take(archive, state, await archive.list({}));
+      if (force) {
+        await this.takeWhole(archive, state);
+        return;
       }
+      await this.take(archive, state, await archive.list({ from: addDays(today(), -RECENT_DAYS) }));
+      if (behind(remote, state)) await this.takeWhole(archive, state);
     } catch (error) {
       this.warning = `the mirror could not be brought up to date (${message(error)}); ` +
         `answering from what it already had`;
     }
+  }
+
+  /**
+   * The mirror's record of itself, read fresh rather than remembered.
+   *
+   * The command line tool keeps this same mirror, so a record held in memory
+   * since the first question of a session is behind whatever that tool has
+   * copied since. Two things follow from trusting it: those days are fetched a
+   * second time, and the next save writes a file that has forgotten them.
+   *
+   * A record that cannot be read is not a reason to stop answering — this
+   * process still has the one it was working from, and a question about last
+   * week should not fail because a file moved.
+   */
+  private async reload(held: MirrorState): Promise<MirrorState> {
+    try {
+      this.state = await loadState();
+      return this.state;
+    } catch (error) {
+      this.warning = `the mirror's own record could not be read (${message(error)}); ` +
+        `answering from what this session already had`;
+      return held;
+    }
+  }
+
+  /**
+   * The whole archive, listed and taken.
+   *
+   * A listing that walks to the end is the only thing that can say a day has
+   * *gone*, and a day that has gone must lose its record: what the record claims
+   * is "the archive holds this version of this day", and that has stopped being
+   * true. Left in place it is worse than useless — it makes the mirror's count
+   * disagree with the archive's for good, so every ordinary question afterwards
+   * falls through to this same expensive walk.
+   *
+   * The record goes and the file stays. The archive losing a day does not make
+   * the local copy worthless; it may be the last one, and this is not the layer
+   * that gets to decide otherwise.
+   */
+  private async takeWhole(archive: Archive, state: MirrorState): Promise<void> {
+    const listing = await archive.list({});
+    const present = new Set(listing.map((entry) => entry.day));
+    let dropped = false;
+    for (const day of Object.keys(state.days)) {
+      if (present.has(day)) continue;
+      delete state.days[day];
+      dropped = true;
+    }
+    await this.take(archive, state, listing, dropped);
   }
 
   /** Copy the days whose stored version is not the one the archive now holds. */
@@ -147,9 +198,13 @@ class Reader {
     archive: Archive,
     state: MirrorState,
     listing: { day: string; uploaded: string }[],
+    save = false,
   ): Promise<void> {
     const stale = listing.filter((entry) => state.days[entry.day] !== entry.uploaded);
-    if (stale.length === 0) return;
+    if (stale.length === 0) {
+      if (save) await saveState(state);
+      return;
+    }
     for await (const fetched of archive.several(stale.map((entry) => entry.day))) {
       await writeDay(fetched.day, fetched.events);
       state.days[fetched.day] = stale.find((entry) => entry.day === fetched.day)!.uploaded;
@@ -181,6 +236,44 @@ class Reader {
   async mirrored(): Promise<string[]> {
     return await mirroredDays({});
   }
+}
+
+/**
+ * Whether the archive holds days this mirror has no record of.
+ *
+ * `days` is a total only when the service walked the whole archive to count it.
+ * Past that it answers with `complete: false` and a floor, and a floor can prove
+ * one thing and not the other: above the mirror's own count it says the mirror
+ * is behind, at or below it says nothing at all. Read as a total it would
+ * disagree with every honest mirror for good, and buy a full listing on every
+ * question for the rest of that mirror's life.
+ */
+/**
+ * How the readable part of the archive stands against the archive itself.
+ *
+ * Two ways it can differ, and they are opposite facts. Fewer days here than
+ * there means history has not been copied down yet, which one call fixes. More
+ * days here than there means the archive has *lost* one — the local copy may be
+ * the last of it, and nothing this side can put it back. Saying "the whole
+ * archive is readable" of that second case is true and useless, which is exactly
+ * the shape of answer this reader is not supposed to give.
+ */
+function note(remote: Stats | null, mirrored: number): string {
+  if (!remote) return "the archive could not be asked what it holds";
+  if (remote.days > mirrored) {
+    return `${remote.days - mirrored} days of the archive are not copied here yet; ` +
+      `run phone_data_sync to complete the picture`;
+  }
+  if (remote.complete && mirrored > remote.days) {
+    return `${mirrored - remote.days} days are readable here that the archive no longer holds; ` +
+      `this copy of them may be the only one left`;
+  }
+  return "the whole archive is readable";
+}
+
+function behind(remote: Stats, state: MirrorState): boolean {
+  const mirrored = Object.keys(state.days).length;
+  return remote.complete ? remote.days !== mirrored : remote.days > mirrored;
 }
 
 const reader = new Reader();
@@ -238,10 +331,7 @@ const TOOLS: Tool[] = [
           days: mirrored.length,
           firstDay: mirrored[0] ?? null,
           lastDay: mirrored[mirrored.length - 1] ?? null,
-          note: remote && remote.days > mirrored.length
-            ? `${remote.days - mirrored.length} days of the archive are not copied here yet; ` +
-              `run phone_data_sync to complete the picture`
-            : "the whole archive is readable",
+          note: note(remote, mirrored.length),
         },
         metrics: summarise(days),
         howToRead: [
