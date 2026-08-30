@@ -56,6 +56,29 @@ enum Database {
             }
         }
 
+        // What the archive said, and what the service said about sending it.
+        //
+        // `bytes` is the size of the sealed object the archive accepted, so the
+        // daily check can compare sizes as well as names: a day that arrived
+        // truncated is present, has the right name, and is wrong — the listing
+        // is the only place that shows it.
+        //
+        // `attempts` is how many times the service has refused this day since
+        // it was last accepted. A day it will never take — one the frame cannot
+        // carry, one it calls malformed — would otherwise be rebuilt on every
+        // pass forever, at the head of the queue, in front of the days that
+        // would go.
+        migrator.registerMigration("v2.evidence") { db in
+            try db.alter(table: "day") { table in
+                table.add(column: "bytes", .integer)
+                table.add(column: "attempts", .integer).notNull().defaults(to: 0)
+            }
+            try db.drop(index: "day_on_dirty")
+            try db.create(
+                index: "day_on_dirty", on: "day", columns: ["dirty", "attempts", "day"]
+            )
+        }
+
         return migrator
     }
 
@@ -107,4 +130,18 @@ enum MetaKey: String {
     /// The sealed-envelope version represented by every non-null day digest.
     /// Changing it invalidates those claims and requeues the known archive.
     case sealingVersion = "sealing.version"
+    /// Seconds to add to this device's clock to get the service's, learned from
+    /// the service itself after it refused a signature for being out of time.
+    ///
+    /// A phone whose clock is wrong cannot notice on its own, and every request
+    /// it signs is refused for the same reason forever. The one place the truth
+    /// exists is the answer to the refusal, so it is kept.
+    case clockOffset = "clock.offset"
+    /// The time zone every day boundary in this archive is cut on.
+    ///
+    /// Pinned once and then left alone. Days are the person's own days, and if
+    /// the boundary followed the phone abroad, a week of travel would silently
+    /// re-cut a decade of history into different days — every one of them
+    /// changed, every one of them owed again.
+    case dayTimeZone = "day.timezone"
 }

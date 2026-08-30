@@ -257,18 +257,39 @@ public final class HealthCoordinator {
     public func reconcile(with archive: Archive) async throws -> Int {
         guard let earliest = try await reader.earliestDay() else { return 0 }
 
-        let expected = try Day.range(from: earliest, to: today, in: calendar)
+        // Only as far back as this phone was ever asked to go. Health knows
+        // days from 2018; somebody who chose "the last 30 days" has an archive
+        // that starts a month ago, and every day before it is missing on
+        // purpose. Compared against Health's own first day instead, this check
+        // would owe eight years of history back every time it ran, throw away
+        // their fingerprints, and set the phone re-reading a decade a day.
+        let start = try max(earliest, store.backfillReached() ?? earliest)
+        let expected = try Day.range(from: start, to: today, in: calendar)
         let held = try await archive.days()
-        let missing = expected.filter { !held.contains($0) }
-        guard !missing.isEmpty else {
-            log.info("archive agrees: all \(expected.count) days are there")
+        let missing = expected.filter { held[$0] == nil }
+
+        // A day that is there but the wrong size. The device wrote down how big
+        // the object it sent was, so a write that landed cut short — the one
+        // damage a listing of names can never show — is caught here and owed
+        // again. Days sent before this was written down have nothing recorded
+        // and are left alone rather than suspected.
+        let sent = try store.sentBytes()
+        let truncated = expected.filter { day in
+            guard let there = held[day], let ours = sent[day] else { return false }
+            return there != ours
+        }
+
+        let owed = missing + truncated
+        guard !owed.isEmpty else {
+            log.info("archive agrees: all \(expected.count) days are there, at the right size")
             return 0
         }
 
-        let marked = try store.markMissing(missing)
+        let marked = try store.markMissing(owed)
         log.error(
             "archive is missing \(missing.count) of \(expected.count) days "
-                + "(\(missing.first ?? "") … \(missing.last ?? "")); \(marked) owed again"
+                + "(\(missing.first ?? "") … \(missing.last ?? "")) and holds "
+                + "\(truncated.count) at the wrong size; \(marked) owed again"
         )
         onNewData?()
         return marked

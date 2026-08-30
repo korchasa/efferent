@@ -17,6 +17,12 @@ public struct Anchor: Equatable, Sendable {
 public struct Stats: Equatable, Sendable {
     /// Days waiting to be built and sent.
     public let pendingDays: Int
+    /// Days the service has refused often enough that they are no longer
+    /// offered every pass. They are not lost — the daily check against the
+    /// archive owes them back — but they are not moving either, and a count
+    /// that quietly folded them into the ones still being tried would say
+    /// sending was working when it was not.
+    public let stuckDays: Int
     /// Days this device has ever put in the archive.
     public let sentDays: Int
     /// When the service last accepted a day. `nil` before it ever has, which is
@@ -146,7 +152,8 @@ public final class Store {
                 try db.execute(
                     sql: """
                     INSERT INTO day (day, digest, dirty, updatedAt) VALUES (?, NULL, 1, ?)
-                    ON CONFLICT(day) DO UPDATE SET dirty = 1, updatedAt = excluded.updatedAt
+                    ON CONFLICT(day) DO UPDATE SET
+                        dirty = 1, updatedAt = excluded.updatedAt, attempts = 0
                     WHERE day.dirty = 0
                     """,
                     arguments: [day, now]
@@ -202,13 +209,68 @@ public final class Store {
     /// and the first export walks backwards anyway — so newest-first keeps the
     /// two in the same order instead of making the fresh data queue behind a
     /// decade of history.
-    public func pendingDays(limit: Int) throws -> [String] {
+    public func pendingDays(limit: Int, excluding busy: Set<String> = []) throws -> [String] {
         try dbQueue.read { db in
-            try String.fetchAll(
+            // Fetched over the limit rather than filtered after it: the days
+            // already in the air sit at the head of exactly this order, so a
+            // page of the same size would come back made entirely of them and
+            // read as "nothing else to send".
+            let rows = try String.fetchAll(
                 db,
-                sql: "SELECT day FROM day WHERE dirty = 1 ORDER BY day DESC LIMIT ?",
-                arguments: [limit]
+                sql: """
+                SELECT day FROM day WHERE dirty = 1 AND attempts < ?
+                ORDER BY day DESC LIMIT ?
+                """,
+                arguments: [Self.attemptsBeforeParking, limit + busy.count]
             )
+            return busy.isEmpty ? rows : Array(rows.filter { !busy.contains($0) }.prefix(limit))
+        }
+    }
+
+    /// How many refusals a day is offered through before it is set aside.
+    ///
+    /// Small on purpose. A day the service will not take does not become
+    /// acceptable by being sent a sixth time, and while it is being tried it
+    /// stands at the head of the queue in front of days that would go. Nothing
+    /// is forgotten: the daily check against the archive owes it back, so a day
+    /// set aside is retried once a day rather than never.
+    public static let attemptsBeforeParking: Int64 = 5
+
+    /// The service refused these days. Count it against them.
+    ///
+    /// Returns the days that have now been refused often enough to be set
+    /// aside, so the caller can say so once rather than on every pass.
+    @discardableResult
+    public func recordRefused(_ days: some Collection<String>) throws -> [String] {
+        try dbQueue.write { db in
+            var parked: [String] = []
+            for day in Set(days).sorted() {
+                try db.execute(
+                    sql: "UPDATE day SET attempts = attempts + 1, updatedAt = ? WHERE day = ?",
+                    arguments: [Date().timeIntervalSince1970, day]
+                )
+                let attempts = try Int64.fetchOne(
+                    db, sql: "SELECT attempts FROM day WHERE day = ?", arguments: [day]
+                ) ?? 0
+                if attempts == Self.attemptsBeforeParking {
+                    parked.append(day)
+                }
+            }
+            return parked
+        }
+    }
+
+    /// How big the sealed object was that the archive accepted for each day.
+    ///
+    /// Only days that have one: a day sent before this was written down, or one
+    /// never sent, has nothing to compare and is left alone rather than
+    /// suspected.
+    public func sentBytes() throws -> [String: Int] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(
+                db, sql: "SELECT day, bytes FROM day WHERE bytes IS NOT NULL AND dirty = 0"
+            )
+            return Dictionary(uniqueKeysWithValues: rows.map { ($0["day"] as String, $0["bytes"] as Int) })
         }
     }
 
@@ -225,16 +287,23 @@ public final class Store {
     /// they are what a later deletion will be looked up in. Old rows for the day
     /// go first: a record that moved to another day, or was removed, must not
     /// leave a row behind pointing at a day it is no longer in.
-    public func recordSent(day: String, digest: Data, sampleIdentifiers: some Collection<UUID>) throws {
+    public func recordSent(
+        day: String,
+        digest: Data,
+        bytes: Int? = nil,
+        sampleIdentifiers: some Collection<UUID>
+    ) throws {
         try dbQueue.write { db in
             let now = Date().timeIntervalSince1970
             try db.execute(
                 sql: """
-                INSERT INTO day (day, digest, dirty, updatedAt) VALUES (?, ?, 0, ?)
+                INSERT INTO day (day, digest, dirty, updatedAt, bytes, attempts)
+                VALUES (?, ?, 0, ?, ?, 0)
                 ON CONFLICT(day) DO UPDATE SET
-                    digest = excluded.digest, dirty = 0, updatedAt = excluded.updatedAt
+                    digest = excluded.digest, dirty = 0, updatedAt = excluded.updatedAt,
+                    bytes = excluded.bytes, attempts = 0
                 """,
-                arguments: [day, digest, now]
+                arguments: [day, digest, now, bytes]
             )
 
             try db.execute(sql: "DELETE FROM sample WHERE day = ?", arguments: [day])
@@ -271,7 +340,7 @@ public final class Store {
                     sql: """
                     INSERT INTO day (day, digest, dirty, updatedAt) VALUES (?, NULL, 1, ?)
                     ON CONFLICT(day) DO UPDATE SET
-                        digest = NULL, dirty = 1, updatedAt = excluded.updatedAt
+                        digest = NULL, dirty = 1, updatedAt = excluded.updatedAt, attempts = 0
                     """,
                     arguments: [day, now]
                 )
@@ -300,6 +369,39 @@ public final class Store {
                 db, sql: "SELECT value FROM anchor WHERE typeIdentifier = ?",
                 arguments: [typeIdentifier]
             )
+        }
+    }
+
+    // MARK: - The clock, and where days are cut
+
+    /// Seconds to add to this device's clock to reach the service's.
+    public func clockOffset() throws -> TimeInterval {
+        try dbQueue.read { db in
+            try TimeInterval(Self.int(db, MetaKey.clockOffset.rawValue) ?? 0)
+        }
+    }
+
+    public func recordClockOffset(_ seconds: TimeInterval) throws {
+        try dbQueue.write { db in
+            try Self.setInt(db, MetaKey.clockOffset.rawValue, Int64(seconds.rounded()))
+        }
+    }
+
+    /// The time zone this archive's days are cut on, pinning it to `current` the
+    /// first time anyone asks.
+    ///
+    /// Asking is what pins it, and it is asked before the first day is ever
+    /// built. A phone that has been running for months therefore pins the zone
+    /// it has been using all along, and nothing it already sent is re-cut.
+    public func dayTimeZone(current: TimeZone = .current) throws -> TimeZone {
+        try dbQueue.write { db in
+            if let stored = try Self.string(db, MetaKey.dayTimeZone.rawValue),
+               let zone = TimeZone(identifier: stored)
+            {
+                return zone
+            }
+            try Self.setString(db, MetaKey.dayTimeZone.rawValue, current.identifier)
+            return current
         }
     }
 
@@ -344,7 +446,14 @@ public final class Store {
         try dbQueue.read { db in
             try Stats(
                 pendingDays: Int.fetchOne(
-                    db, sql: "SELECT COUNT(*) FROM day WHERE dirty = 1"
+                    db,
+                    sql: "SELECT COUNT(*) FROM day WHERE dirty = 1 AND attempts < ?",
+                    arguments: [Self.attemptsBeforeParking]
+                ) ?? 0,
+                stuckDays: Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM day WHERE dirty = 1 AND attempts >= ?",
+                    arguments: [Self.attemptsBeforeParking]
                 ) ?? 0,
                 sentDays: Int.fetchOne(
                     db, sql: "SELECT COUNT(*) FROM day WHERE digest IS NOT NULL"
