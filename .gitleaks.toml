@@ -56,4 +56,15 @@ description = "the local mirror: decrypted days and the reading key itself"
 # `.efferent*` rather than `.efferent/`: a retired profile is kept under a
 # name the working-directory fallback cannot reach, and it holds the same
 # decrypted days as the live one. `.gitignore` matches the same shape.
-paths = ['''^\.efferent''', '''^\.wrangler/''', '''^server/\.wrangler/''']
+#
+# `build/` is here for the same reason. It holds the checked-out sources of
+# every Swift package the app depends on, and their own test fixtures read as
+# keys: a build before a check turned up eleven of them, none in this project's
+# code. A scanner that has to be preceded by `rm -rf build` is a scanner people
+# learn to skip.
+paths = [
+  '''^\.efferent''',
+  '''^\.wrangler/''',
+  '''^server/\.wrangler/''',
+  '''^build/''',
+]
