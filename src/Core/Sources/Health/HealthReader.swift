@@ -57,6 +57,21 @@ public struct HealthReader {
         HKHealthStore.isHealthDataAvailable()
     }
 
+    /// Whether an error is Health saying the phone is locked.
+    ///
+    /// Health data is encrypted with the passcode, so every read fails while the
+    /// screen is locked — and the background launches this app lives in are
+    /// exactly when that happens. It is a condition to wait out, not a fault:
+    /// the days stay marked and the next launch on an unlocked phone builds
+    /// them. Reported as a failure it becomes a red sentence on the screen
+    /// saying "Protected health data is inaccessible", which is true of every
+    /// locked phone and tells the person nothing to act on.
+    public static func isLocked(_ error: Error) -> Bool {
+        let error = error as NSError
+        return error.domain == HKError.errorDomain
+            && error.code == HKError.Code.errorDatabaseInaccessible.rawValue
+    }
+
     /// Every type the app asks to read.
     public static var readTypes: Set<HKObjectType> {
         var types = Set<HKObjectType>()

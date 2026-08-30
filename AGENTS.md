@@ -285,6 +285,14 @@ it exists because the wrong version fails quietly.
   app registers from a cold launch every time, because nothing keeps its process alive between
   deliveries. So `plan` really does narrow; on the phone the honest answer just happens to be
   everything. An empty set is an ordinary answer, not a fault, and `woke` says so in words.
+- **A locked phone hands over nothing, and that is not a fault.** Health data is encrypted with the
+  passcode, so every read fails with `HKError` 6 — "Protected health data is inaccessible" — while
+  the screen is locked. That is most of when the catch-up task runs, so the task asks
+  `UIApplication.isProtectedDataAvailable` first and waits rather than reading the ledger and
+  starting a build it cannot finish. `HealthReader.isLocked` catches the case that slips through — a
+  phone that locks mid-pass — and keeps it off the screen: reported as a failure it becomes a red
+  sentence under the dial saying the health data is inaccessible, which is true of every locked phone
+  and names nothing anybody can act on. Nothing is lost either way; the days stay marked.
 - The observer's `completion()` must be called, and quickly. Skip it and HealthKit treats the
   delivery as failed, retries, and after a few failures stops waking the app at all — with no error,
   and a symptom that shows up days later.
