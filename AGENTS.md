@@ -254,6 +254,14 @@ it exists because the wrong version fails quietly.
 - Observers must be registered synchronously in `application(_:didFinishLaunchingWithOptions:)`. The
   system launches the app in the background with no UI; registration deferred to a `Task` or to a
   view appearing simply never happens.
+- **One observer over every type, never one per type.** `HKObserverQuery(sampleType:)` is called once
+  per type, so a Watch catching up woke the app fourteen times in the same second — fourteen reads of
+  the ledger and fourteen asks to send, thirteen of which the pass lock turned away.
+  `HKObserverQuery(queryDescriptors:)` hands the changed types to one handler instead, and
+  `HealthCoordinator.plan` turns that set into the work: the metrics that moved get read, and a week
+  gets marked once however many totals moved. Background delivery stays per type — that is where the
+  frequency lives, and samples want `.immediate` where totals want `.hourly`. A handler that is told
+  nothing (`changed` is nil) reads everything: an unknown change is not the same as no change.
 - The observer's `completion()` must be called, and quickly. Skip it and HealthKit treats the
   delivery as failed, retries, and after a few failures stops waking the app at all — with no error,
   and a symptom that shows up days later.
@@ -373,14 +381,13 @@ The conditions the app does not control go down at launch: version, iOS, whether
 is allowed, whether low power mode is on. Each of them stops a phone from sending, and from the
 inside each looks exactly like an app that had nothing to do.
 
-**A repeated fact is counted, not repeated.** Health delivers each metric separately, so one piece of
-news wakes the app fourteen times in the same second; every wake asks for a pass and thirteen of them
-are turned away. Written out, that burst was two thirds of a launch's log and said one thing. So the
-uploader counts the asks it turns away and reports the count once at the end of the pass that turned
-them away, the pause counts its asks and reports them when sending is let go again, and a step that
-found nothing — a week re-read with nothing new, a metric Health offered no changes for — writes
-nothing at all. What survives is every step that did something. Measured on a real launch: 73 lines
-became 28, and the file 3 times smaller.
+**A repeated fact is counted, not repeated.** A burst of identical lines was two thirds of a launch's
+log and said one thing. The single observer above removes the burst at its source; what is left is
+counted rather than written out. The uploader counts the asks it turns away and reports the count
+once at the end of the pass that turned them away, the pause counts its asks and reports them when
+sending is let go again, and a step that found nothing — a week re-read with nothing new, a metric
+Health offered no changes for — writes nothing at all. What survives is every step that did
+something. Measured on a real launch: 73 lines became 28, and the file 3 times smaller.
 
 It is capped at half a megabyte and drops its oldest half when it fills, and it never throws: a log
 that can stop the sending it exists to explain is worse than no log.
