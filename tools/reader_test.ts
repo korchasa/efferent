@@ -50,6 +50,9 @@ class FakeArchive {
   /** The most days ever open at once, which is the fetch window as observed. */
   maxInFlight = 0;
   fault: Fault = {};
+  /** What `stats` reports instead of the truth, as the real service does once an
+   * archive is longer than it will walk: a floor, marked `complete: false`. */
+  floor: number | null = null;
 
   private inFlight = 0;
   private server!: Deno.HttpServer;
@@ -104,6 +107,20 @@ class FakeArchive {
     return this.asked.filter((path) => path.includes("/days")).length;
   }
 
+  /** Listings that walk the archive from its first day: the expensive one, and
+   * the only one that can say a day has gone. A recent listing carries `from`,
+   * and a continuation carries `after`. */
+  fullListings(): number {
+    return this.asked.filter((path) =>
+      path.includes("/days") && !path.includes("from=") && !path.includes("after=")
+    ).length;
+  }
+
+  /** Take a day out, the way clearing objects from a bucket does. */
+  drop(day: string): void {
+    this.days.delete(day);
+  }
+
   async stop(): Promise<void> {
     await this.server.shutdown();
   }
@@ -126,11 +143,11 @@ class FakeArchive {
     for (const day of this.days.values()) bytes += day.blob.length;
     return {
       exists: true,
-      days: names.length,
+      days: this.floor ?? names.length,
       bytes,
       firstDay: names[0] ?? null,
       lastDay: names[names.length - 1] ?? null,
-      complete: true,
+      complete: this.floor === null,
     };
   }
 
@@ -300,6 +317,19 @@ class Session {
     this.child.kill();
     await this.child.status;
     await this.child.stdout.cancel();
+  }
+}
+
+/** One server, started, spoken to and shut down. A test that wants a reader with
+ * no memory of the last question — an empty freshness window, a mirror state
+ * read fresh off the disk — asks for another one of these. */
+async function session(home: string, body: (session: Session) => Promise<void>): Promise<void> {
+  const started = new Session(home);
+  try {
+    await started.rpc("initialize", { protocolVersion: "2025-06-18" });
+    await body(started);
+  } finally {
+    await started.close();
   }
 }
 
@@ -718,6 +748,167 @@ Deno.test("a sync reports what it copied and what is readable afterwards", async
     assertEquals(again.body.readable, 6);
   } finally {
     await session.close();
+    await close();
+  }
+});
+
+// MARK: - What the mirror records, and who else writes it
+
+Deno.test("a day that left the archive stops being counted, and its file is kept", async () => {
+  const { home, archive, close } = await fixture(async (a) => {
+    await seedRun(a, "2026-03-01", 5);
+  });
+  try {
+    await session(home, async (first) => {
+      await first.call("phone_data_sync");
+      assertEquals(Object.keys(mirroredState(home).days).length, 5);
+    });
+
+    // What clearing objects from a bucket does. The mirror's record of that day
+    // says "the archive holds this version", and that has stopped being true.
+    archive.drop("2026-03-03");
+
+    await session(home, async (second) => {
+      await second.call("phone_data_daily", { since: "2026-03-01", until: "2026-03-05" });
+    });
+    assertEquals(
+      Object.keys(mirroredState(home).days).length,
+      4,
+      "the mirror still claims the archive holds a day it has lost",
+    );
+    // The record goes, the day does not: the archive losing a day does not make
+    // the local copy worthless, and it may be the last one left.
+    assert(
+      mirroredFiles(home).includes("2026-03-03"),
+      "the local copy of the lost day was deleted",
+    );
+
+    // Dropping the record must not make the loss silent: the overview is where
+    // a reader finds out that the only remaining copy of a day is this one.
+    await session(home, async (third) => {
+      const overview = await third.call("phone_data_overview");
+      assertEquals(overview.body.archive.days, 4);
+      assertEquals(overview.body.readable.days, 5);
+      assertStringIncludes(overview.body.readable.note, "the archive no longer holds");
+    });
+
+    // The point of dropping the record: the count now agrees again, so an
+    // ordinary question stops walking the whole archive on every refresh.
+    archive.forget();
+    await session(home, async (fourth) => {
+      await fourth.call("phone_data_daily", { since: "2026-03-01", until: "2026-03-05" });
+    });
+    assertEquals(
+      archive.fullListings(),
+      0,
+      "a lost day bought a full listing on every question, for the life of the mirror",
+    );
+  } finally {
+    await close();
+  }
+});
+
+Deno.test("a day count that is only a floor cannot say the mirror is level", async () => {
+  const { home, archive, close } = await fixture(async (a) => {
+    await seedRun(a, "2026-03-01", 5);
+  });
+  try {
+    await session(home, async (first) => {
+      await first.call("phone_data_sync");
+    });
+
+    // An archive longer than the service will walk answers with a floor. It is
+    // below the truth by construction, so it can never mean "you are behind".
+    archive.floor = 3;
+    archive.forget();
+    await session(home, async (second) => {
+      await second.call("phone_data_daily", { since: "2026-03-01", until: "2026-03-05" });
+    });
+
+    assertEquals(
+      archive.fullListings(),
+      0,
+      "a floor below the mirror's own count was read as a mismatch and bought a full listing",
+    );
+  } finally {
+    await close();
+  }
+});
+
+Deno.test("a floor above the mirror's count still says it is behind", async () => {
+  const { home, archive, close } = await fixture(async (a) => {
+    await seedRun(a, "2026-03-01", 5);
+  });
+  try {
+    // Nothing mirrored yet, and the archive admits to at least three days. That
+    // is a mismatch a floor can prove, so the whole listing has to follow.
+    archive.floor = 3;
+    await session(home, async (only) => {
+      await only.call("phone_data_daily", { since: "2026-03-01", until: "2026-03-05" });
+    });
+
+    assert(archive.fullListings() > 0, "a mirror the archive said was behind never caught up");
+    assertEquals(mirroredFiles(home).length, 5);
+  } finally {
+    await close();
+  }
+});
+
+Deno.test("days another process already copied are not fetched again", async () => {
+  const { home, archive, close } = await fixture(async (a) => {
+    await seedRun(a, "2026-03-01", 5);
+  });
+  const held = new Session(home);
+  try {
+    await held.rpc("initialize", { protocolVersion: "2025-06-18" });
+    await held.call("phone_data_sync");
+
+    // History arriving while a server is already running. The command line tool
+    // shares this mirror and copies it down; the server's own record of what is
+    // mirrored is now behind the file it will write over.
+    await seedRun(archive, "2026-02-20", 3);
+    const run = await cli(home, ["sync"]);
+    assertEquals(run.code, 0, run.err);
+    assertEquals(Object.keys(mirroredState(home).days).length, 8);
+
+    archive.forget();
+    await held.call("phone_data_sync");
+
+    assertEquals(
+      archive.fetchedDays(),
+      [],
+      "the server re-fetched days another process had already copied into this mirror",
+    );
+    assertEquals(Object.keys(mirroredState(home).days).length, 8);
+  } finally {
+    await held.close();
+    await close();
+  }
+});
+
+Deno.test("a mirror record that cannot be read does not stop an answer", async () => {
+  const { home, close } = await fixture(async (a) => {
+    await seedRun(a, "2026-03-01", 3);
+  });
+  const held = new Session(home);
+  try {
+    await held.rpc("initialize", { protocolVersion: "2025-06-18" });
+    await held.call("phone_data_sync");
+
+    // The record of what is mirrored goes; the days themselves stay. Reading it
+    // fresh on every pass is what makes this reachable at all, so it has to
+    // degrade the way an unreachable archive does rather than fail the question.
+    await Deno.remove(`${home}/mirror.json`);
+
+    const answer = await held.call("phone_data_sync");
+    assertStringIncludes(answer.body.warning, "could not be read");
+    const daily = await held.call("phone_data_daily", {
+      since: "2026-03-01",
+      until: "2026-03-03",
+    });
+    assertEquals(daily.body.rows.length, 3);
+  } finally {
+    await held.close();
     await close();
   }
 });

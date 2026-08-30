@@ -84,10 +84,22 @@ export async function load<T>(name: string): Promise<T> {
   return JSON.parse(await Deno.readTextFile(`${HOME}/${name}`)) as T;
 }
 
+/**
+ * Through a temporary file, for the same reason a day is.
+ *
+ * Two processes keep this mirror — the command line tool and the MCP server —
+ * and both read the state at the start of every pass. Writing in place gives a
+ * reader a window in which the file is half a document, and the two ways that
+ * lands are both bad: the record parses as nothing mirrored and the whole
+ * archive is fetched again, or it does not parse and the reader says there is no
+ * archive configured. A rename is the one write nobody can catch half of.
+ */
 export async function write(name: string, value: unknown): Promise<void> {
   await privateDirectory(HOME);
-  await Deno.writeTextFile(`${HOME}/${name}`, JSON.stringify(value, null, 2) + "\n");
-  await Deno.chmod(`${HOME}/${name}`, 0o600);
+  const temporary = `${HOME}/${name}.partial`;
+  await Deno.writeTextFile(temporary, JSON.stringify(value, null, 2) + "\n");
+  await Deno.chmod(temporary, 0o600);
+  await Deno.rename(temporary, `${HOME}/${name}`);
 }
 
 export async function loadState(url?: string): Promise<MirrorState> {
