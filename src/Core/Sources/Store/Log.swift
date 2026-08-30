@@ -1,7 +1,7 @@
 import Foundation
 import os
 
-/// The app's own diary of what it did, kept on the phone.
+/// The app's own log, kept on the phone.
 ///
 /// Everything here is also written to the system log, and the system log is the
 /// better tool — when a Mac is at hand. Sending is the part of this app nobody
@@ -11,16 +11,15 @@ import os
 /// only the running process. So the app writes its own account down and keeps
 /// it, and the everyday screen can hand it over.
 ///
-/// What goes in it: days by date, counts, HTTP codes, error text. What never
-/// does: a reading, a key, or anything that opens the archive. The diary is
+/// What goes in it: days by date, counts, sizes, HTTP codes, error text. What
+/// never does: a reading, a key, or anything that opens the archive. The log is
 /// made to be shared, so it holds nothing that would matter if it were.
-public final class Journal: @unchecked Sendable {
-    public static let shared = Journal(url: Journal.defaultURL())
+public final class LogStore: @unchecked Sendable {
+    public static let shared = LogStore(url: LogStore.defaultURL())
 
     private let url: URL
-    /// The diary is trimmed rather than rotated: one file, oldest half dropped
-    /// when it grows past this. Half a megabyte is a few weeks of ordinary
-    /// sending and a bad afternoon of retries.
+    /// One file, oldest half dropped when it grows past this. Half a megabyte
+    /// is a few days of the detail this log now keeps.
     private let cap: Int
     private let lock = NSLock()
     private let stamp: ISO8601DateFormatter = {
@@ -36,10 +35,10 @@ public final class Journal: @unchecked Sendable {
     }
 
     /// Write one line down. Never throws and never blocks anything important:
-    /// a diary that can stop the sending it is there to explain is worse than
-    /// no diary.
-    public func note(_ category: String, _ message: String) {
-        let line = "\(stamp.string(from: Date())) \(category) \(oneLine(message))\n"
+    /// a log that can stop the sending it is there to explain is worse than no
+    /// log at all.
+    public func note(_ level: String, _ category: String, _ message: String) {
+        let line = "\(stamp.string(from: Date())) \(level) \(category) \(oneLine(message))\n"
         guard let bytes = line.data(using: .utf8) else { return }
 
         lock.lock()
@@ -61,7 +60,7 @@ public final class Journal: @unchecked Sendable {
                 trim()
             }
         } catch {
-            // Deliberately silent. There is nowhere left to report a diary that
+            // Deliberately silent. There is nowhere left to report a log that
             // cannot be written, and the app has real work to get on with.
         }
     }
@@ -96,35 +95,46 @@ public final class Journal: @unchecked Sendable {
     private static func defaultURL() -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("efferent", isDirectory: true)
-            .appendingPathComponent("journal.log")
+            .appendingPathComponent("efferent.log")
     }
 }
 
-/// What the app writes with: the system log for a Mac at hand, and the diary
+/// What the app writes with: the system log for a Mac at hand, and the log file
 /// for every launch nobody was watching.
 ///
 /// It takes a plain string rather than an `os` interpolation because the same
 /// text has to reach both, and because everything this app logs is already
-/// public by intent — day dates, counts and answers from the archive, never a
-/// reading and never a key.
+/// public by intent — day dates, counts, sizes and answers from the archive,
+/// never a reading and never a key.
+///
+/// Three levels, and the difference is who the line is for. `info` is the
+/// account of what happened: a person reading it should be able to follow the
+/// sending. `debug` is the step-by-step underneath — every day built, every
+/// request signed, every page of a listing — which is what a strange sending
+/// problem is actually diagnosed from. `error` is what went wrong.
 public struct Log: Sendable {
     private let logger: Logger
     private let category: String
-    private let journal: Journal
+    private let store: LogStore
 
-    public init(category: String, journal: Journal = .shared) {
+    public init(category: String, store: LogStore = .shared) {
         logger = Logger(subsystem: "dev.korchasa.efferent", category: category)
         self.category = category
-        self.journal = journal
+        self.store = store
+    }
+
+    public func debug(_ message: String) {
+        logger.debug("\(message, privacy: .public)")
+        store.note("DEBUG", category, message)
     }
 
     public func info(_ message: String) {
         logger.info("\(message, privacy: .public)")
-        journal.note(category, message)
+        store.note("INFO ", category, message)
     }
 
     public func error(_ message: String) {
         logger.error("\(message, privacy: .public)")
-        journal.note(category, "ERROR \(message)")
+        store.note("ERROR", category, message)
     }
 }

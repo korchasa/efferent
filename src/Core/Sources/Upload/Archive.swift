@@ -101,6 +101,7 @@ public struct Archive {
             for entry in answer.days {
                 held.insert(entry.day)
             }
+            log.debug("archive listing page \(page + 1): \(answer.days.count) days")
             guard let next = answer.next else {
                 log.info("archive holds \(held.count) days, read in \(page + 1) pages")
                 return held

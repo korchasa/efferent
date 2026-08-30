@@ -201,41 +201,64 @@ public final class Uploader: NSObject {
 
     /// Build the next days and hand the changed ones to the system.
     public func send() async throws -> Outcome {
-        guard !isStopped else { return .stopped }
-        guard claimPass() else { return .alreadyInFlight }
+        guard !isStopped else {
+            log.debug("pass refused: sending is held back")
+            return .stopped
+        }
+        guard claimPass() else {
+            log.debug("pass refused: another pass is already running")
+            return .alreadyInFlight
+        }
         defer { releasePass() }
 
         await checkTheArchive()
 
         let days = try store.pendingDays(limit: configuration.daysPerPass)
+        log.debug(
+            "pass took \(days.count) of the days waiting"
+                + (days.isEmpty ? "" : ": \(days.last ?? "") … \(days.first ?? "")")
+        )
         guard !days.isEmpty else { return .nothingToSend }
 
+        let startedBuilding = Date()
         let contents = try await build(days)
+        log.debug(
+            "read \(contents.count) days out of Health in \(Self.milliseconds(since: startedBuilding)) ms"
+        )
         var pending: [Sending] = []
         var unchanged = 0
 
         for day in days {
-            guard let content = contents[day] else { continue }
+            guard let content = contents[day] else {
+                log.debug("\(day): Health returned nothing at all, not even an empty day")
+                continue
+            }
             let plaintext = try NDJSON.body(content.events)
             let digest = Data(SHA256.hash(data: plaintext))
 
             if try store.digest(for: day) == digest {
                 try store.markClean(day: day)
                 unchanged += 1
+                log.debug(
+                    "\(day): \(content.events.count) events, \(plaintext.count) bytes, "
+                        + "unchanged since it was last stored"
+                )
                 continue
             }
 
-            try pending.append(Sending(
-                day: day,
-                digest: digest,
-                identifiers: content.sampleIdentifiers,
-                blob: SealedBox.seal(
-                    readingPublicKey: destination.readingPublicKey,
-                    plaintext: Deflate.compress(plaintext),
-                    associatedData: CanonicalRequest.associatedData(
-                        bucket: destination.bucket, day: day
-                    )
+            let sealed = try SealedBox.seal(
+                readingPublicKey: destination.readingPublicKey,
+                plaintext: Deflate.compress(plaintext),
+                associatedData: CanonicalRequest.associatedData(
+                    bucket: destination.bucket, day: day
                 )
+            )
+            log.debug(
+                "\(day): \(content.events.count) events, \(plaintext.count) bytes, "
+                    + "\(sealed.count) sealed, queued to go"
+            )
+            pending.append(Sending(
+                day: day, digest: digest, identifiers: content.sampleIdentifiers, blob: sealed
             ))
         }
 
@@ -267,10 +290,19 @@ public final class Uploader: NSObject {
             if let last = try store.lastReconciledAt(),
                Date().timeIntervalSince(last) < configuration.reconcileEvery
             {
+                log.debug(
+                    "the archive was checked \(Int(Date().timeIntervalSince(last) / 60)) minutes "
+                        + "ago; not checking again yet"
+                )
                 return
             }
+            let started = Date()
             let owed = try await reconcile()
             try store.recordReconciled()
+            log.debug(
+                "checked the archive against Health in \(Self.milliseconds(since: started)) ms; "
+                    + "\(owed) days owed again"
+            )
             if owed > 0 {
                 log.error("the archive was missing \(owed) days; they go again now")
             }
@@ -313,7 +345,12 @@ public final class Uploader: NSObject {
             batch.map { Batch.SealedDay(day: $0.day, blob: $0.blob) }
         )
         let file = try stage(body)
+        log.debug("staged \(body.count) bytes at \(file.lastPathComponent)")
         let request = try signedRequest(days: batch.map(\.day), body: body)
+        log.debug(
+            "\(request.httpMethod ?? "?") \(request.url?.absoluteString ?? "?") "
+                + "signed over \(batch.count) days"
+        )
         let task = session.uploadTask(with: request, fromFile: file)
         inFlightBatches[task.taskIdentifier] = batch
         stagedFiles[task.taskIdentifier] = file
@@ -322,6 +359,13 @@ public final class Uploader: NSObject {
             "request \(task.taskIdentifier) handed to the system: \(batch.count) days "
                 + "(\(batch.first?.day ?? "") … \(batch.last?.day ?? "")), \(body.count) bytes"
         )
+    }
+
+    /// How long something took, in whole milliseconds. Durations are the half
+    /// of a sending problem that no count can show: a pass that took a minute
+    /// to read Health and a pass that never got there look the same afterwards.
+    static func milliseconds(since start: Date) -> Int {
+        Int(Date().timeIntervalSince(start) * 1000)
     }
 
     private func claimPass() -> Bool {
@@ -385,9 +429,14 @@ public final class Uploader: NSObject {
 extension Uploader: URLSessionDataDelegate {
     public func urlSession(_: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         responseBodies[dataTask.taskIdentifier, default: Data()].append(data)
+        log.debug("request \(dataTask.taskIdentifier) answered with \(data.count) bytes")
     }
 
     public func urlSession(_: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        log.debug(
+            "request \(task.taskIdentifier) finished: sent \(task.countOfBytesSent) bytes, "
+                + "received \(task.countOfBytesReceived)"
+        )
         let body = responseBodies.removeValue(forKey: task.taskIdentifier) ?? Data()
         let carried = inFlightBatches.removeValue(forKey: task.taskIdentifier)
         if let staged = stagedFiles.removeValue(forKey: task.taskIdentifier) {
@@ -451,6 +500,7 @@ extension Uploader: URLSessionDataDelegate {
     }
 
     public func urlSessionDidFinishEvents(forBackgroundURLSession _: URLSession) {
+        log.debug("the system has reported every transfer it finished while the app was gone")
         let finished = backgroundEventsFinished
         DispatchQueue.main.async { finished?() }
     }
