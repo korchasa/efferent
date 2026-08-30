@@ -123,6 +123,14 @@ This file is the rulebook.
   archive, while the screen said thousands were waiting. So a round that scheduled nothing and
   cleaned something goes straight into the next one, until the queue is empty or the launch has run
   long enough (`passBudget`).
+- **A round takes days that are next to each other, and stops at the first gap.**
+  Building a round reads Health once, for the span between its first day and its last, because
+  Health answers a range almost as fast as a single day. That is only true while the days *are* a
+  range. Thirty-one days plucked from all over the ledger make the span months wide and Health hands
+  back everything in it: a phone on 2026-08-30 fetched 87 718 readings over 4.4 seconds to build 31
+  days, 28 of which turned out unchanged. It happens whenever a backlog is walking backwards and the
+  observers keep re-marking this week. Stopping at the gap costs nothing — the order is the same,
+  nothing is skipped, and the next round starts at the gap — so `Store.pendingDays` returns a run.
 - **A pass fills the pipe rather than stopping at one request.** Rounds carry on until as many
   requests are in the air as the session runs at once (`concurrentUploads`), because the days in
   them are excluded from the next round and nothing is built twice. A pass that stopped after one
