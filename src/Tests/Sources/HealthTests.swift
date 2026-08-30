@@ -17,6 +17,43 @@ final class HealthTests: XCTestCase {
         XCTAssertEqual(Event.Kind.record.rawValue, "hk")
     }
 
+    // MARK: - What a wake-up asks for
+
+    /// One observer covers every type, so a wake-up now has to work out what
+    /// moved instead of being told by which observer fired.
+    func testOnlyTheMetricsThatMovedAreRead() {
+        let steps = try? XCTUnwrap(AggregateMetric.all.first { $0.name == "steps" })
+        let sleep = try? XCTUnwrap(SampleMetric.all.first { $0.name == "sleep" })
+        guard let steps, let sleep else { return XCTFail("the catalogue lost a metric") }
+
+        let plan = HealthCoordinator.plan(for: [steps.type, sleep.type])
+
+        XCTAssertTrue(plan.totals, "a total moved, so the recent past needs marking")
+        XCTAssertEqual(plan.metrics.map(\.name), ["sleep"])
+        XCTAssertEqual(plan.names, ["steps", "sleep"])
+        XCTAssertFalse(plan.unnamed)
+    }
+
+    /// Totals share one piece of work. Seven of them moving is still one week
+    /// to mark, not seven.
+    func testEveryTotalThatMovedAsksForTheSameOneThing() {
+        let plan = HealthCoordinator.plan(for: Set(AggregateMetric.all.map(\.type)))
+
+        XCTAssertTrue(plan.totals)
+        XCTAssertTrue(plan.metrics.isEmpty, "a total has no anchor to read")
+        XCTAssertEqual(plan.names.count, AggregateMetric.all.count)
+    }
+
+    /// An unknown change is not the same as no change: Health said something
+    /// moved, so everything is read.
+    func testAWakeUpThatNamesNothingReadsEverything() {
+        let plan = HealthCoordinator.plan(for: nil)
+
+        XCTAssertTrue(plan.totals)
+        XCTAssertEqual(plan.metrics.map(\.name), SampleMetric.all.map(\.name))
+        XCTAssertTrue(plan.unnamed)
+    }
+
     func testDayBucketsAlignToTheStartOfTheLocalDay() throws {
         let calendar = try utcCalendar()
         let afternoon = Date(timeIntervalSince1970: 1_754_580_000) // 15:20 UTC

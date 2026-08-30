@@ -66,51 +66,36 @@ public final class HealthCoordinator {
         }
 
         for metric in SampleMetric.all {
-            subscribe(to: metric.type, named: metric.name, frequency: .immediate) { [weak self] in
-                _ = try await self?.noteChanges(metric: metric)
-            }
+            enableDelivery(for: metric.type, frequency: .immediate)
         }
         for metric in AggregateMetric.all {
             // Hourly is the real ceiling anyway: the system quietly downgrades
             // `.immediate` for these types. And a total has no anchor to consult,
             // so all a delivery can say is "the recent past moved".
-            subscribe(to: metric.type, named: metric.name, frequency: .hourly) { [weak self] in
-                _ = try self?.markRecentDays()
-            }
-        }
-    }
-
-    private func subscribe(
-        to type: HKSampleType,
-        named name: String,
-        frequency: HKUpdateFrequency,
-        work: @escaping @Sendable () async throws -> Void
-    ) {
-        healthStore.enableBackgroundDelivery(for: type, frequency: frequency) { [log] enabled, error in
-            if let error {
-                log.error("background delivery for \(type.identifier) refused: \(error.localizedDescription)")
-            } else if !enabled {
-                log.error("background delivery for \(type.identifier) was not enabled")
-            }
+            enableDelivery(for: metric.type, frequency: .hourly)
         }
 
-        let query = HKObserverQuery(sampleType: type, predicate: nil) { [log, weak self] _, completion, error in
+        // One observer over every type, not one per type.
+        //
+        // A single-type observer is called once per type, so a Watch catching
+        // up woke the app fourteen times in the same second — fourteen reads of
+        // the ledger, fourteen asks to send, thirteen of them turned away by the
+        // pass already running. This form hands the changed types to one
+        // handler, which reads each of them once and asks to send once.
+        //
+        // Background delivery stays per type: that is where the frequency
+        // lives, and the two families want different ones.
+        let descriptors = (SampleMetric.all.map(\.type) + AggregateMetric.all.map(\.type))
+            .map { HKQueryDescriptor(sampleType: $0, predicate: nil) }
+        let query = HKObserverQuery(queryDescriptors: descriptors) {
+            [log, weak self] _, changed, completion, error in
             if let error {
-                log.error("observer for \(type.identifier) failed: \(error.localizedDescription)")
+                log.error("the observer failed: \(error.localizedDescription)")
                 completion()
                 return
             }
             Task {
-                // Written down even when nothing changed. "Health woke the app
-                // and there was nothing new" and "Health never woke the app"
-                // look identical from the outside, and they are the two halves
-                // of every strange sending problem.
-                log.info("Health woke us about \(name)")
-                do {
-                    try await work()
-                } catch {
-                    log.error("collection failed: \(String(describing: error))")
-                }
+                await self?.collect(changed)
                 // Always, and before anything slow. HealthKit treats a missing
                 // acknowledgement as a failed delivery, retries, and after a few
                 // of those stops waking the app at all — silently, and days later.
@@ -120,6 +105,80 @@ public final class HealthCoordinator {
         }
         healthStore.execute(query)
         observers.append(query)
+    }
+
+    private func enableDelivery(for type: HKSampleType, frequency: HKUpdateFrequency) {
+        healthStore.enableBackgroundDelivery(for: type, frequency: frequency) { [log] enabled, error in
+            if let error {
+                log.error("background delivery for \(type.identifier) refused: \(error.localizedDescription)")
+            } else if !enabled {
+                log.error("background delivery for \(type.identifier) was not enabled")
+            }
+        }
+    }
+
+    /// What one wake-up does: read the metrics Health says moved, and mark the
+    /// recent past when a total moved.
+    ///
+    /// Every metric is read even if an earlier one failed. They share nothing —
+    /// each has its own anchor — and one metric Health is unhappy about is no
+    /// reason to leave the other six unread until the next delivery.
+    func collect(_ changed: Set<HKSampleType>?) async {
+        let plan = Self.plan(for: changed)
+        // Written down even when nothing changed. "Health woke the app and
+        // there was nothing new" and "Health never woke the app" look identical
+        // from the outside, and they are the two halves of every strange
+        // sending problem.
+        log.info(
+            plan.unnamed
+                ? "Health woke us without saying what moved, so everything is read"
+                : "Health woke us about \(plan.names.joined(separator: ", "))"
+        )
+
+        if plan.totals {
+            do {
+                _ = try markRecentDays()
+            } catch {
+                log.error("marking the recent past failed: \(String(describing: error))")
+            }
+        }
+        for metric in plan.metrics {
+            do {
+                _ = try await noteChanges(metric: metric)
+            } catch {
+                log.error("\(metric.name): collection failed: \(String(describing: error))")
+            }
+        }
+    }
+
+    /// What a set of changed types asks to be done. Kept apart from the doing
+    /// so the mapping can be read and tested without a Health store.
+    struct Plan {
+        /// Whether to mark the recent past. Totals have no anchor, so all any
+        /// of them can say is "the recent past moved" — and once is enough,
+        /// however many of them said it.
+        let totals: Bool
+        let metrics: [SampleMetric]
+        /// What moved, in the order the work runs.
+        let names: [String]
+        /// Health would not say what moved. Everything is read: an unknown
+        /// change is not the same as no change.
+        let unnamed: Bool
+    }
+
+    static func plan(for changed: Set<HKSampleType>?) -> Plan {
+        guard let changed else {
+            return Plan(totals: true, metrics: SampleMetric.all, names: [], unnamed: true)
+        }
+        let moved = Set(changed.map(\.identifier))
+        let totals = AggregateMetric.all.filter { moved.contains($0.type.identifier) }
+        let metrics = SampleMetric.all.filter { moved.contains($0.type.identifier) }
+        return Plan(
+            totals: !totals.isEmpty,
+            metrics: metrics,
+            names: totals.map(\.name) + metrics.map(\.name),
+            unnamed: false
+        )
     }
 
     public func stopObserving() {
