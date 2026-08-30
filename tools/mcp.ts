@@ -197,7 +197,7 @@ const UNTIL = {
 
 const TOOLS: Tool[] = [
   {
-    name: "health_overview",
+    name: "iphone_data_overview",
     title: "What the archive holds",
     description: [
       "Start here. Reports what this Health archive contains before anything is asked of it:",
@@ -231,7 +231,7 @@ const TOOLS: Tool[] = [
           lastDay: mirrored[mirrored.length - 1] ?? null,
           note: remote && remote.days > mirrored.length
             ? `${remote.days - mirrored.length} days of the archive are not copied here yet; ` +
-              `run health_sync to complete the picture`
+              `run iphone_data_sync to complete the picture`
             : "the whole archive is readable",
         },
         metrics: summarise(days),
@@ -247,7 +247,7 @@ const TOOLS: Tool[] = [
     },
   },
   {
-    name: "health_daily",
+    name: "iphone_data_daily",
     title: "Daily totals",
     description: [
       "One row per day with the day's totals: steps, distance, flights, active and basal",
@@ -255,7 +255,7 @@ const TOOLS: Tool[] = [
       "",
       "Reads the daily buckets only, so it can never double-count against the hourly ones.",
       "A null means the day carries no total for that metric, which is not the same as a zero.",
-      "Refuses ranges over 400 days — use health_statistics for anything longer.",
+      "Refuses ranges over 400 days — use iphone_data_statistics for anything longer.",
     ].join("\n"),
     inputSchema: {
       type: "object",
@@ -274,7 +274,7 @@ const TOOLS: Tool[] = [
       if (daysApart(from, to) > 400) {
         throw new Error(
           `${daysApart(from, to)} days is too many for a daily table; ask for 400 or fewer, ` +
-            `or use health_statistics with group_by month or year`,
+            `or use iphone_data_statistics with group_by month or year`,
         );
       }
       const metrics = list(input.metrics, [...TOTALS]);
@@ -288,7 +288,7 @@ const TOOLS: Tool[] = [
     },
   },
   {
-    name: "health_statistics",
+    name: "iphone_data_statistics",
     title: "Distribution of a metric over time",
     description: [
       "How one metric is distributed, grouped by day, week, month or year: count, min, p10,",
@@ -366,7 +366,7 @@ const TOOLS: Tool[] = [
     },
   },
   {
-    name: "health_sleep",
+    name: "iphone_data_sleep",
     title: "Nights of sleep",
     description: [
       "One row per night: hours asleep, hours in bed, the breakdown by stage, and when it",
@@ -408,7 +408,7 @@ const TOOLS: Tool[] = [
     },
   },
   {
-    name: "health_workouts",
+    name: "iphone_data_workouts",
     title: "Recorded workouts",
     description: [
       "Every workout in a range — activity, when it started, how long it lasted — plus a count",
@@ -416,7 +416,7 @@ const TOOLS: Tool[] = [
       "",
       "The phone sends Apple's activity number and this translates it, so an activity comes",
       "back as 'walking' rather than as 52. A workout is what was deliberately recorded; it is",
-      "not the same as the day's movement, which lives in health_daily.",
+      "not the same as the day's movement, which lives in iphone_data_daily.",
     ].join("\n"),
     inputSchema: {
       type: "object",
@@ -456,7 +456,7 @@ const TOOLS: Tool[] = [
     },
   },
   {
-    name: "health_samples",
+    name: "iphone_data_samples",
     title: "Raw readings",
     description: [
       "The individual events for one metric, exactly as they left the phone. The escape hatch",
@@ -464,7 +464,7 @@ const TOOLS: Tool[] = [
       "single reading was, which device recorded it.",
       "",
       "Capped, and deliberately so: a decade of heart rate is eight hundred thousand readings.",
-      "For anything about a trend or an average, health_statistics is both cheaper and harder",
+      "For anything about a trend or an average, iphone_data_statistics is both cheaper and harder",
       "to misread.",
     ].join("\n"),
     inputSchema: {
@@ -500,12 +500,12 @@ const TOOLS: Tool[] = [
     },
   },
   {
-    name: "health_sync",
+    name: "iphone_data_sync",
     title: "Copy the archive down",
     description: [
       "Bring the local copy of the archive up to date. The other tools refresh what they need",
       "on their own, so this is only worth calling to make the whole history readable at once —",
-      "health_overview says when that is not already true.",
+      "iphone_data_overview says when that is not already true.",
       "",
       "Safe to interrupt and safe to repeat: a day is either the version the archive holds or",
       "an older one, and this replaces the older ones.",
@@ -603,7 +603,7 @@ export async function handle(request: Request): Promise<unknown | null> {
         serverInfo: { name: NAME, version: VERSION },
         instructions: [
           "This is one person's Apple Health history, day by day, from an end-to-end encrypted",
-          "archive. Call health_overview first: it says what the data covers, when each metric",
+          "archive. Call iphone_data_overview first: it says what the data covers, when each metric",
           "starts, and the few ways this data misleads a reader who treats it as a plain table.",
         ].join(" "),
       });
