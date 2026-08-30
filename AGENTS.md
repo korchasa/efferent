@@ -293,6 +293,8 @@ it exists because the wrong version fails quietly.
   phone that locks mid-pass — and keeps it off the screen: reported as a failure it becomes a red
   sentence under the dial saying the health data is inaccessible, which is true of every locked phone
   and names nothing anybody can act on. Nothing is lost either way; the days stay marked.
+  Health delivers to a locked phone — measured on 2026-08-30 — so this is an ordinary state rather
+  than a rare one, and `Services.sendNow` asks the same question before starting a pass at all.
 - The observer's `completion()` must be called, and quickly. Skip it and HealthKit treats the
   delivery as failed, retries, and after a few failures stops waking the app at all — with no error,
   and a symptom that shows up days later.
