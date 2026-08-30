@@ -18,10 +18,51 @@ final class StoreTests: XCTestCase {
     /// and the first export walks backwards anyway.
     func testDaysComeBackMostRecentFirst() throws {
         let store = try Store.inMemory()
-        try store.markDirty(["2026-08-05", "2026-08-09", "2026-08-07"])
+        try store.markDirty(["2026-08-05", "2026-08-07", "2026-08-06"])
 
         XCTAssertEqual(
-            try store.pendingDays(limit: 10), ["2026-08-09", "2026-08-07", "2026-08-05"]
+            try store.pendingDays(limit: 10), ["2026-08-07", "2026-08-06", "2026-08-05"]
+        )
+    }
+
+    /// A round reads Health once, for the span between the first day it was
+    /// given and the last. Days plucked from all over the ledger make that span
+    /// months wide and Health hands back everything in it, so a round stops at
+    /// the first gap.
+    func testARoundStopsAtTheFirstGap() throws {
+        let store = try Store.inMemory()
+        try store.markDirty(["2025-11-11", "2025-11-12", "2026-08-29", "2026-08-30"])
+
+        XCTAssertEqual(try store.pendingDays(limit: 31), ["2026-08-30", "2026-08-29"])
+    }
+
+    /// Nothing behind the gap is dropped or reordered — the next round starts
+    /// exactly where this one stopped.
+    func testTheRoundAfterAGapStartsAtIt() throws {
+        let store = try Store.inMemory()
+        try store.markDirty(["2025-11-11", "2025-11-12", "2026-08-29", "2026-08-30"])
+
+        let next = try store.pendingDays(limit: 31, excluding: ["2026-08-30", "2026-08-29"])
+
+        XCTAssertEqual(next, ["2025-11-12", "2025-11-11"])
+    }
+
+    /// A run does not step over a month or a year, and it does not miss a day a
+    /// leap year has.
+    func testARunCrossesAMonthAndAYearAndALeapDay() throws {
+        let store = try Store.inMemory()
+        try store.markDirty(["2023-12-31", "2024-01-01", "2024-02-28", "2024-02-29", "2024-03-01"])
+
+        XCTAssertEqual(try store.pendingDays(limit: 31), ["2024-03-01", "2024-02-29", "2024-02-28"])
+    }
+
+    /// The limit still ends a run that has not run out of days.
+    func testTheLimitStillEndsARun() throws {
+        let store = try Store.inMemory()
+        try store.markDirty(Day.range(from: "2026-08-01", to: "2026-08-31", in: Day.calendar()))
+
+        XCTAssertEqual(
+            try store.pendingDays(limit: 3), ["2026-08-31", "2026-08-30", "2026-08-29"]
         )
     }
 

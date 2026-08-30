@@ -45,6 +45,16 @@ public enum Day {
         try shift(day, by: -1, in: calendar)
     }
 
+    /// Whether `earlier` is the day immediately before `later`.
+    ///
+    /// Answered without a time zone on purpose, and that is not a hole in the
+    /// pinned boundary: which zone a day starts in decides *when* it begins, and
+    /// this asks only which date comes before which. A day string is a Gregorian
+    /// date and reads the same everywhere.
+    public static func adjacent(_ earlier: String, before later: String) -> Bool {
+        (try? previous(later, in: plainCalendar)) == earlier
+    }
+
     /// Every day from `from` to `to`, both ends included.
     public static func range(from: String, to: String, in calendar: Calendar) throws -> [String] {
         guard from <= to else { return [] }
@@ -65,6 +75,13 @@ public enum Day {
         guard let parsed = date(day, in: calendar) else { return false }
         return of(parsed, in: calendar) == day
     }
+
+    /// For arithmetic on day strings alone, where no boundary is being decided.
+    private static let plainCalendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+        return calendar
+    }()
 
     private static func shift(_ day: String, by amount: Int, in calendar: Calendar) throws -> String {
         guard let start = date(day, in: calendar),
