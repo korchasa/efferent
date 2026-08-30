@@ -24,10 +24,10 @@ struct HomeView: View {
     @State private var earliest: String?
     @State private var probed = false
     @State private var reachSelection: RangeSelection = .everything
-    @State private var readingDiary = false
-    /// Taps on the name so far. The diary is not a feature of this app, so it
-    /// has no key of its own: five taps on the name open it, and putting the
-    /// app down forgets them.
+    @State private var readingLog = false
+    /// Taps on the name so far. The log is not a feature of this app, so it has
+    /// no key of its own: five taps on the name open it, and putting the app
+    /// down forgets them.
     @State private var brandTaps = 0
 
     var body: some View {
@@ -85,7 +85,7 @@ struct HomeView: View {
                 try? await Task.sleep(for: .seconds(2))
             }
         }
-        .sheet(isPresented: $readingDiary) { JournalView() }
+        .sheet(isPresented: $readingLog) { LogView() }
         .sheet(isPresented: $connecting) { connectSheet }
         .sheet(isPresented: $reachingBack) { reachBackSheet }
         .sheet(isPresented: $explainingAccess) { accessSheet }
@@ -121,7 +121,7 @@ struct HomeView: View {
         .frame(height: 34)
     }
 
-    /// Five taps on the name open the diary, counted within one sitting: the
+    /// Five taps on the name open the log, counted within one sitting: the
     /// count starts again whenever the app is put down, so a stray tap today
     /// and another next week never add up to it. No stopwatch, because a rule
     /// that also asks a person to be quick is a rule they cannot be told.
@@ -129,7 +129,7 @@ struct HomeView: View {
         brandTaps += 1
         guard brandTaps >= 5 else { return }
         brandTaps = 0
-        readingDiary = true
+        readingLog = true
     }
 
     /// The rare things, printed on keys along the bottom: reaching further

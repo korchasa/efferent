@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // when a view appears would not exist during that launch, and the
         // delivery that caused it would be lost.
         log.info("launched \(UIApplication.shared.applicationState == .background ? "in the background" : "by hand")")
+        log.debug(Self.situation())
         Services.shared.health.startObserving()
 
         BGTaskScheduler.shared.register(
@@ -59,6 +60,31 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         }
     }
 
+    /// The conditions sending depends on and nothing in the app controls. Every
+    /// one of them silently stops a phone from sending, and each looks from the
+    /// inside exactly like an app that simply had nothing to do.
+    private static func situation() -> String {
+        let refresh: String
+        switch UIApplication.shared.backgroundRefreshStatus {
+        case .available: refresh = "background refresh on"
+        case .denied: refresh = "background refresh OFF"
+        case .restricted: refresh = "background refresh restricted"
+        @unknown default: refresh = "background refresh unknown"
+        }
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        let power = ProcessInfo.processInfo.isLowPowerModeEnabled ? "low power mode ON" : "low power mode off"
+        return "\(version) (\(build)) · iOS \(UIDevice.current.systemVersion) · \(refresh) · \(power)"
+    }
+
+    func applicationDidEnterBackground(_: UIApplication) {
+        log.debug("the app went into the background")
+    }
+
+    func applicationWillEnterForeground(_: UIApplication) {
+        log.debug("the app came back to the front")
+    }
+
     /// A safety net under background delivery, not a schedule.
     ///
     /// The system decides when this runs — sometimes hourly, sometimes not for
@@ -69,7 +95,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         let request = BGProcessingTaskRequest(identifier: Self.refreshTaskIdentifier)
         request.requiresNetworkConnectivity = true
         request.requiresExternalPower = false
-        try? BGTaskScheduler.shared.submit(request)
+        do {
+            try BGTaskScheduler.shared.submit(request)
+            log.debug("asked the system for a catch-up task")
+        } catch {
+            // Worth knowing about: with no catch-up task the phone sends only
+            // when Health wakes it, and this is the one place that would say so.
+            log.error("the system refused the catch-up task: \(String(describing: error))")
+        }
     }
 
     private func handleRefresh(_ task: BGTask) {

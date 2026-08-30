@@ -1,17 +1,19 @@
 import SwiftUI
+import UIKit
 
-/// The diary, on screen.
+/// The log, on screen.
 ///
 /// Not on any key: sending is meant to be a thing nobody has to think about,
 /// and a permanent way in would say the opposite. It is behind five taps on the
 /// name at the top of the everyday screen — findable when it is asked for, and
 /// invisible until then.
-struct JournalView: View {
+struct LogView: View {
     @Environment(\.dismiss) private var dismiss
 
-    @State private var text = Journal.shared.read()
+    @State private var text = LogStore.shared.read()
     @State private var sharing = false
     @State private var clearing = false
+    @State private var copied = false
 
     var body: some View {
         NavigationStack {
@@ -43,16 +45,19 @@ struct JournalView: View {
                 }
                 .scrollBounceBehavior(.basedOnSize)
                 // It reads in the order things happened and opens at the end:
-                // the beginning of the diary can be weeks old, and what just
-                // went wrong is what anybody opening it came for.
+                // the beginning of the log can be days old, and what just went
+                // wrong is what anybody opening it came for.
                 .defaultScrollAnchor(.bottom)
 
                 VStack(spacing: 6) {
                     Legend(measure, size: 9)
-                    Button("Send the diary") { sharing = true }
+                    Button(copied ? "Copied" : "Copy the log") { copy() }
                         .buttonStyle(ProminentButton())
                         .disabled(text.isEmpty)
-                    Button("Start a fresh diary") { clearing = true }
+                    Button("Send the log") { sharing = true }
+                        .buttonStyle(QuietButton())
+                        .disabled(text.isEmpty)
+                    Button("Start a fresh log") { clearing = true }
                         .buttonStyle(QuietButton())
                 }
                 .padding(.horizontal, 20)
@@ -60,7 +65,7 @@ struct JournalView: View {
                 .padding(.bottom, 20)
             }
             .pageBackground()
-            .navigationTitle("Diary")
+            .navigationTitle("Log")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -71,9 +76,9 @@ struct JournalView: View {
             .sheet(isPresented: $sharing) {
                 ShareSheet(text: text) { _ in sharing = false }
             }
-            .alert("Start a fresh diary?", isPresented: $clearing) {
+            .alert("Start a fresh log?", isPresented: $clearing) {
                 Button("Clear", role: .destructive) {
-                    Journal.shared.clear()
+                    LogStore.shared.clear()
                     text = ""
                 }
                 Button("Keep", role: .cancel) {}
@@ -81,6 +86,18 @@ struct JournalView: View {
                 Text("Everything written down so far is dropped. It says nothing about what "
                     + "is in the archive, so nothing is lost but the account of it.")
             }
+        }
+    }
+
+    /// The whole log to the clipboard. The button says so for a couple of
+    /// seconds afterwards: a copy that looks like nothing happened is a copy
+    /// somebody does twice.
+    private func copy() {
+        UIPasteboard.general.string = text
+        copied = true
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            copied = false
         }
     }
 

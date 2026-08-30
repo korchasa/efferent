@@ -309,8 +309,12 @@ final class Services: ObservableObject {
             return
         }
         do {
+            let started = Date()
             let outcome = try await uploader.send()
-            log.info("send outcome: \(String(describing: outcome))")
+            log.info(
+                "send outcome: \(String(describing: outcome)) "
+                    + "in \(Uploader.milliseconds(since: started)) ms"
+            )
             lastError = nil
         } catch {
             log.error("send failed: \(String(describing: error))")
@@ -339,6 +343,7 @@ final class Services: ObservableObject {
     /// follows takes as long as it takes and needs nobody watching — a day is
     /// either in the archive or still marked.
     func exportHistory(from day: String? = nil) async {
+        log.info("queueing history from \(day ?? "the first day Health has")")
         do {
             _ = try await health.markHistory(from: day)
             lastError = nil

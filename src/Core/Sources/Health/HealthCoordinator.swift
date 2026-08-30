@@ -140,7 +140,13 @@ public final class HealthCoordinator {
         let stored = try store.anchor(for: metric.type.identifier)
         let previous = try stored.flatMap(HKQueryAnchor.decode)
 
+        let started = Date()
         let changes = try await reader.changedDays(metric: metric, anchor: previous)
+        log.debug(
+            "\(metric.name): Health offered \(changes.days.count) changed days and "
+                + "\(changes.removed.count) deletions in \(Uploader.milliseconds(since: started)) ms"
+                + (stored == nil ? ", from no anchor at all" : "")
+        )
         // A deletion arrives as a bare identifier, so the day it was in has to
         // come from what was written down when the day was last sent.
         let removedDays = try store.days(ofRemoved: changes.removed)
@@ -167,16 +173,23 @@ public final class HealthCoordinator {
         let days = try Day.range(
             from: Day.of(startOfWindow, in: calendar), to: today, in: calendar
         )
-        return try store.markDirty(days)
+        let marked = try store.markDirty(days)
+        log.debug("the last \(days.count) days were looked at again: \(marked) now waiting")
+        return marked
     }
 
     /// Everything at once, for the button and for a background refresh.
     @discardableResult
     public func refresh() async throws -> Int {
+        let started = Date()
         var marked = try markRecentDays()
         for metric in SampleMetric.all {
             marked += try await noteChanges(metric: metric)
         }
+        log.info(
+            "asked Health for everything new: \(marked) days waiting after it, "
+                + "\(Uploader.milliseconds(since: started)) ms"
+        )
         if marked > 0 {
             onNewData?()
         }
@@ -281,6 +294,7 @@ public final class HealthCoordinator {
         let wanted = Set(days)
         let hourlyFrom = try store.installedDay(defaultingTo: today)
 
+        log.debug("building \(days.count) days from \(first) to \(last)")
         var readings: [Reading] = []
         for metric in AggregateMetric.all {
             readings += try await reader.aggregates(
@@ -307,6 +321,10 @@ public final class HealthCoordinator {
         for reading in readings where wanted.contains(reading.day) {
             contents[reading.day]?.add(reading)
         }
+        log.debug(
+            "Health gave back \(readings.count) readings for those days"
+                + (readings.isEmpty ? " — nothing at all is being shared" : "")
+        )
         return contents
     }
 }

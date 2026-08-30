@@ -276,25 +276,37 @@ there are, and a key can be read without being pressed. Nothing may claim that H
 granted: Health does not say, so that screen offers where to look instead of an answer it cannot
 have.
 
-## The diary
+## The log
 
-The app keeps its own account of what it did, in `Application Support/efferent/journal.log`, and
+The app keeps its own account of what it did, in `Application Support/efferent/efferent.log`, and
 `Log` writes every line to it as well as to the system log. Not because the system log is worse — it
 is better, when a Mac is at hand. Sending happens in launches that last two seconds, hours apart,
 days after anybody last opened the app; by the time the phone is plugged into anything the
 interesting launch is over, and `OSLogStore` hands back only the running process. So the phone
 writes it down and keeps it.
 
-It is capped at half a megabyte and drops its oldest half when it fills, and it never throws: a
-diary that can stop the sending it exists to explain is worse than no diary.
+**It is written low, not in milestones.** `debug` is the step underneath every milestone — each day
+built with its event count and its sealed size, each request with its method, address and size, each
+answer with its bytes, each page of a listing, how long Health took to answer — because that is what
+a strange sending problem is actually read from. `info` is the account a person can follow, `error`
+is what went wrong. A milestone log ("send outcome: nothingToSend") names the symptom and hides
+every step that produced it.
 
-**Nothing goes in it that would matter if it were read.** Day dates, counts, HTTP codes and error
-text — never a reading, never a key. The whole point of it is to be handed to somebody, so anything
-that could not be is not written down.
+The conditions the app does not control go down at launch: version, iOS, whether background refresh
+is allowed, whether low power mode is on. Each of them stops a phone from sending, and from the
+inside each looks exactly like an app that had nothing to do.
+
+It is capped at half a megabyte and drops its oldest half when it fills, and it never throws: a log
+that can stop the sending it exists to explain is worse than no log.
+
+**Nothing goes in it that would matter if it were read.** Day dates, counts, sizes, HTTP codes and
+error text — never a reading, never a key. The whole point of it is to be handed to somebody, so
+anything that could not be is not written down.
 
 Five taps on the name at the top of the everyday screen open it, counted within one sitting: putting
 the app down starts the count again. It has no key of its own on purpose — sending is meant to be a
-thing nobody has to think about, and a permanent way in would say the opposite.
+thing nobody has to think about, and a permanent way in would say the opposite. The screen copies the
+whole log to the clipboard or hands it to the share sheet.
 
 ## Other traps
 
