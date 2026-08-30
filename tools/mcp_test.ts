@@ -140,7 +140,7 @@ Deno.test("initialize answers in the version it was asked for", async () => {
   assert(answer.result.capabilities.tools, "tools were not offered");
   // The instructions are what an agent gets before it has read a single day, so
   // they have to name the tool that orients it.
-  assertStringIncludes(answer.result.instructions, "health_overview");
+  assertStringIncludes(answer.result.instructions, "iphone_data_overview");
 });
 
 Deno.test("a version this server does not speak falls back to one it does", async () => {
@@ -174,13 +174,13 @@ Deno.test("every tool arrives with a schema and a description", async () => {
   assertEquals(
     tools.map((tool) => tool.name).sort(),
     [
-      "health_daily",
-      "health_overview",
-      "health_samples",
-      "health_sleep",
-      "health_statistics",
-      "health_sync",
-      "health_workouts",
+      "iphone_data_daily",
+      "iphone_data_overview",
+      "iphone_data_samples",
+      "iphone_data_sleep",
+      "iphone_data_statistics",
+      "iphone_data_sync",
+      "iphone_data_workouts",
     ],
   );
 });
@@ -250,7 +250,7 @@ Deno.test("the server answers as a process, past the handshake", async () => {
 });
 
 Deno.test("an unknown tool is a failed call, not a broken connection", async () => {
-  const answer = await call("health_horoscope");
+  const answer = await call("iphone_data_horoscope");
 
   assert(answer.isError);
   assertStringIncludes(answer.text, "no such tool");
@@ -259,7 +259,7 @@ Deno.test("an unknown tool is a failed call, not a broken connection", async () 
 // MARK: - Answers
 
 Deno.test("a daily table takes the daily buckets and leaves the hourly ones", async () => {
-  const answer = await call("health_daily", { since: "2026-01-01", until: "2026-01-02" });
+  const answer = await call("iphone_data_daily", { since: "2026-01-01", until: "2026-01-02" });
 
   assertEquals(answer.body.columns[0], "day");
   const steps = answer.body.rows.map((row: unknown[]) => [row[0], row[1]]);
@@ -267,7 +267,7 @@ Deno.test("a daily table takes the daily buckets and leaves the hourly ones", as
 });
 
 Deno.test("a night is whole, merged, and named by the evening it began in", async () => {
-  const answer = await call("health_sleep", { since: "2026-01-01", until: "2026-01-01" });
+  const answer = await call("iphone_data_sleep", { since: "2026-01-01", until: "2026-01-01" });
 
   assertEquals(answer.body.rows.length, 1);
   assertEquals(answer.body.rows[0].night, "2026-01-01");
@@ -276,7 +276,7 @@ Deno.test("a night is whole, merged, and named by the evening it began in", asyn
 });
 
 Deno.test("statistics describe readings without handing any of them over", async () => {
-  const answer = await call("health_statistics", {
+  const answer = await call("iphone_data_statistics", {
     metric: "heartRate",
     since: "2026-01-01",
     until: "2026-01-02",
@@ -298,14 +298,14 @@ Deno.test("statistics describe readings without handing any of them over", async
 });
 
 Deno.test("a workout is reported by its activity, and summed by it", async () => {
-  const answer = await call("health_workouts", { since: "2026-01-01", until: "2026-01-02" });
+  const answer = await call("iphone_data_workouts", { since: "2026-01-01", until: "2026-01-02" });
 
   assertEquals(answer.body.total, 1);
   assertEquals(answer.body.byActivity, { walking: { count: 1, minutes: 30 } });
 });
 
 Deno.test("blood oxygen answers carry the warning that its unit is a fraction", async () => {
-  const answer = await call("health_samples", {
+  const answer = await call("iphone_data_samples", {
     metric: "oxygenSaturation",
     since: "2026-01-01",
     until: "2026-01-02",
@@ -317,7 +317,7 @@ Deno.test("blood oxygen answers carry the warning that its unit is a fraction", 
 // MARK: - Refusals
 
 Deno.test("a malformed day is refused with the correction in the message", async () => {
-  const answer = await call("health_daily", { since: "last tuesday" });
+  const answer = await call("iphone_data_daily", { since: "last tuesday" });
 
   assert(answer.isError);
   assertStringIncludes(answer.text, "YYYY-MM-DD");
@@ -326,14 +326,14 @@ Deno.test("a malformed day is refused with the correction in the message", async
 Deno.test("a range too long for a daily table is refused, not truncated", async () => {
   // Truncating would answer a question about five years with one about one, and
   // nothing in the answer would say so.
-  const answer = await call("health_daily", { since: "2020-01-01", until: "2026-01-01" });
+  const answer = await call("iphone_data_daily", { since: "2020-01-01", until: "2026-01-01" });
 
   assert(answer.isError);
-  assertStringIncludes(answer.text, "health_statistics");
+  assertStringIncludes(answer.text, "iphone_data_statistics");
 });
 
 Deno.test("a range that runs backwards is refused", async () => {
-  const answer = await call("health_daily", { since: "2026-02-01", until: "2026-01-01" });
+  const answer = await call("iphone_data_daily", { since: "2026-02-01", until: "2026-01-01" });
 
   assert(answer.isError);
   assertStringIncludes(answer.text, "after");
@@ -342,7 +342,7 @@ Deno.test("a range that runs backwards is refused", async () => {
 Deno.test("an unreachable archive still answers, and says that it is behind", async () => {
   // The mirror holds the days; only the check failed. An answer that came back
   // silently would be a stale answer about health data with nothing to mark it.
-  const answer = await call("health_daily", { since: "2026-01-01", until: "2026-01-02" });
+  const answer = await call("iphone_data_daily", { since: "2026-01-01", until: "2026-01-02" });
 
   assertStringIncludes(answer.body.warning, "could not be reached");
 });
