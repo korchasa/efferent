@@ -49,6 +49,15 @@ public final class Uploader: NSObject {
         public let bytesPerRequest: Int
         /// Requests in the air at once.
         public let concurrentUploads: Int
+        /// How long one call may go on clearing days that turn out to be
+        /// already stored, before it leaves the rest for the next pass.
+        ///
+        /// It bounds the one case where a pass has to keep going by itself: a
+        /// backlog of days that are all in the archive already sends nothing,
+        /// so nothing would start the next round. Twenty seconds is well inside
+        /// what the system gives a launch it woke for a Health delivery, and it
+        /// gets through about a thousand such days.
+        public let passBudget: TimeInterval
         /// How often the archive is asked what it actually holds.
         ///
         /// Once a day, because the check is worth what it costs at that rate
@@ -64,6 +73,7 @@ public final class Uploader: NSObject {
             daysPerRequest: Int = Batch.maxDaysPerRequest,
             bytesPerRequest: Int = 4 * 1024 * 1024,
             concurrentUploads: Int = 4,
+            passBudget: TimeInterval = 20,
             reconcileEvery: TimeInterval = 24 * 60 * 60,
             sessionIdentifier: String = "dev.korchasa.efferent.upload"
         ) {
@@ -71,6 +81,7 @@ public final class Uploader: NSObject {
             self.daysPerRequest = min(daysPerRequest, Batch.maxDaysPerRequest)
             self.bytesPerRequest = bytesPerRequest
             self.concurrentUploads = concurrentUploads
+            self.passBudget = passBudget
             self.reconcileEvery = reconcileEvery
             self.sessionIdentifier = sessionIdentifier
         }
@@ -200,6 +211,17 @@ public final class Uploader: NSObject {
     }
 
     /// Build the next days and hand the changed ones to the system.
+    ///
+    /// **A round that only cleans days runs the next round itself.** The chain
+    /// that walks through a backlog restarts from a finished upload, so a round
+    /// where every day came back unchanged sends nothing and starts nothing —
+    /// the queue then moves one round per wake-up, and a history that is
+    /// already in the archive takes a day of wake-ups to work through while the
+    /// screen says thousands of days are waiting. So a round that only cleaned
+    /// days goes straight into the next one, for as long as the system is
+    /// likely to let this launch run. A round that scheduled something still
+    /// stops and lets the upload chain carry on: building more days while the
+    /// last ones are in the air would send work already under way twice.
     public func send() async throws -> Outcome {
         guard !isStopped else {
             log.debug("pass refused: sending is held back")
@@ -213,12 +235,43 @@ public final class Uploader: NSObject {
 
         await checkTheArchive()
 
+        let deadline = Date().addingTimeInterval(configuration.passBudget)
+        var scheduled = 0
+        var cleaned = 0
+        var rounds = 0
+
+        while true {
+            let round = try await runRound()
+            scheduled += round.scheduled
+            cleaned += round.cleaned
+            rounds += 1
+
+            guard round.scheduled == 0, round.cleaned > 0, !isStopped else { break }
+            guard Date() < deadline else {
+                log.info(
+                    "cleared \(cleaned) days that were already in the archive and stopped there; "
+                        + "this launch has run long enough. The rest go on the next pass."
+                )
+                break
+            }
+        }
+
+        if rounds > 1 {
+            log.info("pass ran \(rounds) rounds: \(scheduled) days sending, \(cleaned) unchanged")
+        }
+        return scheduled == 0 && cleaned == 0
+            ? .nothingToSend
+            : .scheduled(days: scheduled, unchanged: cleaned)
+    }
+
+    /// One walk through the days at the front of the queue.
+    private func runRound() async throws -> (scheduled: Int, cleaned: Int) {
         let days = try store.pendingDays(limit: configuration.daysPerPass)
         log.debug(
             "pass took \(days.count) of the days waiting"
                 + (days.isEmpty ? "" : ": \(days.last ?? "") … \(days.first ?? "")")
         )
-        guard !days.isEmpty else { return .nothingToSend }
+        guard !days.isEmpty else { return (0, 0) }
 
         let startedBuilding = Date()
         let contents = try await build(days)
@@ -270,9 +323,7 @@ public final class Uploader: NSObject {
         log.info(
             "pass over \(days.count) days: \(pending.count) sending in \(batches.count) requests, \(unchanged) unchanged"
         )
-        return pending.isEmpty && unchanged == 0
-            ? .nothingToSend
-            : .scheduled(days: pending.count, unchanged: unchanged)
+        return (pending.count, unchanged)
     }
 
     /// Ask the archive what it holds before deciding there is nothing to send.

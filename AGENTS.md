@@ -94,6 +94,15 @@ This file is the rulebook.
   and a flag a `return` can slip past stops sending until the app is relaunched. Days themselves are
   independent and several may be in the air at once; the next pass starts only when none are left,
   or it would rebuild work already under way.
+- **A round that only cleans days runs the next round itself.** The chain that walks a backlog
+  restarts from a finished upload, so a round in which every day came back unchanged sends nothing,
+  finishes nothing and starts nothing. The queue then moves one round per wake-up: a phone with 2 794
+  days waiting on 2026-08-30 was clearing 31 of them per Health delivery, all of them already in the
+  archive, while the screen said thousands were waiting. So a round that scheduled nothing and
+  cleaned something goes straight into the next one, until the queue is empty or the launch has run
+  long enough (`passBudget`). A round that *did* schedule something still stops and lets the upload
+  chain carry on — building more days while the last ones are in the air sends work already under way
+  twice.
 
 ## The parts that must agree across languages
 

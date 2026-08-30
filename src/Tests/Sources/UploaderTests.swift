@@ -65,6 +65,40 @@ final class UploaderTests: XCTestCase {
         XCTAssertTrue(try store.pendingDays(limit: 10).isEmpty, "an unchanged day stayed waiting")
     }
 
+    /// A backlog of days that are already in the archive has to clear in one
+    /// call, not one call per wake-up.
+    ///
+    /// Nothing is sent for such a day, so nothing finishes, so nothing starts
+    /// the next round — the chain that walks a backlog restarts from a finished
+    /// upload. Left at that, a history the archive already holds moves 31 days
+    /// per wake-up while the screen says thousands are waiting, which is what a
+    /// phone with 2 794 days waiting was doing on 2026-08-30.
+    func testDaysAlreadyInTheArchiveClearInOnePass() async throws {
+        let store = try Store.inMemory()
+        let events = try [Event(id: "a", payload: Event.payload(["v": "1"]))]
+        let digest = try Data(SHA256.hash(data: NDJSON.body(events)))
+        let days = try Day.range(from: "2026-05-01", to: "2026-08-08", in: Day.calendar())
+        XCTAssertEqual(days.count, 100, "the backlog has to be more than one round")
+        for day in days {
+            try store.recordSent(day: day, digest: digest, sampleIdentifiers: [])
+        }
+        try store.markDirty(Set(days))
+
+        var rounds = 0
+        let uploader = try makeUploader(store: store, identifier: "test.drain.\(UUID().uuidString)") { asked in
+            rounds += 1
+            return Dictionary(uniqueKeysWithValues: asked.map {
+                ($0, DayContents(events: events, sampleIdentifiers: []))
+            })
+        }
+
+        let outcome = try await uploader.send()
+
+        XCTAssertEqual(outcome, .scheduled(days: 0, unchanged: 100))
+        XCTAssertTrue(try store.pendingDays(limit: 10).isEmpty, "the backlog was left half cleared")
+        XCTAssertGreaterThan(rounds, 1, "one call has to walk more than one round of days")
+    }
+
     /// A day Health has nothing for is still a fact about that day. Without an
     /// entry it would stay marked forever and be rebuilt on every single pass.
     func testADayHealthKnowsNothingAboutStopsWaiting() async throws {
