@@ -163,11 +163,13 @@ public final class Uploader: NSObject {
     /// of the previous one, and at that moment the finished task may still be
     /// listed — which would refuse the send and leave days standing.
     private let passLock = NSLock()
-    /// Asks turned away since the last pass reported them. A burst of Health
-    /// deliveries is one event and arrives as fifteen, so counting is what
-    /// keeps the fact without writing it down fifteen times.
+    /// What has come to nothing since the last pass that did not, counted
+    /// rather than written down. A burst of Health deliveries is one event
+    /// arriving as several, and all but one of them are either turned away or
+    /// find the queue already empty — worth keeping once, not once each.
     private var refusedWhileRunning = 0
     private var refusedWhileStopped = 0
+    private var quietPasses = 0
     private var passRunning = false
 
     /// Sending held back on purpose.
@@ -290,10 +292,12 @@ public final class Uploader: NSObject {
         if rounds > 1 {
             log.info("pass ran \(rounds) rounds: \(scheduled) days sending, \(cleaned) unchanged")
         }
-        reportRefusals()
-        return scheduled == 0 && cleaned == 0
-            ? .nothingToSend
-            : .scheduled(days: scheduled, unchanged: cleaned)
+        guard scheduled > 0 || cleaned > 0 else {
+            countQuietPass()
+            return .nothingToSend
+        }
+        reportQuiet()
+        return .scheduled(days: scheduled, unchanged: cleaned)
     }
 
     /// One walk through the days at the front of the queue.
@@ -301,11 +305,13 @@ public final class Uploader: NSObject {
         let days = try store.pendingDays(
             limit: configuration.daysPerPass, excluding: daysInFlight
         )
-        log.debug(
-            "pass took \(days.count) of the days waiting"
-                + (days.isEmpty ? "" : ": \(days.last ?? "") … \(days.first ?? "")")
-        )
+        // A round that came back empty says nothing a reader cannot see from the
+        // pass itself, and at rest that is every round. It is counted with the
+        // rest of the quiet in ``reportQuiet()``.
         guard !days.isEmpty else { return (0, 0) }
+        log.debug(
+            "pass took \(days.count) of the days waiting: \(days.last ?? "") … \(days.first ?? "")"
+        )
 
         let startedBuilding = Date()
         let contents = try await build(days)
@@ -371,10 +377,10 @@ public final class Uploader: NSObject {
             if let last = try store.lastReconciledAt(),
                Date().timeIntervalSince(last) < configuration.reconcileEvery
             {
-                log.debug(
-                    "the archive was checked \(Int(Date().timeIntervalSince(last) / 60)) minutes "
-                        + "ago; not checking again yet"
-                )
+                // Not written down. The check runs once a day, so on every
+                // other pass this line said only that today's had already
+                // happened — and every check that does run is in the log with
+                // what it found.
                 return
             }
             let started = Date()
@@ -566,27 +572,42 @@ public final class Uploader: NSObject {
         }
     }
 
-    /// Say once what was turned away, at the end of the pass that turned it
-    /// away. An ask refused while sending is held back has no running pass to
-    /// report it, so it waits for the next one — which is the first moment
-    /// anybody could act on it anyway.
-    private func reportRefusals() {
+    private func countQuietPass() {
+        passLock.lock()
+        quietPasses += 1
+        passLock.unlock()
+    }
+
+    /// Say once what came to nothing, at the end of the first pass that did not.
+    ///
+    /// Nothing is said while the quiet lasts, and that is the point: the
+    /// wake-up is already in the log, and "the app ran and there was nothing to
+    /// do" six times in one second told a reader less than one line saying it
+    /// happened six times. An ask refused while sending is held back has no
+    /// running pass to report it, so it waits for the next one — which is the
+    /// first moment anybody could act on it anyway.
+    private func reportQuiet() {
         passLock.lock()
         let running = refusedWhileRunning
         let stopped = refusedWhileStopped
+        let quiet = quietPasses
         refusedWhileRunning = 0
         refusedWhileStopped = 0
+        quietPasses = 0
         passLock.unlock()
 
-        var reasons: [String] = []
+        var parts: [String] = []
         if running > 0 {
-            reasons.append("\(running) while this pass was running")
+            parts.append("\(running) asks turned away while a pass was running")
         }
         if stopped > 0 {
-            reasons.append("\(stopped) while sending was held back")
+            parts.append("\(stopped) turned away while sending was held back")
         }
-        guard !reasons.isEmpty else { return }
-        log.debug("asks turned away: " + reasons.joined(separator: ", "))
+        if quiet > 0 {
+            parts.append("\(quiet) passes found nothing waiting")
+        }
+        guard !parts.isEmpty else { return }
+        log.debug("since the last pass that did anything: " + parts.joined(separator: ", "))
     }
 
     private func claimPass() -> Bool {

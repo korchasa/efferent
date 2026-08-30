@@ -406,11 +406,15 @@ inside each looks exactly like an app that had nothing to do.
 
 **A repeated fact is counted, not repeated.** A burst of identical lines was two thirds of a launch's
 log and said one thing. The single observer above removes the burst at its source; what is left is
-counted rather than written out. The uploader counts the asks it turns away and reports the count
-once at the end of the pass that turned them away, the pause counts its asks and reports them when
-sending is let go again, and a step that found nothing — a week re-read with nothing new, a metric
-Health offered no changes for — writes nothing at all. What survives is every step that did
-something. Measured on a real launch: 73 lines became 28, and the file 3 times smaller.
+counted rather than written out. The uploader counts the asks it turns away *and* the passes that
+found nothing waiting, and reports the lot in one line at the end of the next pass that actually did
+something; the pause counts its asks and reports them when sending is let go again. A step that found
+nothing writes nothing at all — a week re-read with nothing new, a metric Health offered no changes
+for, a round that came back empty, an archive check still inside its daily window. At rest that is
+every line a launch used to write, which is why the counting matters more than the silence: without
+it a quiet phone would have nothing in the log to say it had been awake. What survives is every step
+that did something. Measured on real launches: 73 lines became 28, then a single observer took the
+same wake-up to 14.
 
 It is capped at half a megabyte and drops its oldest half when it fills, and it never throws: a log
 that can stop the sending it exists to explain is worse than no log.
