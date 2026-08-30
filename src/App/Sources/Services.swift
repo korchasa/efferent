@@ -1,5 +1,6 @@
 import Foundation
 import os
+import UIKit
 
 /// Composition root: builds the store, the collector and the uploader once, and
 /// hands them out.
@@ -317,6 +318,15 @@ final class Services: ObservableObject {
             // and every delivery asks; while sending is held back that is a
             // dozen identical lines an hour saying what the button already says.
             asksWhileHeldBack += 1
+            return
+        }
+        // Every day in a pass is built out of Health, and Health is sealed
+        // while the screen is locked. Going in anyway marks a week, reads the
+        // ledger and then waits on Health until it refuses — 70 seconds of a
+        // background launch that lasts seconds, for nothing. Health delivers to
+        // a locked phone, so this is an ordinary state, not a rare one.
+        guard UIApplication.shared.isProtectedDataAvailable else {
+            log.debug("the phone is locked, so Health has nothing to give; the days wait")
             return
         }
         guard let uploader = uploaderIfPaired() else {
