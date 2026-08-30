@@ -305,8 +305,9 @@ anything that could not be is not written down.
 
 Five taps on the name at the top of the everyday screen open it, counted within one sitting: putting
 the app down starts the count again. It has no key of its own on purpose — sending is meant to be a
-thing nobody has to think about, and a permanent way in would say the opposite. The screen copies the
-whole log to the clipboard or hands it to the share sheet.
+thing nobody has to think about, and a permanent way in would say the opposite. The screen hands the
+whole log to the share sheet, which is where every way of passing it on already lives — including the
+clipboard.
 
 ## Other traps
 

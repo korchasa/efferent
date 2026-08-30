@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 /// The log, on screen.
 ///
@@ -13,7 +12,6 @@ struct LogView: View {
     @State private var text = LogStore.shared.read()
     @State private var sharing = false
     @State private var clearing = false
-    @State private var copied = false
 
     var body: some View {
         NavigationStack {
@@ -51,11 +49,8 @@ struct LogView: View {
 
                 VStack(spacing: 6) {
                     Legend(measure, size: 9)
-                    Button(copied ? "Copied" : "Copy the log") { copy() }
-                        .buttonStyle(ProminentButton())
-                        .disabled(text.isEmpty)
                     Button("Send the log") { sharing = true }
-                        .buttonStyle(QuietButton())
+                        .buttonStyle(ProminentButton())
                         .disabled(text.isEmpty)
                     Button("Start a fresh log") { clearing = true }
                         .buttonStyle(QuietButton())
@@ -86,18 +81,6 @@ struct LogView: View {
                 Text("Everything written down so far is dropped. It says nothing about what "
                     + "is in the archive, so nothing is lost but the account of it.")
             }
-        }
-    }
-
-    /// The whole log to the clipboard. The button says so for a couple of
-    /// seconds afterwards: a copy that looks like nothing happened is a copy
-    /// somebody does twice.
-    private func copy() {
-        UIPasteboard.general.string = text
-        copied = true
-        Task {
-            try? await Task.sleep(for: .seconds(2))
-            copied = false
         }
     }
 
