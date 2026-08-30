@@ -277,6 +277,14 @@ it exists because the wrong version fails quietly.
   gets marked once however many totals moved. Background delivery stays per type — that is where the
   frequency lives, and samples want `.immediate` where totals want `.hourly`. A handler that is told
   nothing (`changed` is nil) reads everything: an unknown change is not the same as no change.
+- **The delivered set names what moved, and a cold launch is why it looks like everything.** Measured
+  on the simulator on 2026-08-30: adding one Steps sample by hand woke the app about `steps` alone,
+  out of the fourteen types it subscribes to; on an empty store the registration delivery named
+  nothing at all. On the phone every delivery names all fourteen, and that is not HealthKit handing
+  over the whole subscription — it is the delivery a freshly registered observer always gets, and this
+  app registers from a cold launch every time, because nothing keeps its process alive between
+  deliveries. So `plan` really does narrow; on the phone the honest answer just happens to be
+  everything. An empty set is an ordinary answer, not a fault, and `woke` says so in words.
 - The observer's `completion()` must be called, and quickly. Skip it and HealthKit treats the
   delivery as failed, retries, and after a few failures stops waking the app at all — with no error,
   and a symptom that shows up days later.
