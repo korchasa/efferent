@@ -192,6 +192,29 @@ final class HealthTests: XCTestCase {
         return try XCTUnwrap(object["series"] as? [[String: Any]])
     }
 
+    /// A locked phone is a condition to wait out, so it must not reach the
+    /// screen as a failure.
+    func testHealthRefusingWhileThePhoneIsLockedIsRecognised() {
+        let locked = NSError(
+            domain: HKError.errorDomain,
+            code: HKError.Code.errorDatabaseInaccessible.rawValue,
+            userInfo: [NSLocalizedDescriptionKey: "Protected health data is inaccessible"]
+        )
+
+        XCTAssertTrue(HealthReader.isLocked(locked))
+    }
+
+    /// Everything else is a fault and has to stay one.
+    func testAnotherHealthRefusalIsStillAFailure() {
+        let denied = NSError(
+            domain: HKError.errorDomain, code: HKError.Code.errorAuthorizationDenied.rawValue
+        )
+        let other = NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut)
+
+        XCTAssertFalse(HealthReader.isLocked(denied))
+        XCTAssertFalse(HealthReader.isLocked(other))
+    }
+
     func testTheAppAsksToReadEveryMetricItCollects() {
         let requested = HealthReader.readTypes
 

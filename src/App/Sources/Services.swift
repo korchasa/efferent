@@ -300,6 +300,8 @@ final class Services: ObservableObject {
         do {
             _ = try await health.refresh()
             lastError = nil
+        } catch where HealthReader.isLocked(error) {
+            log.debug("the phone is locked, so Health kept its data; the next launch reads it")
         } catch {
             lastError = String(describing: error)
         }
@@ -335,6 +337,10 @@ final class Services: ObservableObject {
                 )
             }
             lastError = nil
+        } catch where HealthReader.isLocked(error) {
+            // Not a failure and not on the screen: a day is built out of Health,
+            // and a locked phone hands nothing over. The days stay marked.
+            log.debug("the phone is locked, so nothing could be built; the days wait")
         } catch {
             log.error("send failed: \(String(describing: error))")
             lastError = String(describing: error)

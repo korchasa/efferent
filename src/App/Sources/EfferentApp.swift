@@ -91,13 +91,19 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     /// half a day — so nothing may depend on it firing. It exists to catch up
     /// after a stretch where Health had nothing to report but an upload was
     /// still owed.
-    private func scheduleRefresh() {
+    /// - Parameter announce: written down only where it is news. Re-arming from
+    ///   the handler happens on every catch-up launch, one line after the line
+    ///   saying the task ran, and two identical sentences a second apart read as
+    ///   a duplicate rather than as a chain. A refusal is written down either way.
+    private func scheduleRefresh(announce: Bool = true) {
         let request = BGProcessingTaskRequest(identifier: Self.refreshTaskIdentifier)
         request.requiresNetworkConnectivity = true
         request.requiresExternalPower = false
         do {
             try BGTaskScheduler.shared.submit(request)
-            log.debug("asked the system for a catch-up task")
+            if announce {
+                log.debug("asked the system for a catch-up task")
+            }
         } catch {
             // Worth knowing about: with no catch-up task the phone sends only
             // when Health wakes it, and this is the one place that would say so.
@@ -106,10 +112,19 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     private func handleRefresh(_ task: BGTask) {
-        scheduleRefresh() // always re-arm first; an early return would end the chain
+        scheduleRefresh(announce: false) // always re-arm first; an early return would end the chain
         log.info("the system ran the catch-up task")
 
         let work = Task { @MainActor in
+            // Everything below reads Health, and Health is sealed while the
+            // screen is locked — which is most of when this task runs. Going in
+            // anyway costs a ledger read and the start of a build, and comes
+            // back with an error that describes the lock rather than a fault.
+            guard UIApplication.shared.isProtectedDataAvailable else {
+                self.log.info("the phone is locked, so Health is out of reach; this catch-up waits")
+                task.setTaskCompleted(success: true)
+                return
+            }
             await Services.shared.refreshNow()
             await Services.shared.sendNow()
             self.log.info("catch-up task finished")
