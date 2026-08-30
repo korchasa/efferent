@@ -54,6 +54,65 @@ final class HealthTests: XCTestCase {
         XCTAssertTrue(plan.unnamed)
     }
 
+    // MARK: - How often the recent past is re-read
+
+    private func coordinator(_ store: Store) throws -> HealthCoordinator {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        return HealthCoordinator(store: store, calendar: calendar)
+    }
+
+    /// The first delivery after a gap marks the week, and stamps when it did.
+    func testTheFirstDeliveryMarksTheRecentPast() throws {
+        let store = try Store.inMemory()
+        let health = try coordinator(store)
+
+        XCTAssertEqual(try health.markRecentDaysIfDue(), HealthCoordinator.recomputedDays)
+        XCTAssertNotNil(try store.lastRecentMarkAt())
+    }
+
+    /// The second one minutes later does not. Marking is free; the pass that
+    /// follows reads those seven days out of Health in full.
+    func testASecondDeliveryInsideTheWindowDoesNotMarkAgain() throws {
+        let store = try Store.inMemory()
+        let health = try coordinator(store)
+        try health.markRecentDaysIfDue()
+        for day in try store.pendingDays(limit: 100) {
+            try store.markClean(day: day)
+        }
+
+        XCTAssertEqual(try health.markRecentDaysIfDue(), 0)
+        XCTAssertTrue(try store.pendingDays(limit: 100).isEmpty, "the week was marked twice")
+    }
+
+    /// Once the window has passed it marks again — the whole point is that a
+    /// total may have moved with nothing to announce it.
+    func testTheWindowLetsGoAfterItsTime() throws {
+        let store = try Store.inMemory()
+        let health = try coordinator(store)
+        try health.markRecentDaysIfDue()
+        for day in try store.pendingDays(limit: 100) {
+            try store.markClean(day: day)
+        }
+        try store.recordRecentMark(
+            at: Date().addingTimeInterval(-HealthCoordinator.recentMarkEvery - 60)
+        )
+
+        XCTAssertEqual(try health.markRecentDaysIfDue(), HealthCoordinator.recomputedDays)
+    }
+
+    /// The button is not throttled: somebody asking for it now means now.
+    func testAskingByHandIsNeverThrottled() throws {
+        let store = try Store.inMemory()
+        let health = try coordinator(store)
+        try health.markRecentDaysIfDue()
+        for day in try store.pendingDays(limit: 100) {
+            try store.markClean(day: day)
+        }
+
+        XCTAssertEqual(try health.markRecentDays(), HealthCoordinator.recomputedDays)
+    }
+
     func testDayBucketsAlignToTheStartOfTheLocalDay() throws {
         let calendar = try utcCalendar()
         let afternoon = Date(timeIntervalSince1970: 1_754_580_000) // 15:20 UTC
