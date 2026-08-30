@@ -470,7 +470,7 @@ Deno.test("a first question copies the archive down and answers from it", async 
   const session = new Session(home);
   try {
     await session.rpc("initialize", { protocolVersion: "2025-06-18" });
-    const answer = await session.call("iphone_data_daily", {
+    const answer = await session.call("phone_data_daily", {
       since: "2026-03-01",
       until: "2026-03-02",
     });
@@ -494,7 +494,7 @@ Deno.test("a rewritten day inside the fortnight is copied by an ordinary questio
     const first = new Session(home);
     try {
       await first.rpc("initialize", { protocolVersion: "2025-06-18" });
-      await first.call("iphone_data_sync");
+      await first.call("phone_data_sync");
     } finally {
       await first.close();
     }
@@ -508,7 +508,7 @@ Deno.test("a rewritten day inside the fortnight is copied by an ordinary questio
     const later = new Session(home);
     try {
       await later.rpc("initialize", { protocolVersion: "2025-06-18" });
-      const answer = await later.call("iphone_data_daily", { since: recent, until: recent });
+      const answer = await later.call("phone_data_daily", { since: recent, until: recent });
       assertEquals(answer.body.rows[0][1], 99_999);
     } finally {
       await later.close();
@@ -528,19 +528,19 @@ Deno.test("a day older than the fortnight, rewritten, is still copied by a sync"
   const session = new Session(home);
   try {
     await session.rpc("initialize", { protocolVersion: "2025-06-18" });
-    await session.call("iphone_data_sync");
+    await session.call("phone_data_sync");
     assertEquals(mirroredFiles(home).length, 5);
 
     await archive.put("2026-03-03", [total("steps", "2026-03-03", 99_999)]);
     archive.forget();
-    await session.call("iphone_data_sync");
+    await session.call("phone_data_sync");
 
     assertEquals(
       archive.fetchedDays(),
       ["2026-03-03"],
       "a sync fetched days whose stored version had not moved",
     );
-    const answer = await session.call("iphone_data_daily", {
+    const answer = await session.call("phone_data_daily", {
       since: "2026-03-03",
       until: "2026-03-03",
     });
@@ -558,10 +558,10 @@ Deno.test("a mirror already level with the archive fetches nothing", async () =>
   const session = new Session(home);
   try {
     await session.rpc("initialize", { protocolVersion: "2025-06-18" });
-    await session.call("iphone_data_sync");
+    await session.call("phone_data_sync");
     archive.forget();
 
-    await session.call("iphone_data_daily", { since: "2026-03-01", until: "2026-03-05" });
+    await session.call("phone_data_daily", { since: "2026-03-01", until: "2026-03-05" });
     assertEquals(archive.fetchedDays(), []);
     // Inside the freshness window a second question costs no round trip at all.
     assertEquals(archive.asked, []);
@@ -578,10 +578,10 @@ Deno.test("a sync asks the archive even inside the freshness window", async () =
   const session = new Session(home);
   try {
     await session.rpc("initialize", { protocolVersion: "2025-06-18" });
-    await session.call("iphone_data_sync");
+    await session.call("phone_data_sync");
     archive.forget();
 
-    await session.call("iphone_data_sync");
+    await session.call("phone_data_sync");
     assert(
       archive.asked.length > 0,
       "a sync answered from a window it exists to ignore",
@@ -600,12 +600,12 @@ Deno.test("history arriving outside the recent fortnight is still noticed", asyn
   const session = new Session(home);
   try {
     await session.rpc("initialize", { protocolVersion: "2025-06-18" });
-    await session.call("iphone_data_sync");
+    await session.call("phone_data_sync");
 
     // A decade-old day the fortnight listing cannot see. Only the day count
     // says the mirror is behind, which is the fall-through being tested.
     await archive.put("2016-01-05", [total("steps", "2016-01-05", 4242)]);
-    await session.call("iphone_data_sync");
+    await session.call("phone_data_sync");
 
     assert(
       mirroredFiles(home).includes("2016-01-05"),
@@ -625,7 +625,7 @@ Deno.test("a sync that breaks part way says so and records only what arrived", a
   try {
     await session.rpc("initialize", { protocolVersion: "2025-06-18" });
     archive.fault = { day: "2026-03-07" };
-    const answer = await session.call("iphone_data_daily", {
+    const answer = await session.call("phone_data_daily", {
       since: "2026-03-01",
       until: "2026-03-12",
     });
@@ -656,7 +656,7 @@ Deno.test("the overview reports the archive, the readable part, and every metric
   const session = new Session(home);
   try {
     await session.rpc("initialize", { protocolVersion: "2025-06-18" });
-    const answer = await session.call("iphone_data_overview");
+    const answer = await session.call("phone_data_overview");
 
     assertEquals(answer.body.archive.days, 2);
     assertEquals(answer.body.archive.firstDay, "2026-03-01");
@@ -685,10 +685,10 @@ Deno.test("the overview answers from the mirror when the archive has gone away",
   const session = new Session(home);
   try {
     await session.rpc("initialize", { protocolVersion: "2025-06-18" });
-    await session.call("iphone_data_sync");
+    await session.call("phone_data_sync");
     await archive.stop();
 
-    const answer = await session.call("iphone_data_overview");
+    const answer = await session.call("phone_data_overview");
     assertStringIncludes(answer.body.warning, "could not be reached");
     assertEquals(answer.body.archive, "unreachable");
     assertEquals(answer.body.readable.days, 1);
@@ -706,14 +706,14 @@ Deno.test("a sync reports what it copied and what is readable afterwards", async
   const session = new Session(home);
   try {
     await session.rpc("initialize", { protocolVersion: "2025-06-18" });
-    const first = await session.call("iphone_data_sync");
+    const first = await session.call("phone_data_sync");
 
     assertEquals(first.body.copied, 6);
     assertEquals(first.body.readable, 6);
     assertEquals(first.body.firstDay, "2026-03-01");
     assertEquals(first.body.lastDay, "2026-03-06");
 
-    const again = await session.call("iphone_data_sync");
+    const again = await session.call("phone_data_sync");
     assertEquals(again.body.copied, 0, "a second sync copied days that had not changed");
     assertEquals(again.body.readable, 6);
   } finally {
