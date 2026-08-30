@@ -373,6 +373,15 @@ The conditions the app does not control go down at launch: version, iOS, whether
 is allowed, whether low power mode is on. Each of them stops a phone from sending, and from the
 inside each looks exactly like an app that had nothing to do.
 
+**A repeated fact is counted, not repeated.** Health delivers each metric separately, so one piece of
+news wakes the app fourteen times in the same second; every wake asks for a pass and thirteen of them
+are turned away. Written out, that burst was two thirds of a launch's log and said one thing. So the
+uploader counts the asks it turns away and reports the count once at the end of the pass that turned
+them away, the pause counts its asks and reports them when sending is let go again, and a step that
+found nothing — a week re-read with nothing new, a metric Health offered no changes for — writes
+nothing at all. What survives is every step that did something. Measured on a real launch: 73 lines
+became 28, and the file 3 times smaller.
+
 It is capped at half a megabyte and drops its oldest half when it fills, and it never throws: a log
 that can stop the sending it exists to explain is worse than no log.
 
@@ -385,6 +394,12 @@ the app down starts the count again. It has no key of its own on purpose — sen
 thing nobody has to think about, and a permanent way in would say the opposite. The screen hands the
 whole log to the share sheet, which is where every way of passing it on already lives — including the
 clipboard.
+
+**The screen draws the end of it, the share sheet hands over all of it.** `LogStore.tail` returns the
+last 64 KiB at a line boundary with a count of the lines it left behind. The view draws that count so
+nobody reads a short excerpt as a short log. Drawing the whole file was what the cap made impossible:
+half a megabyte of monospaced text in one `Text` takes long enough to lay out that the screen reads as
+broken, which is exactly what happened once the columnar format let a launch clear hundreds of days.
 
 ## Other traps
 

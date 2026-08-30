@@ -66,7 +66,7 @@ public final class HealthCoordinator {
         }
 
         for metric in SampleMetric.all {
-            subscribe(to: metric.type, frequency: .immediate) { [weak self] in
+            subscribe(to: metric.type, named: metric.name, frequency: .immediate) { [weak self] in
                 _ = try await self?.noteChanges(metric: metric)
             }
         }
@@ -74,7 +74,7 @@ public final class HealthCoordinator {
             // Hourly is the real ceiling anyway: the system quietly downgrades
             // `.immediate` for these types. And a total has no anchor to consult,
             // so all a delivery can say is "the recent past moved".
-            subscribe(to: metric.type, frequency: .hourly) { [weak self] in
+            subscribe(to: metric.type, named: metric.name, frequency: .hourly) { [weak self] in
                 _ = try self?.markRecentDays()
             }
         }
@@ -82,6 +82,7 @@ public final class HealthCoordinator {
 
     private func subscribe(
         to type: HKSampleType,
+        named name: String,
         frequency: HKUpdateFrequency,
         work: @escaping @Sendable () async throws -> Void
     ) {
@@ -104,7 +105,7 @@ public final class HealthCoordinator {
                 // and there was nothing new" and "Health never woke the app"
                 // look identical from the outside, and they are the two halves
                 // of every strange sending problem.
-                log.info("Health woke us about \(type.identifier)")
+                log.info("Health woke us about \(name)")
                 do {
                     try await work()
                 } catch {
@@ -142,11 +143,16 @@ public final class HealthCoordinator {
 
         let started = Date()
         let changes = try await reader.changedDays(metric: metric, anchor: previous)
-        log.debug(
-            "\(metric.name): Health offered \(changes.days.count) changed days and "
-                + "\(changes.removed.count) deletions in \(Uploader.milliseconds(since: started)) ms"
-                + (stored == nil ? ", from no anchor at all" : "")
-        )
+        // Written down when Health had something to say, and on the first read
+        // of a metric, which is the one time an empty answer is worth knowing
+        // about. The rest of the time this is every wake-up saying "nothing".
+        if !changes.days.isEmpty || !changes.removed.isEmpty || stored == nil {
+            log.debug(
+                "\(metric.name): Health offered \(changes.days.count) changed days and "
+                    + "\(changes.removed.count) deletions in \(Uploader.milliseconds(since: started)) ms"
+                    + (stored == nil ? ", from no anchor at all" : "")
+            )
+        }
         // A deletion arrives as a bare identifier, so the day it was in has to
         // come from what was written down when the day was last sent.
         let removedDays = try store.days(ofRemoved: changes.removed)
@@ -174,7 +180,11 @@ public final class HealthCoordinator {
             from: Day.of(startOfWindow, in: calendar), to: today, in: calendar
         )
         let marked = try store.markDirty(days)
-        log.debug("the last \(days.count) days were looked at again: \(marked) now waiting")
+        // Only when it found something. Every Health delivery runs this, and a
+        // week that has not moved is the ordinary answer, fourteen times a burst.
+        if marked > 0 {
+            log.debug("the last \(days.count) days were looked at again: \(marked) now waiting")
+        }
         return marked
     }
 

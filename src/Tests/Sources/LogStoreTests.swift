@@ -85,6 +85,44 @@ final class LogStoreTests: XCTestCase {
         )
     }
 
+    /// The screen draws the excerpt, so it has to be whole lines and it has to
+    /// be the end of the log.
+    func testTheTailIsTheEndOfTheLogInWholeLines() {
+        let log = store()
+        for index in 1 ... 400 {
+            log.note("DEBUG", "app", "entry number \(index)")
+        }
+
+        let excerpt = log.tail(2 * 1024)
+        XCTAssertTrue(excerpt.text.contains("entry number 400"), "the newest entry is missing")
+        XCTAssertFalse(excerpt.text.contains("entry number 1 "), "the excerpt reaches too far back")
+        XCTAssertTrue(excerpt.text.hasPrefix("20"), "the excerpt starts mid-entry")
+        XCTAssertTrue(excerpt.text.hasSuffix("\n"))
+    }
+
+    /// The count is what tells somebody the file holds more than the screen
+    /// shows, so the two numbers have to add up to the whole log.
+    func testTheTailCountsWhatItLeftBehind() {
+        let log = store()
+        for index in 1 ... 400 {
+            log.note("DEBUG", "app", "entry number \(index)")
+        }
+
+        let excerpt = log.tail(2 * 1024)
+        XCTAssertGreaterThan(excerpt.hidden, 0)
+        XCTAssertEqual(excerpt.text.split(separator: "\n").count + excerpt.hidden, 400)
+    }
+
+    /// A log smaller than the limit is shown whole, with nothing hidden.
+    func testAShortLogIsItsOwnTail() {
+        let log = store()
+        log.note("INFO ", "app", "the only thing that happened")
+
+        let excerpt = log.tail(2 * 1024)
+        XCTAssertEqual(excerpt.text, log.read())
+        XCTAssertEqual(excerpt.hidden, 0)
+    }
+
     func testClearingLeavesNothingBehind() {
         let log = store()
         log.note("INFO ", "app", "something happened")
