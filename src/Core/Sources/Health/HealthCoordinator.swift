@@ -141,11 +141,7 @@ public final class HealthCoordinator {
         // there was nothing new" and "Health never woke the app" look identical
         // from the outside, and they are the two halves of every strange
         // sending problem.
-        log.info(
-            plan.unnamed
-                ? "Health woke us without saying what moved, so everything is read"
-                : "Health woke us about \(plan.names.joined(separator: ", "))"
-        )
+        log.info(Self.woke(plan))
 
         if plan.totals {
             do {
@@ -176,6 +172,21 @@ public final class HealthCoordinator {
         /// Health would not say what moved. Everything is read: an unknown
         /// change is not the same as no change.
         let unnamed: Bool
+    }
+
+    /// How a wake-up reads in the log.
+    ///
+    /// The empty case is real and not a fault: Health delivers to a freshly
+    /// registered observer whether or not anything has moved, and on a phone
+    /// with nothing stored for these types that delivery names nothing.
+    static func woke(_ plan: Plan) -> String {
+        if plan.unnamed {
+            return "Health woke us without saying what moved, so everything is read"
+        }
+        if plan.names.isEmpty {
+            return "Health woke us with nothing to say about anything we collect"
+        }
+        return "Health woke us about " + plan.names.joined(separator: ", ")
     }
 
     static func plan(for changed: Set<HKSampleType>?) -> Plan {

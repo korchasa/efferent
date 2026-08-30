@@ -54,6 +54,33 @@ final class HealthTests: XCTestCase {
         XCTAssertTrue(plan.unnamed)
     }
 
+    /// Health delivers to a freshly registered observer whether or not anything
+    /// moved, so an empty set is an ordinary answer and has to read like one.
+    func testAWakeUpAboutNothingSaysSo() {
+        let plan = HealthCoordinator.plan(for: [])
+
+        XCTAssertFalse(plan.totals)
+        XCTAssertTrue(plan.metrics.isEmpty)
+        XCTAssertTrue(plan.names.isEmpty)
+        XCTAssertFalse(plan.unnamed)
+        XCTAssertEqual(
+            HealthCoordinator.woke(plan),
+            "Health woke us with nothing to say about anything we collect"
+        )
+    }
+
+    /// One metric moving names one metric. Measured on the simulator: adding a
+    /// single step sample by hand woke the app about `steps` alone, out of the
+    /// fourteen types it subscribes to.
+    func testOneMetricMovingNamesOneMetric() throws {
+        let steps = try XCTUnwrap(AggregateMetric.all.first { $0.name == "steps" })
+
+        XCTAssertEqual(
+            HealthCoordinator.woke(HealthCoordinator.plan(for: [steps.type])),
+            "Health woke us about steps"
+        )
+    }
+
     // MARK: - How often the recent past is re-read
 
     private func coordinator(_ store: Store) throws -> HealthCoordinator {
