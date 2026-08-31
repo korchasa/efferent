@@ -74,6 +74,28 @@ async function seedFixture(): Promise<void> {
   ]);
   await day("2026-01-02", [
     total("steps", "2026-01-02", 3000),
+    // Two readings of one metric that do not agree on their fields: the second
+    // names no device. A column list written by hand would drop it and nothing
+    // would say so, which is what the table is tested against.
+    {
+      id: "hk:respiratoryRate:1",
+      v: 1,
+      metric: "respiratoryRate",
+      value: 14,
+      unit: "count/min",
+      source: "a watch",
+      start: "2026-01-02T03:00:00Z",
+      end: "2026-01-02T03:00:00Z",
+    },
+    {
+      id: "hk:respiratoryRate:2",
+      v: 1,
+      metric: "respiratoryRate",
+      value: 16,
+      unit: "count/min",
+      start: "2026-01-02T04:00:00Z",
+      end: "2026-01-02T04:00:00Z",
+    },
     asleep("2026-01-02T00:00:00Z", "2026-01-02T06:00:00Z"),
     record("heartRate", "2026-01-02T09:00:00Z", 70, "count/min"),
   ]);
@@ -345,4 +367,76 @@ Deno.test("an unreachable archive still answers, and says that it is behind", as
   const answer = await call("phone_data_daily", { since: "2026-01-01", until: "2026-01-02" });
 
   assertStringIncludes(answer.body.warning, "could not be reached");
+});
+
+// MARK: - The shape an answer travels in
+
+Deno.test("readings come as a table, with what they agree on said once", async () => {
+  const answer = await call("phone_data_samples", {
+    metric: "heartRate",
+    since: "2026-01-01",
+    until: "2026-01-02",
+  });
+
+  assertEquals(answer.body.sameOnEveryRow, { unit: "count/min", v: 1 });
+  assertEquals(answer.body.columns, ["start", "end", "value"]);
+  assertEquals(answer.body.rows, [
+    ["2026-01-01T09:00:00Z", "2026-01-01T09:00:00Z", 60],
+    ["2026-01-01T10:00:00Z", "2026-01-01T10:00:00Z", 80],
+    ["2026-01-02T09:00:00Z", "2026-01-02T09:00:00Z", 70],
+  ]);
+});
+
+Deno.test("a field only some readings carry becomes a column, never a dropped one", async () => {
+  const answer = await call("phone_data_samples", {
+    metric: "respiratoryRate",
+    since: "2026-01-02",
+    until: "2026-01-02",
+  });
+
+  // The whole point: `source` is on one reading and not the other, so it cannot
+  // be said once — and it must not vanish either. A null is the reading that
+  // named no device, which is not the same as a device called nothing.
+  assert(answer.body.columns.includes("source"), "a field one reading carried was dropped");
+  assertEquals(answer.body.sameOnEveryRow.source, undefined);
+  const source = answer.body.columns.indexOf("source");
+  assertEquals(answer.body.rows.map((row: unknown[]) => row[source]), ["a watch", null]);
+});
+
+Deno.test("the derived identifier is not carried, and nothing else is lost", async () => {
+  const answer = await call("phone_data_samples", {
+    metric: "heartRate",
+    since: "2026-01-01",
+    until: "2026-01-01",
+  });
+
+  const carried = new Set([...answer.body.columns, ...Object.keys(answer.body.sameOnEveryRow)]);
+  assertEquals(carried.has("id"), false, "the identifier came back after all");
+  // Everything the event held apart from the id and the metric named above it.
+  for (const field of ["v", "start", "end", "value", "unit"]) {
+    assert(carried.has(field), `${field} left the answer with the identifier`);
+  }
+});
+
+Deno.test("workouts come as a table too, and the counts are over all of them", async () => {
+  const answer = await call("phone_data_workouts", { since: "2026-01-01", until: "2026-01-02" });
+
+  // One workout is one row, and a single row keeps every field in its columns:
+  // there is nothing to say once, and an answer whose only row came back empty
+  // would be a worse trade than the repetition it saved.
+  assertEquals(answer.body.sameOnEveryRow, {});
+  const activity = answer.body.columns.indexOf("activity");
+  assert(activity >= 0, "a workout no longer says what it was");
+  assertEquals(answer.body.rows.length, 1);
+  assertEquals(answer.body.rows[0][activity], "walking");
+  assertEquals(answer.body.byActivity, { walking: { count: 1, minutes: 30 } });
+});
+
+Deno.test("an answer is written without indentation", async () => {
+  const answer = await call("phone_data_daily", { since: "2026-01-01", until: "2026-01-02" });
+
+  // Nothing but a model reads this, and it pays for every character. The spaces
+  // were a fifth of every answer this server sent.
+  assertEquals(answer.text.includes("\n "), false, "the answer came back laid out");
+  assertEquals(answer.text.includes("\n"), false);
 });

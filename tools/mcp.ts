@@ -513,6 +513,10 @@ const TOOLS: Tool[] = [
       "Every workout in a range — activity, when it started, how long it lasted — plus a count",
       "and total minutes per activity.",
       "",
+      "The workouts come as a table: `columns` names what each row holds, in order, and",
+      "`sameOnEveryRow` holds the fields every workout agrees on, said once. The counts in",
+      "`byActivity` are over every workout found, not only the rows shown.",
+      "",
       "The phone sends Apple's activity number and this translates it, so an activity comes",
       "back as 'walking' rather than as 52. A workout is what was deliberately recorded; it is",
       "not the same as the day's movement, which lives in phone_data_daily.",
@@ -547,7 +551,7 @@ const TOOLS: Tool[] = [
         byActivity: Object.fromEntries(
           [...byActivity.entries()].sort((left, right) => right[1].count - left[1].count),
         ),
-        rows: found.slice(0, MAX_ROWS),
+        ...table(found.slice(0, MAX_ROWS)),
         ...(found.length > MAX_ROWS
           ? { note: `showing the first ${MAX_ROWS} of ${found.length}` }
           : {}),
@@ -558,9 +562,18 @@ const TOOLS: Tool[] = [
     name: "phone_data_samples",
     title: "Raw readings",
     description: [
-      "The individual events for one metric, exactly as they left the phone. The escape hatch",
-      "for questions the other tools do not shape — the time of day something happened, what a",
-      "single reading was, which device recorded it.",
+      "The individual readings for one metric. The escape hatch for questions the other tools",
+      "do not shape — the time of day something happened, what a single reading was, which",
+      "device recorded it.",
+      "",
+      "As a table: `columns` names what each row holds, in order, and `sameOnEveryRow` holds",
+      "the fields every reading agrees on, said once instead of on every row. A null in a",
+      "column means that reading carried nothing there, which is not the same as a zero.",
+      "",
+      "The identifier is not carried. It was only ever derived from the metric and the instant",
+      "a reading began, and both are here. Two readings can begin in the same second — one",
+      "heartbeat seen by two watches, two sleep stages starting together — and then they are",
+      "two rows that may differ in nothing at all. That is the data, not a duplicate to remove.",
       "",
       "Capped, and deliberately so: a decade of heart rate is eight hundred thousand readings.",
       "For anything about a trend or an average, phone_data_statistics is both cheaper and harder",
@@ -589,12 +602,15 @@ const TOOLS: Tool[] = [
       const events = days.flatMap((day) => day.events)
         .sort((left, right) => String(left.start).localeCompare(String(right.start)));
 
+      const shown = events.slice(0, limit);
       return {
         metric,
         ...(UNIT_NOTES[metric] ? { unitNote: UNIT_NOTES[metric] } : {}),
         matched: events.length,
-        returned: Math.min(events.length, limit),
-        rows: events.slice(0, limit),
+        returned: shown.length,
+        // The metric is already named above, and the identifier is derived from
+        // it and the instant — both of which are in the table.
+        ...table(shown, ["id", "metric"]),
       };
     },
   },
@@ -670,6 +686,67 @@ function unitsFor(
   return units;
 }
 
+/**
+ * A set of rows as a table: what they all agree on said once, the rest in
+ * columns.
+ *
+ * A reading is mostly its own labels. The metric, the unit and the device are
+ * the same on every row of an answer about one metric, and repeated per row they
+ * are two thirds of it — 500 heart rate readings came to 128 KB, which is a
+ * third of what some agents can hold at all. Said once they come to 39 KB, and
+ * nothing about the data has changed.
+ *
+ * **The columns are the keys the rows actually carry, never a list written
+ * here.** A fixed list would drop a field the day it appeared and nothing would
+ * say so — the same failure `pack` refuses one layer down, and for the same
+ * reason. A key that only some rows carry becomes a column with a null in the
+ * others, which is the honest shape: null means this row had none, and it is not
+ * the same as a zero.
+ */
+export function table(
+  rows: readonly object[],
+  drop: string[] = [],
+): { sameOnEveryRow: Record<string, unknown>; columns: string[]; rows: unknown[][] } {
+  const kept = rows.map((row) => {
+    const copy = { ...row } as Record<string, unknown>;
+    for (const name of drop) delete copy[name];
+    return copy;
+  });
+
+  const sameOnEveryRow: Record<string, unknown> = {};
+  const columns: string[] = [];
+  for (const key of [...new Set(kept.flatMap(Object.keys))].sort(byInstantThenName)) {
+    const first = kept[0]?.[key];
+    // Only a value every row carries, and only a plain one: two objects that
+    // look alike are not the same object, so hoisting one would be a claim this
+    // cannot check. And only past one row — with a single row every field
+    // trivially agrees, so hoisting them all saves nothing and leaves an answer
+    // whose one row is empty.
+    const agreed = kept.length > 1 && typeof first !== "object" &&
+      kept.every((row) => key in row && row[key] === first);
+    if (agreed) sameOnEveryRow[key] = first;
+    else columns.push(key);
+  }
+
+  return {
+    sameOnEveryRow,
+    columns,
+    rows: kept.map((row) => columns.map((key) => row[key] ?? null)),
+  };
+}
+
+/** When something happened comes first, because that is what a reader scans for;
+ * everything else by name, so the order of an answer never depends on the order
+ * a day's events happened to arrive in. */
+const INSTANTS = ["start", "end"];
+function byInstantThenName(left: string, right: string): number {
+  const place = (name: string) => {
+    const at = INSTANTS.indexOf(name);
+    return at === -1 ? INSTANTS.length : at;
+  };
+  return place(left) - place(right) || left.localeCompare(right);
+}
+
 function empty(): Distribution {
   return { n: 0, min: 0, p10: 0, median: 0, mean: 0, p90: 0, max: 0, sum: 0 };
 }
@@ -727,7 +804,10 @@ export async function handle(request: Request): Promise<unknown | null> {
       try {
         const answer = await tool.run((request.params?.arguments ?? {}) as Record<string, unknown>);
         const body = reader.warning ? { warning: reader.warning, ...answer as object } : answer;
-        return result(request.id, text(JSON.stringify(body, null, 1)));
+        // Without indentation. Nothing reads this but a model, which pays for
+        // every character of it and is no better at reading the laid-out form —
+        // the spaces were a fifth of every answer this server has ever sent.
+        return result(request.id, text(JSON.stringify(body)));
       } catch (error) {
         // Reported as a failed tool call rather than as a broken connection: the
         // agent can read it, correct the arguments and try again.
