@@ -29,27 +29,32 @@ import {
   type Archive,
   type Event,
   isDay,
+  load,
   loadState,
   mirroredDays,
   type MirrorState,
+  mirrorVersions,
   openArchive,
   readDay,
   saveState,
   type Stats,
+  write,
   writeDay,
 } from "./archive.ts";
 import {
   addDays,
   dailyTotals,
+  type DayHoldings,
   type Distribution,
   distribution,
+  fold,
   type Grouping,
   groupOf,
   nights,
   RECORDS,
-  summarise,
   TOTALS,
   UNIT_NOTES,
+  whatADayHolds,
   workouts,
 } from "./analysis.ts";
 
@@ -82,6 +87,9 @@ class Reader {
   private state: MirrorState | null = null;
   private archive: Archive | null = null;
   private checkedAt = 0;
+  /** What the archive said it holds at the last check, kept so an answer that
+   * needs it does not go and ask a second time. */
+  private remote: Stats | null = null;
   /** Set when the archive could not be reached, and returned with the answer.
    * A quietly stale answer about health data is worse than a late one. */
   warning: string | null = null;
@@ -94,15 +102,30 @@ class Reader {
     return { state: this.state, archive: this.archive };
   }
 
-  async stats(): Promise<Stats | null> {
+  private async stats(): Promise<Stats | null> {
     try {
       const { archive } = await this.open();
-      return await archive.stats();
+      this.remote = await archive.stats();
+      return this.remote;
     } catch (error) {
+      this.remote = null;
       this.warning = `the archive could not be reached (${message(error)}); ` +
         `answering from the local mirror, which may be behind`;
       return null;
     }
+  }
+
+  /**
+   * What the archive holds, as of the check that came with this answer.
+   *
+   * Not a second round trip. Every check already asks — it is how the mirror
+   * knows whether it is behind — and asking again costs another walk of the
+   * whole listing on the service, which is a second and a half. The overview
+   * used to do exactly that, and it was most of why it took nearly five.
+   */
+  async holds(): Promise<Stats | null> {
+    await this.refresh();
+    return this.remote;
   }
 
   /**
@@ -238,6 +261,66 @@ class Reader {
   }
 }
 
+/** Where what each day holds is kept between questions. */
+const METRICS = "metrics.json";
+
+/** One day's entry: the fingerprint of the file it was read from, and what that
+ * file held. */
+interface KeptDay {
+  v: string;
+  m: DayHoldings;
+}
+
+/**
+ * What every mirrored day holds, worked out once per day and kept.
+ *
+ * The overview reads nothing else, and reading it the direct way meant opening
+ * every day in the mirror — 217 MB and two seconds — to answer with 3 KB about a
+ * dozen metrics. A day never changes once it is written, so the answer for it
+ * never changes either.
+ *
+ * **What is kept is a claim about a file, and the file is what tests it.** Every
+ * entry carries the size and modification time of the day it was read from, and
+ * an entry whose fingerprint no longer matches is thrown away and worked out
+ * again. That is the whole safety of this: a record that has gone stale, gone
+ * missing, or gone wrong costs a read, never a wrong answer. Deleting
+ * `metrics.json` is always safe, and so is having none.
+ */
+async function whatEachDayHolds(): Promise<{ day: string; held: DayHoldings }[]> {
+  const versions = await mirrorVersions();
+  let kept: Record<string, KeptDay> = {};
+  try {
+    kept = await load<Record<string, KeptDay>>(METRICS);
+  } catch {
+    kept = {};
+  }
+
+  const days: { day: string; held: DayHoldings }[] = [];
+  const rebuilt: Record<string, KeptDay> = {};
+  let moved = false;
+  // In day order, because the fold takes a metric's kind and unit from the first
+  // day that holds it. `mirrorVersions` answers sorted for exactly this.
+  for (const [day, version] of versions) {
+    const remembered = kept[day];
+    if (remembered?.v === version) {
+      rebuilt[day] = remembered;
+      days.push({ day, held: remembered.m });
+      continue;
+    }
+    const held = whatADayHolds(await readDay(day));
+    rebuilt[day] = { v: version, m: held };
+    days.push({ day, held });
+    moved = true;
+  }
+
+  // A day that left the mirror leaves this record too, and that is a change even
+  // though nothing was read.
+  if (moved || Object.keys(kept).length !== Object.keys(rebuilt).length) {
+    await write(METRICS, rebuilt, { compact: true });
+  }
+  return days;
+}
+
 /**
  * Whether the archive holds days this mirror has no record of.
  *
@@ -312,11 +395,9 @@ const TOOLS: Tool[] = [
     ].join("\n"),
     inputSchema: { type: "object", properties: {} },
     run: async () => {
-      const remote = await reader.stats();
-      await reader.refresh();
-      const mirrored = await reader.mirrored();
-      const days: { day: string; events: Event[] }[] = [];
-      for (const day of mirrored) days.push({ day, events: await readDay(day) });
+      const remote = await reader.holds();
+      const days = await whatEachDayHolds();
+      const mirrored = days.map((day) => day.day);
 
       return {
         archive: remote
@@ -333,7 +414,7 @@ const TOOLS: Tool[] = [
           lastDay: mirrored[mirrored.length - 1] ?? null,
           note: note(remote, mirrored.length),
         },
-        metrics: summarise(days),
+        metrics: fold(days),
         howToRead: [
           "A total (steps, distance, energy, exercise and stand minutes) is already summed by",
           "Health and must never be summed again from records — several devices write the same",

@@ -712,19 +712,52 @@ Deno.test("the overview answers from the mirror when the archive has gone away",
   const { home, archive, close } = await fixture(async (a) => {
     await a.put("2026-03-01", [total("steps", "2026-03-01", 8000)]);
   });
-  const session = new Session(home);
   try {
-    await session.rpc("initialize", { protocolVersion: "2025-06-18" });
-    await session.call("phone_data_sync");
+    await session(home, async (first) => {
+      await first.call("phone_data_sync");
+    });
     await archive.stop();
 
-    const answer = await session.call("phone_data_overview");
-    assertStringIncludes(answer.body.warning, "could not be reached");
-    assertEquals(answer.body.archive, "unreachable");
-    assertEquals(answer.body.readable.days, 1);
-    assertEquals(answer.body.metrics.length, 1);
+    // A second process, so the question is asked outside any window a previous
+    // answer opened: the archive is unreachable now, and the overview has to say
+    // so rather than fail.
+    await session(home, async (later) => {
+      const answer = await later.call("phone_data_overview");
+      assertStringIncludes(answer.body.warning, "could not be reached");
+      assertEquals(answer.body.archive, "unreachable");
+      assertEquals(answer.body.readable.days, 1);
+      assertEquals(answer.body.metrics.length, 1);
+    });
   } finally {
-    await session.close();
+    await close();
+  }
+});
+
+Deno.test("the overview costs one round trip, not two", async () => {
+  const { home, archive, close } = await fixture(async (a) => {
+    await a.put("2026-03-01", [total("steps", "2026-03-01", 8000)]);
+  });
+  try {
+    await session(home, async (only) => {
+      archive.forget();
+      const answer = await only.call("phone_data_overview");
+      assertEquals(answer.body.archive.days, 1);
+
+      // The check the overview runs already asks the archive what it holds.
+      // Asking a second time for the same answer is another walk of the whole
+      // listing on the service, and it was most of what made this tool slow.
+      assertEquals(
+        archive.asked.filter((path) => path.includes("/stats")).length,
+        1,
+        "the overview asked the archive what it holds twice",
+      );
+
+      // And inside the freshness window a second overview asks nothing at all.
+      archive.forget();
+      await only.call("phone_data_overview");
+      assertEquals(archive.asked, []);
+    });
+  } finally {
     await close();
   }
 });
@@ -909,6 +942,141 @@ Deno.test("a mirror record that cannot be read does not stop an answer", async (
     assertEquals(daily.body.rows.length, 3);
   } finally {
     await held.close();
+    await close();
+  }
+});
+
+// MARK: - What each day holds, remembered
+
+/** What the overview keeps between questions, or null when it has kept nothing. */
+function keptMetrics(home: string): Record<string, { v: string }> | null {
+  try {
+    return JSON.parse(Deno.readTextFileSync(`${home}/metrics.json`));
+  } catch {
+    return null;
+  }
+}
+
+Deno.test("what a day holds is worked out once and kept", async () => {
+  const { home, close } = await fixture(async (a) => {
+    await seedRun(a, "2026-03-01", 5);
+  });
+  try {
+    await session(home, async (first) => {
+      await first.call("phone_data_overview");
+    });
+
+    const kept = keptMetrics(home);
+    assert(kept, "nothing was kept, so every overview reads the whole mirror again");
+    assertEquals(Object.keys(kept).length, 5);
+
+    // The second overview must answer the same, out of what was kept.
+    await session(home, async (second) => {
+      const answer = await second.call("phone_data_overview");
+      assertEquals(answer.body.metrics.length, 1);
+      assertEquals(answer.body.metrics[0].metric, "steps");
+      assertEquals(answer.body.metrics[0].daysCovered, 5);
+      assertEquals(answer.body.metrics[0].firstDay, "2026-03-01");
+    });
+  } finally {
+    await close();
+  }
+});
+
+Deno.test("a kept day whose file has changed is read again, not believed", async () => {
+  const { home, close } = await fixture(async (a) => {
+    await seedRun(a, "2026-03-01", 3);
+  });
+  try {
+    await session(home, async (first) => {
+      await first.call("phone_data_overview");
+    });
+
+    // A day rewritten underneath the record — which is what the phone does all
+    // day. What is kept is a claim about a file, so the file has to be what
+    // tests it: a fingerprint that no longer matches is thrown away.
+    await Deno.writeTextFile(
+      `${home}/days/2026-03-02.ndjson`,
+      JSON.stringify({
+        id: "hk:heartRate:2026-03-02T09:00:00Z",
+        v: 1,
+        metric: "heartRate",
+        value: 61,
+        unit: "count/min",
+        start: "2026-03-02T09:00:00Z",
+        end: "2026-03-02T09:00:00Z",
+      }) + "\n",
+    );
+
+    await session(home, async (second) => {
+      const answer = await second.call("phone_data_overview");
+      const names = answer.body.metrics.map((entry: { metric: string }) => entry.metric).sort();
+      assertEquals(names, ["heartRate", "steps"], "the overview answered from a stale record");
+      const steps = answer.body.metrics.find((e: { metric: string }) => e.metric === "steps");
+      assertEquals(steps.daysCovered, 2);
+    });
+  } finally {
+    await close();
+  }
+});
+
+Deno.test("a record that was thrown away costs a read, never a wrong answer", async () => {
+  const { home, close } = await fixture(async (a) => {
+    await seedRun(a, "2026-03-01", 4);
+  });
+  try {
+    await session(home, async (first) => {
+      await first.call("phone_data_overview");
+    });
+    const before = await metricsNow(home);
+
+    // Deleting it is always safe, and so is having none: the days are the truth
+    // and this only ever saved a read of them.
+    await Deno.remove(`${home}/metrics.json`);
+    await session(home, async (second) => {
+      const answer = await second.call("phone_data_overview");
+      assertEquals(answer.body.metrics, before);
+    });
+    assert(keptMetrics(home), "the record was not rebuilt");
+
+    // The same for a record that is nonsense rather than missing.
+    await Deno.writeTextFile(`${home}/metrics.json`, "{ this is not json");
+    await session(home, async (third) => {
+      const answer = await third.call("phone_data_overview");
+      assertEquals(answer.body.metrics, before);
+    });
+  } finally {
+    await close();
+  }
+});
+
+/** The metrics an overview reports right now, for comparing against later. */
+async function metricsNow(home: string): Promise<unknown> {
+  let metrics: unknown;
+  await session(home, async (asked) => {
+    metrics = (await asked.call("phone_data_overview")).body.metrics;
+  });
+  return metrics;
+}
+
+Deno.test("a day that left the mirror leaves the record too", async () => {
+  const { home, close } = await fixture(async (a) => {
+    await seedRun(a, "2026-03-01", 4);
+  });
+  try {
+    await session(home, async (first) => {
+      await first.call("phone_data_overview");
+    });
+    assertEquals(Object.keys(keptMetrics(home)!).length, 4);
+
+    await Deno.remove(`${home}/days/2026-03-02.ndjson`);
+    await session(home, async (second) => {
+      const answer = await second.call("phone_data_overview");
+      assertEquals(answer.body.readable.days, 3);
+      assertEquals(answer.body.metrics[0].daysCovered, 3);
+    });
+    assertEquals(Object.keys(keptMetrics(home)!).length, 3);
+  } finally {
     await close();
   }
 });

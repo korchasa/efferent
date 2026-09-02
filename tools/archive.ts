@@ -93,11 +93,21 @@ export async function load<T>(name: string): Promise<T> {
  * lands are both bad: the record parses as nothing mirrored and the whole
  * archive is fetched again, or it does not parse and the reader says there is no
  * archive configured. A rename is the one write nobody can catch half of.
+ *
+ * Laid out unless asked otherwise, because these are the files somebody opens
+ * when the reader is behaving strangely. `compact` is for the one that is not
+ * read by people: laying that one out tripled it, from 1.3 MB to 4.3 MB, and it
+ * is read whole every time it is used.
  */
-export async function write(name: string, value: unknown): Promise<void> {
+export async function write(
+  name: string,
+  value: unknown,
+  options: { compact?: boolean } = {},
+): Promise<void> {
   await privateDirectory(HOME);
   const temporary = `${HOME}/${name}.partial`;
-  await Deno.writeTextFile(temporary, JSON.stringify(value, null, 2) + "\n");
+  const text = options.compact ? JSON.stringify(value) : JSON.stringify(value, null, 2);
+  await Deno.writeTextFile(temporary, text + "\n");
   await Deno.chmod(temporary, 0o600);
   await Deno.rename(temporary, `${HOME}/${name}`);
 }
@@ -162,6 +172,33 @@ export async function readDay(day: string): Promise<Event[]> {
   } catch {
     return [];
   }
+}
+
+/**
+ * Every mirrored day with a fingerprint of the file it is in, in order.
+ *
+ * The fingerprint is size and modification time, which is the ordinary way to
+ * ask whether a file has changed, and it is deliberately not the archive's
+ * upload time: a day can sit in the mirror with no record of where it came from
+ * — copied by an older release, or left behind when the archive lost it — and a
+ * question about the file is the one thing always answerable about a file.
+ *
+ * A stat apiece rather than a read: 3 914 days cost 84 ms this way against two
+ * seconds to open them all.
+ */
+export async function mirrorVersions(): Promise<Map<string, string>> {
+  const versions = new Map<string, string>();
+  try {
+    for await (const entry of Deno.readDir(`${HOME}/${DAYS}`)) {
+      const day = entry.name.replace(/\.ndjson$/, "");
+      if (!entry.isFile || day === entry.name || !isDay(day)) continue;
+      const stat = await Deno.stat(`${HOME}/${DAYS}/${entry.name}`);
+      versions.set(day, `${stat.size}:${stat.mtime?.getTime() ?? 0}`);
+    }
+  } catch {
+    return versions;
+  }
+  return new Map([...versions].sort(([left], [right]) => left.localeCompare(right)));
 }
 
 /** The mirrored days inside a range, in order. */
