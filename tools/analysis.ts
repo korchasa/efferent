@@ -124,6 +124,14 @@ export interface MetricSummary {
   events: number;
 }
 
+/** What one day holds, per metric. Kept small on purpose: it is written down and
+ * read back thousands at a time. */
+export type DayHoldings = Record<string, {
+  buckets: string[];
+  unit: string | null;
+  events: number;
+}>;
+
 /**
  * What each metric is, when it starts, and how much of it there is.
  *
@@ -133,6 +141,48 @@ export interface MetricSummary {
  * time when nothing was measuring.
  */
 export function summarise(days: { day: string; events: Event[] }[]): MetricSummary[] {
+  return fold(days.map(({ day, events }) => ({ day, held: whatADayHolds(events) })));
+}
+
+/**
+ * What one day holds, per metric, and nothing about any other day.
+ *
+ * Split out because it is the expensive half and the half that does not change:
+ * a day is written once and then answers the same question forever, so this can
+ * be worked out once and kept. The fold below is what has to run every time, and
+ * it is arithmetic over a dozen metrics rather than a read of a million events.
+ */
+export function whatADayHolds(events: Event[]): DayHoldings {
+  const held: DayHoldings = {};
+  for (const event of events) {
+    const metric = event.metric;
+    if (!metric) continue;
+    const bucket = typeof event.bucket === "string" ? event.bucket : null;
+    const existing = held[metric];
+    if (!existing) {
+      held[metric] = {
+        buckets: bucket ? [bucket] : [],
+        unit: typeof event.unit === "string" ? event.unit : null,
+        events: 1,
+      };
+      continue;
+    }
+    if (bucket && !existing.buckets.includes(bucket)) existing.buckets.push(bucket);
+    existing.events++;
+  }
+  return held;
+}
+
+/**
+ * Day summaries into one summary of the archive.
+ *
+ * Every part of this combines: the buckets are a union, the first and last days
+ * are a minimum and a maximum, the counts are sums. Which is what lets a day be
+ * summarised once and folded whenever the question is asked. The two fields that
+ * are *not* combined — what kind of thing a metric is and what unit it carries —
+ * come from the first day that holds it, so the days must arrive in order.
+ */
+export function fold(days: { day: string; held: DayHoldings }[]): MetricSummary[] {
   const found = new Map<string, {
     kind: "total" | "record";
     unit: string | null;
@@ -143,28 +193,26 @@ export function summarise(days: { day: string; events: Event[] }[]): MetricSumma
     events: number;
   }>();
 
-  for (const { day, events } of days) {
-    for (const event of events) {
-      const metric = event.metric;
-      if (!metric) continue;
+  for (const { day, held } of days) {
+    for (const [metric, holding] of Object.entries(held)) {
       const existing = found.get(metric);
       if (!existing) {
         found.set(metric, {
-          kind: event.bucket ? "total" : "record",
-          unit: typeof event.unit === "string" ? event.unit : null,
-          buckets: new Set(event.bucket ? [event.bucket] : []),
+          kind: holding.buckets.length > 0 ? "total" : "record",
+          unit: holding.unit,
+          buckets: new Set(holding.buckets),
           first: day,
           last: day,
           days: new Set([day]),
-          events: 1,
+          events: holding.events,
         });
         continue;
       }
-      if (event.bucket) existing.buckets.add(event.bucket);
+      for (const bucket of holding.buckets) existing.buckets.add(bucket);
       if (day < existing.first) existing.first = day;
       if (day > existing.last) existing.last = day;
       existing.days.add(day);
-      existing.events++;
+      existing.events += holding.events;
     }
   }
 

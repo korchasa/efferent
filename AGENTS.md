@@ -250,6 +250,16 @@ it exists because the wrong version fails quietly.
   replaced by a smaller one, and nothing in it says so.
 - **An answer from a stale local copy says it is stale.** The archive being unreachable is not a
   reason to fail, and it is not a reason to keep quiet either.
+- **A summary kept beside the mirror is a claim about a file, and the file is what tests it.**
+  `metrics.json` holds what each day holds, so the overview answers with 3 KB without opening 3 914
+  files to do it. Every entry carries the size and modification time of the day it was read from,
+  and an entry whose fingerprint no longer matches is thrown away and worked out again — a record
+  gone stale, gone missing or gone wrong costs a read, never a wrong answer. Deleting the file is
+  always safe, and so is having none.
+- **One question asks the archive once.** The freshness check already asks what the archive holds —
+  that is how the mirror knows whether it is behind — so an answer that also wants those numbers
+  takes them from the check instead of calling again. The service walks the whole listing to answer
+  that, a second and a half on a decade of days, and the overview was paying for the walk twice.
 - **The MCP bootstrap is self-contained.** The phone instruction tells an unprepared agent to call
   the argument-free `setup_guide` tool first. That tool contains the exact Python source that
   decrypts selected days. It must never require a separate prompt URL, repository checkout, Deno, a
