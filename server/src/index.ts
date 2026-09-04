@@ -58,6 +58,9 @@ const MAX_DAYS_PER_PAGE = 1000;
  * much". A year holds 366 days at the outside and a page holds hundreds, so
  * this is slack rather than a limit anybody meets. */
 const STATS_PAGES_PER_YEAR = 4;
+/** How many pages of rolled-up years `stats` will read. A page of them covered
+ * about two thousand days of the real archive, so this reaches a century. */
+const STATS_YEAR_PAGES = 50;
 
 export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
@@ -471,28 +474,49 @@ async function describeData(env: Env, bucket: string) {
 }
 
 /**
- * Which years this archive has days in, in one listing that reads no days.
+ * Which years this archive has days in, without reading the days.
  *
  * A day key ends in `YYYY-MM-DD`, so asking R2 to stop at the first dash hands
- * back one entry per year rather than one per day — eleven answers where a walk
- * would have read four thousand objects. Anything under the prefix that is not
- * shaped like a year is left out; only `isDay` decides what counts, and it
- * decides it below, on the keys themselves.
+ * back one entry per year rather than one per day — twelve answers where a walk
+ * would have read four thousand objects. Anything under the prefix not shaped
+ * like a year is left out; only `isDay` decides what counts, and it decides it
+ * below, on the keys themselves.
+ *
+ * **A rolled-up listing pages like any other, and for the same reason.** R2
+ * gathers the prefixes from the objects it scanned, not from the whole bucket,
+ * so it answers twelve years as two pages and says so. Taking the first page
+ * for the answer cost the real archive its last three years — 2 942 days out of
+ * 3 914, `lastDay` two and a half years early, and no error anywhere. Follow the
+ * cursor.
  */
 async function listYears(
   env: Env,
   bucket: string,
 ): Promise<{ years: string[]; complete: boolean }> {
   const prefix = dayPrefix(bucket);
-  const listing = await env.BLOBS.list({ prefix, delimiter: "-", limit: MAX_DAYS_PER_PAGE });
-  const years = listing.delimitedPrefixes
-    .map((delimited) => delimited.slice(prefix.length))
-    .filter((year) => /^\d{4}-$/.test(year))
-    .sort();
-  // A bucket with more years than one listing holds is not a thing that
-  // happens, but an answer that quietly left some out would be indistinguishable
-  // from a smaller archive.
-  return { years, complete: !listing.truncated };
+  const found = new Set<string>();
+  let cursor: string | undefined;
+
+  for (let page = 0; page < STATS_YEAR_PAGES; page++) {
+    const listing = await env.BLOBS.list({
+      prefix,
+      delimiter: "-",
+      limit: MAX_DAYS_PER_PAGE,
+      cursor,
+    });
+    for (const delimited of listing.delimitedPrefixes) {
+      found.add(delimited.slice(prefix.length));
+    }
+    if (!listing.truncated) return { years: years(found), complete: true };
+    cursor = listing.cursor;
+  }
+  // Only an archive longer than every page of this walk together, which is
+  // decades of days. Saying so beats answering about the part that fitted.
+  return { years: years(found), complete: false };
+}
+
+function years(found: Set<string>): string[] {
+  return [...found].filter((year) => /^\d{4}-$/.test(year)).sort();
 }
 
 /** One year, walked to its end. It cannot need more than one page in practice;

@@ -101,10 +101,20 @@ This file is the rulebook.
   time. Anything that would tell it what happened inside a day — a summary, a count, a metric name
   in the path — hands over what the encryption exists to keep, and nothing would fail to make that
   visible.
-- **Anything that lists R2 must page.** R2 answers a listing with at most one page and a `truncated`
-  flag; code that fetches once and filters afterwards reports everything past that page as nothing
-  at all, and reports it as success. Follow the cursor until it runs out, and cap what is unbounded
-  loudly rather than quietly.
+- **Anything that lists R2 must page, a rolled-up listing included.** R2 answers a listing with at
+  most one page and a `truncated` flag; code that fetches once and filters afterwards reports
+  everything past that page as nothing at all, and reports it as success. Follow the cursor until it
+  runs out, and cap what is unbounded loudly rather than quietly. A listing with a `delimiter` looks
+  like the exception and is not: R2 gathers the prefixes from the objects it happened to scan, so the
+  real archive answers twelve years as two pages. Reading only the first cost it 2 942 days out of
+  3 914 and put `lastDay` two and a half years early, with nothing anywhere saying so.
+- **`stats` counts the archive a year at a time, and every year at once.** There is no cheaper answer
+  than the listing itself — R2 knows how many objects a prefix holds only by walking them — so the
+  saving is in not waiting. Days are named by date, so the archive splits along a boundary the keys
+  already have: one rolled-up listing says which years exist, and the years are then counted side by
+  side. A decade fell from 1.4 seconds to about 0.7, and the answer is the same answer. Never take it
+  from a number kept somewhere instead: a count nothing re-derives is a claim about the archive that
+  the archive is never asked about.
 - **A range is inclusive at both ends.** A listing skips _past_ a key, so `from` has to be turned
   into the day before it. Passing `from` straight through drops the first day of every range — the
   one most likely to be the point of the question. A test enforces this.

@@ -59,40 +59,57 @@ class MemoryBucket {
     });
   }
 
+  /**
+   * A listing, with the two behaviours the service actually leans on.
+   *
+   * The limit is a limit on what is *read*, not on what comes back. That is the
+   * part worth copying faithfully: a rolled-up listing gathers its prefixes from
+   * the objects it happened to scan, so it can answer four years out of twelve
+   * and say it is truncated, and code that took that page for the whole answer
+   * would lose the rest of the archive without an error. Measured against real
+   * R2 on 2026-09-05: twelve years came back as two pages.
+   */
   // deno-lint-ignore require-await
   async list(
-    options: { prefix?: string; startAfter?: string; limit?: number; delimiter?: string },
+    options: {
+      prefix?: string;
+      startAfter?: string;
+      limit?: number;
+      delimiter?: string;
+      cursor?: string;
+    },
   ) {
     const prefix = options.prefix ?? "";
+    const from = options.cursor ?? options.startAfter;
     const keys = [...this.store.keys()]
       .filter((key) => key.startsWith(prefix))
-      .filter((key) => !options.startAfter || key > options.startAfter)
+      .filter((key) => !from || key > from)
       .sort();
 
-    // A delimiter rolls up every key that has one after the prefix into the
-    // stretch that ends at its first occurrence, and those keys are then not
-    // objects. That is what lets one listing name the years without reading the
-    // days, so a stand-in that skipped it would let the service pass a test it
-    // cannot pass against R2.
-    const plain: string[] = [];
-    const rolled: string[] = [];
-    for (const key of keys) {
+    const limit = options.limit ?? 1000;
+    const scanned = keys.slice(0, limit);
+    const truncated = keys.length > scanned.length;
+
+    // A delimiter rolls up every scanned key that holds one after the prefix
+    // into the stretch ending at its first occurrence; such a key is then not an
+    // object of its own.
+    const objects: string[] = [];
+    const delimitedPrefixes: string[] = [];
+    for (const key of scanned) {
       const at = options.delimiter ? key.indexOf(options.delimiter, prefix.length) : -1;
       if (at < 0) {
-        plain.push(key);
+        objects.push(key);
         continue;
       }
       const delimited = key.slice(0, at + options.delimiter!.length);
-      if (!rolled.includes(delimited)) rolled.push(delimited);
+      if (!delimitedPrefixes.includes(delimited)) delimitedPrefixes.push(delimited);
     }
 
-    // One budget for both, as R2 counts them.
-    const limit = options.limit ?? 1000;
-    const entries = [...plain, ...rolled].sort().slice(0, limit);
     return {
-      objects: entries.filter((key) => plain.includes(key)).map((key) => this.object(key)),
-      delimitedPrefixes: entries.filter((key) => rolled.includes(key)),
-      truncated: plain.length + rolled.length > limit,
+      objects: objects.map((key) => this.object(key)),
+      delimitedPrefixes,
+      truncated,
+      cursor: truncated ? scanned[scanned.length - 1] : undefined,
     };
   }
 }
@@ -425,6 +442,43 @@ Deno.test("stats counts a decade whose years are walked side by side", async () 
     bytes: 2 + 3 + 2 + 4,
     firstDay: "2016-02-29",
     lastDay: "2026-01-01",
+    complete: true,
+  });
+});
+
+Deno.test("stats finds the years a first page never reached", async () => {
+  const env = environment();
+  const writer = await writerKey();
+  await claim(env, writer);
+
+  // Over three years of days, which is more than one listing reads. The years
+  // are gathered from the objects a page happened to scan, so the last year of
+  // this archive exists only on the second page — and an answer that stopped at
+  // the first would be short by a year and wrong about when the archive ends,
+  // while looking exactly like a correct answer about a smaller archive. That
+  // is what the real bucket did on 2026-09-05: 2 942 days of 3 914, and a last
+  // day two and a half years early.
+  const written: string[] = [];
+  const cursor = new Date("2020-01-01T00:00:00Z");
+  for (let index = 0; index < 1200; index++) {
+    written.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  // Put straight into the store: what is under test is the counting, and 1 200
+  // days is forty signed batches of nothing to do with it.
+  for (const day of written) await env.BLOBS.put(dayKey(BUCKET, day), sealedBody(1));
+
+  const response = await worker.fetch(
+    new Request(`https://example.invalid/b/${BUCKET}/stats`),
+    bindings(env),
+  );
+
+  assertEquals(await response.json(), {
+    exists: true,
+    days: written.length,
+    bytes: written.length * 2,
+    firstDay: written[0],
+    lastDay: written[written.length - 1],
     complete: true,
   });
 });
