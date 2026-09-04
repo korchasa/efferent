@@ -12,7 +12,7 @@
 
 import { assert, assertEquals } from "@std/assert";
 import worker from "./src/index.ts";
-import { dayKey, signingKeyObject } from "../protocol/ids.ts";
+import { dayKey, dayPrefix, signingKeyObject } from "../protocol/ids.ts";
 import { MAX_DAYS_PER_REQUEST, packDays, type SealedDay } from "../protocol/batch.ts";
 import { base64url, signUpload, type UploadHeader } from "../protocol/signing.ts";
 
@@ -60,15 +60,39 @@ class MemoryBucket {
   }
 
   // deno-lint-ignore require-await
-  async list(options: { prefix?: string; startAfter?: string; limit?: number }) {
+  async list(
+    options: { prefix?: string; startAfter?: string; limit?: number; delimiter?: string },
+  ) {
+    const prefix = options.prefix ?? "";
     const keys = [...this.store.keys()]
-      .filter((key) => !options.prefix || key.startsWith(options.prefix))
+      .filter((key) => key.startsWith(prefix))
       .filter((key) => !options.startAfter || key > options.startAfter)
       .sort();
+
+    // A delimiter rolls up every key that has one after the prefix into the
+    // stretch that ends at its first occurrence, and those keys are then not
+    // objects. That is what lets one listing name the years without reading the
+    // days, so a stand-in that skipped it would let the service pass a test it
+    // cannot pass against R2.
+    const plain: string[] = [];
+    const rolled: string[] = [];
+    for (const key of keys) {
+      const at = options.delimiter ? key.indexOf(options.delimiter, prefix.length) : -1;
+      if (at < 0) {
+        plain.push(key);
+        continue;
+      }
+      const delimited = key.slice(0, at + options.delimiter!.length);
+      if (!rolled.includes(delimited)) rolled.push(delimited);
+    }
+
+    // One budget for both, as R2 counts them.
     const limit = options.limit ?? 1000;
+    const entries = [...plain, ...rolled].sort().slice(0, limit);
     return {
-      objects: keys.slice(0, limit).map((key) => this.object(key)),
-      truncated: keys.length > limit,
+      objects: entries.filter((key) => plain.includes(key)).map((key) => this.object(key)),
+      delimitedPrefixes: entries.filter((key) => rolled.includes(key)),
+      truncated: plain.length + rolled.length > limit,
     };
   }
 }
@@ -374,6 +398,58 @@ Deno.test("stats says what is in the archive without handing any of it over", as
   assertEquals(body.lastDay, "2026-08-07");
   assertEquals(body.complete, true);
   assert(env.BLOBS.store.has(signingKeyObject(BUCKET)), "the writer never got registered");
+});
+
+Deno.test("stats counts a decade whose years are walked side by side", async () => {
+  const env = environment();
+  const writer = await writerKey();
+  // Three years with a gap between them: the years are found from the keys, so
+  // an archive that stopped for a while must not be counted as continuous, and
+  // the ends of it come from the earliest and latest year rather than from
+  // whichever listing happened to answer first.
+  await send(env, writer, [
+    { day: "2016-02-29", blob: sealedBody(1) },
+    { day: "2016-12-31", blob: sealedBody(1, 2) },
+    { day: "2019-06-01", blob: sealedBody(3) },
+    { day: "2026-01-01", blob: sealedBody(4, 5, 6) },
+  ]);
+
+  const response = await worker.fetch(
+    new Request(`https://example.invalid/b/${BUCKET}/stats`),
+    bindings(env),
+  );
+
+  assertEquals(await response.json(), {
+    exists: true,
+    days: 4,
+    bytes: 2 + 3 + 2 + 4,
+    firstDay: "2016-02-29",
+    lastDay: "2026-01-01",
+    complete: true,
+  });
+});
+
+Deno.test("stats counts days, and a key that is not one is not a day", async () => {
+  const env = environment();
+  const writer = await writerKey();
+  await send(env, writer, [{ day: "2026-08-07", blob: sealedBody(1) }]);
+  // Two shapes of rubbish under the same prefix: one that holds no dash at all,
+  // so no year can be read from it, and one that reads as a year and is still
+  // not a date. Neither has ever been written by anything, and both would be
+  // counted by a listing that trusted the prefix instead of the day.
+  await env.BLOBS.put(`${dayPrefix(BUCKET)}notaday`, sealedBody(9, 9, 9));
+  await env.BLOBS.put(`${dayPrefix(BUCKET)}2026-13-40`, sealedBody(9, 9, 9));
+
+  const response = await worker.fetch(
+    new Request(`https://example.invalid/b/${BUCKET}/stats`),
+    bindings(env),
+  );
+  const body = await response.json() as Record<string, unknown>;
+
+  assertEquals(body.days, 1);
+  assertEquals(body.bytes, 2);
+  assertEquals(body.firstDay, "2026-08-07");
+  assertEquals(body.lastDay, "2026-08-07");
 });
 
 Deno.test("an unknown bucket is empty rather than an error", async () => {

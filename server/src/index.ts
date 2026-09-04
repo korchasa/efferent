@@ -54,9 +54,10 @@ const MAX_BODY_BYTES = 16 * 1024 * 1024;
  * question never pages, and a device checking a decade against the archive does
  * it in three round trips. */
 const MAX_DAYS_PER_PAGE = 1000;
-/** How far `stats` will walk before it answers "at least this much". Bounded so
- * that asking what is in an archive never costs more than a moment. */
-const STATS_PAGE_LIMIT = 20;
+/** How far `stats` will walk inside one year before it answers "at least this
+ * much". A year holds 366 days at the outside and a page holds hundreds, so
+ * this is slack rather than a limit anybody meets. */
+const STATS_PAGES_PER_YEAR = 4;
 
 export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
@@ -423,25 +424,36 @@ async function describe(env: Env, bucket: string): Promise<Response> {
   return json(await describeData(env, bucket));
 }
 
+/**
+ * Counting the archive, a year at a time and every year at once.
+ *
+ * There is no cheaper answer than the listing itself — R2 knows how many
+ * objects a prefix holds only by walking them — so the saving is in not
+ * waiting. A single walk is sequential by construction, because each page
+ * starts where the last one ended, and a decade spent 1.4 seconds going four
+ * pages one after another. Days are named by date, so the archive splits along
+ * a boundary the keys already have: one listing says which years exist, and the
+ * years are then counted side by side. The same objects are read, and the
+ * answer is the same answer.
+ */
 async function describeData(env: Env, bucket: string) {
+  const years = await listYears(env, bucket);
+  const counted = await Promise.all(years.years.map((year) => countYear(env, bucket, year)));
+
   let days = 0;
   let bytes = 0;
   let firstDay: string | null = null;
   let lastDay: string | null = null;
-  let complete = true;
-  let after: string | null = null;
+  let complete = years.complete;
 
-  for (let page = 0; page < STATS_PAGE_LIMIT; page++) {
-    const listing = await listPage(env, bucket, after, MAX_DAYS_PER_PAGE);
-    for (const entry of listing.days) {
-      days++;
-      bytes += entry.bytes;
-      firstDay ??= entry.day;
-      lastDay = entry.day;
-    }
-    if (!listing.truncated || listing.days.length === 0) break;
-    after = listing.days[listing.days.length - 1].day;
-    if (page === STATS_PAGE_LIMIT - 1) complete = false;
+  // In order, because the first and last day of the archive are the first day
+  // of its earliest year and the last day of its latest.
+  for (const year of counted) {
+    days += year.days;
+    bytes += year.bytes;
+    firstDay ??= year.firstDay;
+    lastDay = year.lastDay ?? lastDay;
+    if (!year.complete) complete = false;
   }
 
   const claimed = await env.BLOBS.head(signingKeyObject(bucket));
@@ -458,15 +470,70 @@ async function describeData(env: Env, bucket: string) {
   };
 }
 
+/**
+ * Which years this archive has days in, in one listing that reads no days.
+ *
+ * A day key ends in `YYYY-MM-DD`, so asking R2 to stop at the first dash hands
+ * back one entry per year rather than one per day — eleven answers where a walk
+ * would have read four thousand objects. Anything under the prefix that is not
+ * shaped like a year is left out; only `isDay` decides what counts, and it
+ * decides it below, on the keys themselves.
+ */
+async function listYears(
+  env: Env,
+  bucket: string,
+): Promise<{ years: string[]; complete: boolean }> {
+  const prefix = dayPrefix(bucket);
+  const listing = await env.BLOBS.list({ prefix, delimiter: "-", limit: MAX_DAYS_PER_PAGE });
+  const years = listing.delimitedPrefixes
+    .map((delimited) => delimited.slice(prefix.length))
+    .filter((year) => /^\d{4}-$/.test(year))
+    .sort();
+  // A bucket with more years than one listing holds is not a thing that
+  // happens, but an answer that quietly left some out would be indistinguishable
+  // from a smaller archive.
+  return { years, complete: !listing.truncated };
+}
+
+/** One year, walked to its end. It cannot need more than one page in practice;
+ * it pages anyway, because a listing that stopped at its page size would report
+ * the rest of the year as nothing at all. */
+async function countYear(env: Env, bucket: string, year: string) {
+  let days = 0;
+  let bytes = 0;
+  let firstDay: string | null = null;
+  let lastDay: string | null = null;
+  let after: string | null = null;
+
+  for (let page = 0; page < STATS_PAGES_PER_YEAR; page++) {
+    const listing = await listPage(env, bucket, after, MAX_DAYS_PER_PAGE, year);
+    for (const entry of listing.days) {
+      days++;
+      bytes += entry.bytes;
+      firstDay ??= entry.day;
+      lastDay = entry.day;
+    }
+    if (!listing.truncated || listing.days.length === 0) {
+      return { days, bytes, firstDay, lastDay, complete: true };
+    }
+    after = listing.days[listing.days.length - 1].day;
+  }
+  return { days, bytes, firstDay, lastDay, complete: false };
+}
+
 async function listPage(
   env: Env,
   bucket: string,
   after: string | null,
   limit: number,
+  within = "",
 ): Promise<{ days: { day: string; bytes: number; uploaded: string }[]; truncated: boolean }> {
   const prefix = dayPrefix(bucket);
   const listing = await env.BLOBS.list({
-    prefix,
+    // `within` narrows the listing to part of the key space — a year, for the
+    // count above. The day is still cut from the whole prefix, so a narrowed
+    // page and a full one describe days the same way.
+    prefix: `${prefix}${within}`,
     startAfter: after ? `${prefix}${after}` : undefined,
     limit,
   });
