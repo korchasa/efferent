@@ -61,9 +61,9 @@ public let project = Project(
                 ),
                 // Public deployment configuration. These are addresses, not
                 // credentials; the reading key never enters the plist.
-                "EfferentServiceURL": .string("https://efferent.korchasa.workers.dev"),
+                "EfferentServiceURL": .string("https://efferent.korchasa.dev"),
                 "EfferentMCPBaseURL": .string(
-                    "https://efferent.korchasa.workers.dev/mcp/b"
+                    "https://efferent.korchasa.dev/mcp/b"
                 ),
                 // A reader on your own network is a normal way to run this, and
                 // it will not have a certificate. The batch is sealed either
