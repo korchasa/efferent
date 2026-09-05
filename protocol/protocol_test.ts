@@ -125,6 +125,20 @@ Deno.test("a signature over a batch does not verify for part of it", async () =>
   assert(!await verifyUpload(publicRaw, signature, { ...header, days: days.toReversed() }, body));
 });
 
+/// Not a hypothetical. On 2026-09-05 the live service accepted a bucket claim
+/// signed exactly this way: thirty-two zero bytes are a point of order four,
+/// and sixty-four zero bytes verify against it for about one message in four.
+/// This timestamp is one of the messages where it does, so the test goes red
+/// the moment the refusal is taken out.
+Deno.test("a key nobody holds verifies nothing", async () => {
+  const nobody = new Uint8Array(32);
+  const nothing = new Uint8Array(64);
+  const header = { bucket: "a".repeat(26), days: ["2026-08-07"], timestamp: 1_700_000_002 };
+  const body = encoder.encode("batch");
+
+  assert(!await verifyUpload(nobody, nothing, header, body));
+});
+
 Deno.test("someone else's key does not verify the signature", async () => {
   const mine = await writerKeys();
   const theirs = await writerKeys();

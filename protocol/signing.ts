@@ -59,6 +59,44 @@ export async function signUpload(
   return new Uint8Array(signature);
 }
 
+/**
+ * The Ed25519 keys that are not keys: points of small order.
+ *
+ * Almost every 32 bytes that decode to a curve point generate the whole group,
+ * and forging a signature against one means solving a discrete logarithm. These
+ * seven generate a subgroup of at most eight elements, and against them a
+ * signature of sixty-four zero bytes verifies for about one message in four —
+ * with nobody holding a private key at all. Thirty-two zero bytes is one of
+ * them, which is how this was found: on 2026-09-05 a claim signed that way was
+ * accepted by the live service.
+ *
+ * It grants a stranger nothing they could not get by generating a real key,
+ * since a bucket is claimed by whoever signs for it first. It is still a
+ * signature check that can be passed without a key, and this is the whole of
+ * what says who may write.
+ *
+ * The list is the one libsodium refuses. The high bit of the last byte is the
+ * sign of x and decodes to the same point either way, so it is cleared before
+ * the comparison rather than doubling the list.
+ */
+const SMALL_ORDER = [
+  "0000000000000000000000000000000000000000000000000000000000000000",
+  "0100000000000000000000000000000000000000000000000000000000000000",
+  "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800",
+  "5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224edddd09f157",
+  "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+  "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+  "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+];
+
+export function hasSmallOrder(publicKey: Uint8Array): boolean {
+  if (publicKey.length !== 32) return false;
+  const canonical = Uint8Array.from(publicKey);
+  canonical[31] &= 0x7f;
+  const hex = [...canonical].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return SMALL_ORDER.includes(hex);
+}
+
 export async function verifyUpload(
   publicKey: Uint8Array,
   signature: Uint8Array,
@@ -77,6 +115,9 @@ export async function verifyUpload(
   } catch {
     return false; // 32 bytes that are not a point on the curve
   }
+  // Refused here rather than only where a key is registered, so that no caller
+  // can verify against a key nobody holds by taking a different path in.
+  if (hasSmallOrder(publicKey)) return false;
   const message = new TextEncoder().encode(await canonicalRequest(header, body));
   return await crypto.subtle.verify(
     "Ed25519",

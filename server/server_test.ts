@@ -433,6 +433,29 @@ Deno.test("a caller uploading too fast is refused before the archive is touched"
   assertEquals(env.BLOBS.store.size, 0);
 });
 
+/// The live service accepted this claim on 2026-09-05, before the refusal
+/// existed. It gave a stranger nothing a generated key would not have given
+/// them, and it was still a signature check passed without a key.
+Deno.test("a claim signed with a key nobody holds is refused", async () => {
+  const env = environment();
+
+  const response = await worker.fetch(
+    new Request(`https://example.invalid/b/${BUCKET}`, {
+      method: "PUT",
+      headers: {
+        "x-efferent-timestamp": String(Math.floor(Date.now() / 1000)),
+        "x-efferent-writer": base64url(new Uint8Array(32)),
+        "x-efferent-signature": base64url(new Uint8Array(64)),
+      },
+      body: new Uint8Array(),
+    }),
+    bindings(env),
+  );
+
+  assertEquals(response.status, 400);
+  assertEquals(env.BLOBS.store.size, 0);
+});
+
 Deno.test("a caller claiming buckets too fast is refused", async () => {
   const env = environment();
   const writer = await writerKey();

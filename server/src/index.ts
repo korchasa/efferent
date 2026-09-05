@@ -43,6 +43,7 @@ import {
 import { MAX_DAYS_PER_REQUEST, type SealedDay, unpackDays } from "../../protocol/batch.ts";
 import {
   fromBase64url,
+  hasSmallOrder,
   TIMESTAMP_TOLERANCE_SECONDS,
   type UploadHeader,
   verifyUpload,
@@ -422,6 +423,11 @@ async function authorizeWriter(
   }
   if (claimed.length !== 32 || decodedSignature.length !== 64) {
     return problem(400, "writer key or signature has the wrong length");
+  }
+  // Said plainly here, because the answer "that signature does not match" would
+  // send whoever reads it looking for a bug in their signing.
+  if (hasSmallOrder(claimed)) {
+    return problem(400, "that writer key is not a key anybody holds");
   }
 
   const registered = await env.BLOBS.get(signingKeyObject(bucket));
