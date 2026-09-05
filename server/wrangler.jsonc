@@ -4,6 +4,17 @@
   "name": "efferent",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-28",
+  // Its own hostname in a zone this account owns, rather than a `workers.dev`
+  // address: an address that ships inside an App Store binary cannot be moved
+  // afterwards, and only a real zone can carry a firewall rule. The DNS record
+  // is a proxied placeholder declared in the homelab Terraform; nothing ever
+  // reaches it, because this route takes the request first.
+  "routes": [
+    {
+      "pattern": "efferent.korchasa.dev/*",
+      "zone_name": "korchasa.dev"
+    }
+  ],
   "r2_buckets": [
     {
       "binding": "BLOBS",
