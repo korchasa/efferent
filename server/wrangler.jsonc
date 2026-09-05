@@ -9,6 +9,10 @@
   // afterwards, and only a real zone can carry a firewall rule. The DNS record
   // is a proxied placeholder declared in the homelab Terraform; nothing ever
   // reaches it, because this route takes the request first.
+  // Said out loud rather than left to wrangler, which disables the workers.dev
+  // name by itself as soon as a route exists: the old address answering 404 is
+  // the intended end of the move, not a side effect to rediscover later.
+  "workers_dev": false,
   "routes": [
     {
       "pattern": "efferent.korchasa.dev/*",
