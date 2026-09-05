@@ -10,6 +10,24 @@
       "bucket_name": "efferent"
     }
   ],
+  // Two counts, kept apart because a phone claims its bucket once in its life
+  // and then uploads for years. Cloudflare counts these within one of its
+  // locations, so they thin a flood rather than cap it; the ceilings in the
+  // code are what bound the bill.
+  "ratelimits": [
+    {
+      "name": "CLAIMS",
+      "namespace_id": "1001",
+      "simple": { "limit": 5, "period": 60 }
+    },
+    {
+      // A decade of history goes up in about 120 requests, four in the air at
+      // once, so a first export needs a couple of hundred in a minute.
+      "name": "WRITES",
+      "namespace_id": "1002",
+      "simple": { "limit": 300, "period": 60 }
+    }
+  ],
   "observability": {
     "enabled": true
   }

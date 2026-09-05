@@ -61,6 +61,23 @@ export function signingKeyObject(bucket: string): string {
 }
 
 /**
+ * `<bucket>/taken` and `taken`: how many bytes a bucket, and the service as a
+ * whole, have been handed.
+ *
+ * Bytes taken, not bytes held — a day written twice counts twice. What a write
+ * costs is a write, and a tally that tried to describe the store would have to
+ * read every day it replaces, which is thirty-one more requests inside a
+ * request that may make fifty. Both names sit outside `d/`, so no listing of
+ * days ever trips over them, and `taken` is not a bucket id, which are always
+ * twenty-six characters of base32.
+ */
+export function takenObject(bucket: string): string {
+  return `${bucket}/taken`;
+}
+
+export const SERVICE_TAKEN_OBJECT = "taken";
+
+/**
  * `<bucket>/d/2026-08-07`.
  *
  * `YYYY-MM-DD` sorts lexicographically in the same order it runs in time, which

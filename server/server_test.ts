@@ -11,8 +11,19 @@
  */
 
 import { assert, assertEquals } from "@std/assert";
-import worker from "./src/index.ts";
-import { dayKey, dayPrefix, signingKeyObject } from "../protocol/ids.ts";
+import worker, {
+  MAX_BUCKET_BYTES,
+  MAX_DAY_BYTES,
+  MAX_SERVICE_BYTES,
+  SERVICE_BYTES_ALREADY_TAKEN,
+} from "./src/index.ts";
+import {
+  dayKey,
+  dayPrefix,
+  SERVICE_TAKEN_OBJECT,
+  signingKeyObject,
+  takenObject,
+} from "../protocol/ids.ts";
 import { MAX_DAYS_PER_REQUEST, packDays, type SealedDay } from "../protocol/batch.ts";
 import { base64url, signUpload, type UploadHeader } from "../protocol/signing.ts";
 
@@ -34,6 +45,8 @@ class MemoryBucket {
       body: new Blob([stored.body.slice().buffer]).stream(),
       // deno-lint-ignore require-await
       arrayBuffer: async () => stored.body.buffer.slice(0) as ArrayBuffer,
+      // deno-lint-ignore require-await
+      text: async () => new TextDecoder().decode(stored.body),
     };
   }
 
@@ -48,13 +61,17 @@ class MemoryBucket {
   }
 
   // deno-lint-ignore require-await
-  async put(key: string, value: ArrayBuffer | Uint8Array) {
+  async put(key: string, value: ArrayBuffer | Uint8Array | string) {
     this.store.set(key, {
       // Copied, and copied *within the view's bounds*: a day out of a batch is a
       // window onto the request body, and keeping the window would store the
       // whole batch under one day's name. Real R2 respects the bounds, so a
       // stand-in that did not would pass tests the service cannot.
-      body: value instanceof Uint8Array ? value.slice() : new Uint8Array(value),
+      body: typeof value === "string"
+        ? new TextEncoder().encode(value)
+        : value instanceof Uint8Array
+        ? value.slice()
+        : new Uint8Array(value),
       uploaded: new Date(1_760_000_000_000 + this.writes++ * 1000),
     });
   }
@@ -125,8 +142,26 @@ async function writerKey() {
   };
 }
 
+/**
+ * A count that says yes, until a test says otherwise.
+ *
+ * Every test that is about something else has to get past it, so the default
+ * answer is the permissive one; `answer = false` is how a test asks what
+ * happens to a caller going too fast.
+ */
+class MemoryLimiter {
+  answer = true;
+  readonly keys: string[] = [];
+
+  // deno-lint-ignore require-await
+  async limit({ key }: { key: string }) {
+    this.keys.push(key);
+    return { success: this.answer };
+  }
+}
+
 type Writer = { privateKey: CryptoKey; publicKey: string };
-type Environment = { BLOBS: MemoryBucket };
+type Environment = { BLOBS: MemoryBucket; CLAIMS: MemoryLimiter; WRITES: MemoryLimiter };
 
 /** The worker only ever touches the parts of R2 its interface names. */
 function bindings(env: Environment): Parameters<typeof worker.fetch>[1] {
@@ -134,7 +169,7 @@ function bindings(env: Environment): Parameters<typeof worker.fetch>[1] {
 }
 
 function environment(): Environment {
-  return { BLOBS: new MemoryBucket() };
+  return { BLOBS: new MemoryBucket(), CLAIMS: new MemoryLimiter(), WRITES: new MemoryLimiter() };
 }
 
 function executionContext(): ExecutionContext {
@@ -226,6 +261,10 @@ async function days(env: Environment, query: string) {
   };
 }
 
+function tally(env: Environment, key: string): number {
+  return Number(new TextDecoder().decode(env.BLOBS.store.get(key)!.body));
+}
+
 function stored(env: Environment, day: string): number[] {
   return [...env.BLOBS.store.get(dayKey(BUCKET, day))!.body];
 }
@@ -294,6 +333,117 @@ Deno.test("a batch that does not hold together stores nothing", async () => {
 /// Every day in a batch is a separate write, and a Worker gets a limited
 /// number of those per request. Refusing at the edge beats running out
 /// somewhere in the middle, which would leave a batch half stored.
+Deno.test("a day heavier than a day can be is refused, and nothing is stored", async () => {
+  const env = environment();
+  const writer = await writerKey();
+
+  const response = await send(env, writer, [
+    { day: "2026-01-01", blob: new Uint8Array(MAX_DAY_BYTES + 1) },
+  ]);
+
+  assertEquals(response.status, 413);
+  assertEquals(env.BLOBS.store.size, 0);
+});
+
+/// A bucket holds one object per date, so the dates it will take are what
+/// bounds how much of it can ever exist. Days nobody lived through are how that
+/// bound is lost.
+Deno.test("a day from before anybody's health is refused", async () => {
+  const env = environment();
+  const writer = await writerKey();
+
+  const response = await put(env, writer, "1899-12-31");
+
+  assertEquals(response.status, 400);
+  assertEquals(env.BLOBS.store.size, 0);
+});
+
+Deno.test("a day nobody has reached yet is refused", async () => {
+  const env = environment();
+  const writer = await writerKey();
+  const ahead = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  const response = await put(env, writer, ahead);
+
+  assertEquals(response.status, 400);
+  assertEquals(env.BLOBS.store.size, 0);
+});
+
+/// Tomorrow here is today somewhere: a phone in New Zealand is on a date this
+/// server has not reached, and the day it is living through is a real one.
+Deno.test("the day a phone further east is already on is taken", async () => {
+  const env = environment();
+  const writer = await writerKey();
+  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  const response = await put(env, writer, tomorrow);
+
+  assertEquals(response.status, 200);
+});
+
+Deno.test("a bucket that has been handed its fill takes no more", async () => {
+  const env = environment();
+  const writer = await writerKey();
+  await put(env, writer, "2026-01-01");
+  await env.BLOBS.put(takenObject(BUCKET), String(MAX_BUCKET_BYTES));
+
+  const response = await put(env, writer, "2026-01-02");
+
+  assertEquals(response.status, 507);
+  assertEquals(env.BLOBS.store.has(dayKey(BUCKET, "2026-01-02")), false);
+});
+
+/// The ceiling that actually bounds the bill: while anybody can claim a bucket,
+/// a limit on one bucket is a limit on nothing.
+Deno.test("the service stops taking days once it has taken its fill", async () => {
+  const env = environment();
+  const writer = await writerKey();
+  await env.BLOBS.put(SERVICE_TAKEN_OBJECT, String(MAX_SERVICE_BYTES));
+
+  const response = await put(env, writer, "2026-01-01");
+
+  assertEquals(response.status, 507);
+  assertEquals(env.BLOBS.store.has(dayKey(BUCKET, "2026-01-01")), false);
+});
+
+/// What a write costs is the write. A tally of what the archive holds would say
+/// the same number twice here, and would have to read every day it replaces to
+/// say it.
+Deno.test("the tally counts what was handed over, so one day sent twice counts twice", async () => {
+  const env = environment();
+  const writer = await writerKey();
+
+  await put(env, writer, "2026-01-01");
+  const once = tally(env, takenObject(BUCKET));
+  await put(env, writer, "2026-01-01");
+  const twice = tally(env, takenObject(BUCKET));
+
+  assertEquals(twice, once * 2);
+  assertEquals(tally(env, SERVICE_TAKEN_OBJECT), SERVICE_BYTES_ALREADY_TAKEN + twice);
+});
+
+Deno.test("a caller uploading too fast is refused before the archive is touched", async () => {
+  const env = environment();
+  const writer = await writerKey();
+  env.WRITES.answer = false;
+
+  const response = await put(env, writer, "2026-01-01");
+
+  assertEquals(response.status, 429);
+  assertEquals(env.BLOBS.store.size, 0);
+});
+
+Deno.test("a caller claiming buckets too fast is refused", async () => {
+  const env = environment();
+  const writer = await writerKey();
+  env.CLAIMS.answer = false;
+
+  const response = await claim(env, writer);
+
+  assertEquals(response.status, 429);
+  assertEquals(env.BLOBS.store.size, 0);
+});
+
 Deno.test("more than a month of days in one request is refused", async () => {
   const env = environment();
   const writer = await writerKey();

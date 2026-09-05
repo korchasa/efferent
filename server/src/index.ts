@@ -36,7 +36,9 @@ import {
   dayPrefix,
   isBucketId,
   isDay,
+  SERVICE_TAKEN_OBJECT,
   signingKeyObject,
+  takenObject,
 } from "../../protocol/ids.ts";
 import { MAX_DAYS_PER_REQUEST, type SealedDay, unpackDays } from "../../protocol/batch.ts";
 import {
@@ -47,8 +49,34 @@ import {
 } from "../../protocol/signing.ts";
 import { SETUP_GUIDE } from "./setup-guide.ts";
 
-/** A month of busy days over; well under what a Worker can hold in memory. */
-const MAX_BODY_BYTES = 16 * 1024 * 1024;
+/** What one request may carry. The phone cuts a batch at four mebibytes of
+ * sealed days and adds a few hundred bytes of framing, so this is its own
+ * budget with room over it. It used to be sixteen, which was a number about
+ * what a Worker can hold rather than about what a person's days weigh. */
+export const MAX_BODY_BYTES = 5 * 1024 * 1024;
+/** What one day may weigh. Measured against the live archive on 2026-09-05:
+ * eleven years of days, median 8.7 KB, ninety-ninth percentile 43.8 KB, the
+ * heaviest of all 278 KB. A mebibyte is not a limit anybody meets; it is the
+ * size at which a day has stopped being a day. */
+export const MAX_DAY_BYTES = 1024 * 1024;
+/** What one bucket may ever be handed. The whole eleven-year archive is 37 MB
+ * and a year of rewriting recent days adds about 20 MB, so this is a couple of
+ * decades for a person and an early stop for anything else. */
+export const MAX_BUCKET_BYTES = 512 * 1024 * 1024;
+/** What the service may be handed in total before it stops taking days and
+ * says so. At R2's rate this is about a dollar and a half a month of storage,
+ * and about two and a half thousand lifetime archives. It is a circuit
+ * breaker, not a business plan: while anybody can claim a bucket, a per-bucket
+ * ceiling on its own bounds nothing. */
+export const MAX_SERVICE_BYTES = 100 * 1024 * 1024 * 1024;
+/** Where the service's own tally starts when there is none to read. Measured
+ * with `wrangler r2 bucket info efferent` on 2026-09-05: 17,585 objects,
+ * 153 MB. Deleting the tally object is how it is re-seeded from here. */
+export const SERVICE_BYTES_ALREADY_TAKEN = 153 * 1000 * 1000;
+/** The oldest day anybody may write. Health cannot know about a day before the
+ * person, and an archive reaching back to the year 1 is somebody filling the
+ * key space rather than exporting a life. */
+export const EARLIEST_DAY = "1900-01-01";
 /** Days per listing page — R2's own ceiling for one listing, so asking for more
  * would page underneath anyway. Nearly three years in one answer: an ordinary
  * question never pages, and a device checking a decade against the archive does
@@ -84,11 +112,19 @@ export default {
     if (!isBucketId(bucket)) return problem(400, "malformed bucket id");
 
     if (segments.length === 2 && request.method === "PUT") {
+      if (!await allowed(env.CLAIMS, request)) {
+        return problem(429, "too many bucket claims from here just now");
+      }
       return await createBucket(request, env, bucket);
     }
     if (segments.length === 3 && segments[2] === "days") {
       if (request.method === "GET") return await listDays(env, bucket, url);
-      if (request.method === "PUT") return await putDays(request, env, bucket);
+      if (request.method === "PUT") {
+        if (!await allowed(env.WRITES, request)) {
+          return problem(429, "too many uploads from here just now");
+        }
+        return await putDays(request, env, bucket);
+      }
     }
     if (segments.length === 3 && segments[2] === "stats" && request.method === "GET") {
       return await describe(env, bucket);
@@ -277,6 +313,24 @@ async function putDays(request: Request, env: Env, bucket: string): Promise<Resp
     );
   }
 
+  const heavy = entries.find((entry) => entry.blob.length > MAX_DAY_BYTES);
+  if (heavy) {
+    return problem(
+      413,
+      `${heavy.day} weighs ${heavy.blob.length} bytes, and ${MAX_DAY_BYTES} is all one day may`,
+    );
+  }
+  // A day is a date somebody lived through. Refusing the rest keeps the key
+  // space of a bucket to the days a person can have rather than to every date
+  // the calendar can spell.
+  // Tomorrow, because a phone far enough east is already on a day this server
+  // has not reached.
+  const latest = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const outside = entries.find((entry) => entry.day < EARLIEST_DAY || entry.day > latest);
+  if (outside) {
+    return problem(400, `${outside.day} is outside ${EARLIEST_DAY} … ${latest}`);
+  }
+
   const authorization = await authorizeWriter(
     request,
     env,
@@ -292,6 +346,20 @@ async function putDays(request: Request, env: Env, bucket: string): Promise<Resp
     await env.BLOBS.put(signingKeyObject(bucket), authorization.claimed);
   }
 
+  // Both ceilings are read before anything is written, because a refusal after
+  // the writes would have cost exactly what it was meant to prevent.
+  const bucketTaken = await taken(env, takenObject(bucket), 0);
+  if (bucketTaken + body.length > MAX_BUCKET_BYTES) {
+    return problem(
+      507,
+      `this bucket has been handed ${bucketTaken} bytes, and ${MAX_BUCKET_BYTES} is all one bucket may take`,
+    );
+  }
+  const serviceTaken = await taken(env, SERVICE_TAKEN_OBJECT, SERVICE_BYTES_ALREADY_TAKEN);
+  if (serviceTaken + body.length > MAX_SERVICE_BYTES) {
+    return problem(507, "this service has been handed as much as it may take");
+  }
+
   // Settled, not all: a batch where one write failed still stored the others,
   // and the sender marks a day as delivered only when this answer names it. An
   // exception here would answer nothing about days that are in fact in the
@@ -305,6 +373,14 @@ async function putDays(request: Request, env: Env, bucket: string): Promise<Resp
   if (stored.length === 0) {
     return problem(502, "the store took none of these days");
   }
+
+  // Counted after the fact and by the whole request, not by the days that
+  // landed: what a ceiling is protecting against is the work of taking a
+  // request, and that work was done either way.
+  await Promise.all([
+    env.BLOBS.put(takenObject(bucket), `${bucketTaken + body.length}`),
+    env.BLOBS.put(SERVICE_TAKEN_OBJECT, `${serviceTaken + body.length}`),
+  ]);
   return json({ stored, bytes: body.length });
 }
 
@@ -572,6 +648,36 @@ async function listPage(
     .filter((entry) => entry !== null);
 
   return { days, truncated: listing.truncated };
+}
+
+/**
+ * Whether this caller may make this request at all.
+ *
+ * Keyed by the address the request came from, because at the point this is
+ * asked nothing else about the caller has been established — the signature is
+ * checked later, and checking it first would mean doing the expensive thing to
+ * find out whether the cheap one was allowed.
+ *
+ * Cloudflare counts within one of its locations, so a caller spread over the
+ * world gets this many in each. That is a reason to hold a service-wide
+ * ceiling as well, not a reason to skip the count.
+ */
+async function allowed(limiter: RateLimit, request: Request): Promise<boolean> {
+  // A request with no address reaches here in local development only; there is
+  // one such caller, and it shares one count.
+  const key = request.headers.get("cf-connecting-ip") ?? "no address";
+  const { success } = await limiter.limit({ key });
+  return success;
+}
+
+/** What this name has been handed so far. An unreadable tally is treated as an
+ * absent one: it is a budget, and losing count of it must not lock a person out
+ * of their own archive. */
+async function taken(env: Env, key: string, whenAbsent: number): Promise<number> {
+  const object = await env.BLOBS.get(key);
+  if (!object) return whenAbsent;
+  const counted = Number(await object.text());
+  return Number.isSafeInteger(counted) && counted >= 0 ? counted : whenAbsent;
 }
 
 function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
