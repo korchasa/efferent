@@ -126,6 +126,13 @@ This file is the rulebook.
   never answers — `stats` still walks the archive, and nothing asks a tally what the archive holds.
   The numbers come from the live archive on 2026-09-05: eleven years is 3 914 days and 37 MB, the
   median day 8.7 KB, the heaviest 278 KB.
+- **A key of small order is not a key, and `verifyUpload` refuses it.** Thirty-two zero bytes decode
+  to a point of order four, and sixty-four zero bytes verify against it for about one message in
+  four — no private key involved. The live service accepted a bucket claim signed that way on
+  2026-09-05. It hands a stranger nothing a generated key would not, because a bucket belongs to
+  whoever signs for it first, but a signature check that can be passed without a key is the wrong
+  foundation for the only thing that says who may write. The seven points libsodium refuses are
+  refused here, in the protocol rather than only at the door, so no other path in can skip them.
 - **A range is inclusive at both ends.** A listing skips _past_ a key, so `from` has to be turned
   into the day before it. Passing `from` straight through drops the first day of every range — the
   one most likely to be the point of the question. A test enforces this.
