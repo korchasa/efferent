@@ -115,6 +115,17 @@ This file is the rulebook.
   side. A decade fell from 1.4 seconds to about 0.7, and the answer is the same answer. Never take it
   from a number kept somewhere instead: a count nothing re-derives is a claim about the archive that
   the archive is never asked about.
+- **Every write path has a ceiling, because anybody can reach this service.** The address ships
+  inside the app, there is no account behind it, and a bucket is claimed by whoever signs for it
+  first — so the only thing between a stranger and the bill is what the code refuses. A day may
+  weigh a mebibyte, a request five, one bucket may be handed half a gigabyte and the service a
+  hundred, and a caller gets a count per minute on claims and on uploads. Before those, the free
+  plan's own hundred thousand requests a day allowed 1.6 TB to be added daily and kept forever. The
+  two tallies (`<bucket>/taken` and `taken`) count bytes _handed over_, not bytes held: a day
+  written twice counts twice, because what costs money is taking the request. They are budgets and
+  never answers — `stats` still walks the archive, and nothing asks a tally what the archive holds.
+  The numbers come from the live archive on 2026-09-05: eleven years is 3 914 days and 37 MB, the
+  median day 8.7 KB, the heaviest 278 KB.
 - **A range is inclusive at both ends.** A listing skips _past_ a key, so `from` has to be turned
   into the day before it. Passing `from` straight through drops the first day of every range — the
   one most likely to be the point of the question. A test enforces this.
