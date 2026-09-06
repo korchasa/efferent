@@ -6,18 +6,20 @@
   "compatibility_date": "2026-08-28",
   // Its own hostname in a zone this account owns, rather than a `workers.dev`
   // address: an address that ships inside an App Store binary cannot be moved
-  // afterwards, and only a real zone can carry a firewall rule. The DNS record
-  // is a proxied placeholder declared in the homelab Terraform; nothing ever
-  // reaches it, because this route takes the request first.
+  // afterwards, and only a real zone can carry a firewall rule. The hostname is
+  // shared: these three routes are the service, and every other path on it is
+  // the app's public site, served by Cloudflare Pages from the DNS record the
+  // hostname points at. A route is matched before DNS is consulted, so the
+  // service answers first wherever a pattern fits, and the site never sees a
+  // phone's request.
   // Said out loud rather than left to wrangler, which disables the workers.dev
   // name by itself as soon as a route exists: the old address answering 404 is
   // the intended end of the move, not a side effect to rediscover later.
   "workers_dev": false,
   "routes": [
-    {
-      "pattern": "efferent.korchasa.dev/*",
-      "zone_name": "korchasa.dev"
-    }
+    { "pattern": "efferent.korchasa.dev/b/*", "zone_name": "korchasa.dev" },
+    { "pattern": "efferent.korchasa.dev/mcp/*", "zone_name": "korchasa.dev" },
+    { "pattern": "efferent.korchasa.dev/health", "zone_name": "korchasa.dev" }
   ],
   "r2_buckets": [
     {
