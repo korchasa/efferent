@@ -122,7 +122,13 @@ This file is the rulebook.
   hundred, and a caller gets a count per minute on claims and on uploads. Before those, the free
   plan's own hundred thousand requests a day allowed 1.6 TB to be added daily and kept forever. The
   two tallies (`<bucket>/taken` and `taken`) count bytes _handed over_, not bytes held: a day
-  written twice counts twice, because what costs money is taking the request. They are budgets and
+  written twice counts twice, because what costs money is taking the request. **A tally is added to
+  with the version it was read at**, because R2 has no addition and the phone sends several uploads
+  at once: read-add-write loses one of any two that overlap, and the bucket's tally said 838 906
+  bytes on 2026-09-06 where 944 043 had been accepted. The write carries `if-match` on the object's
+  etag, R2 answers `null` when that is no longer the version, and the tally is read and written
+  again — three times, after which it undercounts rather than refusing an upload, since bookkeeping
+  that could stop the archive would cost more than it is worth. They are budgets and
   never answers — `stats` still walks the archive, and nothing asks a tally what the archive holds.
   The numbers come from the live archive on 2026-09-05: eleven years is 3 914 days and 37 MB, the
   median day 8.7 KB, the heaviest 278 KB.
