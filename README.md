@@ -292,13 +292,16 @@ days back out separately.
 
 The service itself is a Cloudflare Worker over an R2 bucket, deployed with `deno task server:deploy`
 and answering at `efferent.korchasa.dev`. It is open to the internet by design — there are no
-accounts, so anyone who knows the address can claim an unused bucket and write to it. Your bucket is
-safe, because the first writer keeps it. The bill is what needed defending, so every write path has
-a ceiling: a day may weigh a mebibyte and a request five, a day must be a date between 1900 and
-tomorrow, one bucket may be handed 512 MB and the service 100 GB in total, and claims and uploads
-are counted per caller. For scale, an eleven-year archive of one person is 37 MB. Nothing here
-proves that a caller is this app rather than a script — that would take App Attest at the moment a
-bucket is claimed, and it is not written yet.
+accounts, and your bucket is safe because the first writer keeps it. Creating one, though, is what
+costs storage for years, so a bucket is created only for a caller Apple vouches for: the claim
+carries an App Attest attestation over the very bytes the writer key signs, and the service checks
+Apple's certificate chain itself. An upload no longer brings a bucket into existence. That makes a
+new archive cost a real iPhone running this app rather than a loop in a shell.
+
+The bill is defended separately, because a caller Apple vouches for can still be careless: a day may
+weigh a mebibyte and a request five, a day must be a date between 1900 and tomorrow, one bucket may
+be handed 512 MB and the service 100 GB in total, and claims and uploads are counted per caller. For
+scale, an eleven-year archive of one person is 37 MB.
 
 ## Commands
 

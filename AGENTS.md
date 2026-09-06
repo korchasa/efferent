@@ -115,9 +115,21 @@ This file is the rulebook.
   side. A decade fell from 1.4 seconds to about 0.7, and the answer is the same answer. Never take it
   from a number kept somewhere instead: a count nothing re-derives is a claim about the archive that
   the archive is never asked about.
+- **A bucket is created only for a caller Apple vouches for, and only at the claim.** The claim
+  carries an App Attest attestation, the service checks Apple's certificate chain itself
+  (`protocol/attestation.ts`), and what the attestation covers is the canonical bytes of that very
+  claim — the same bytes the writer key signs. That is why there is no challenge endpoint and
+  nothing is kept between two requests. **An upload must never bring a bucket into existence**: it
+  used to, on a signature alone, which would leave this check standing beside an open door. A repeat
+  claim by the writer that already owns the bucket asks for nothing further, because the signature
+  has proved it and an attested key can be attested once. A service with no `APP_ID` refuses to
+  claim rather than guessing — a deploy that forgets the secret must fail closed. The app id is
+  `<team id>.<bundle id>` and never appears in this repository, because the team id names the
+  account and this repository is public: `wrangler secret put APP_ID`. Both of Apple's environments
+  are accepted, since a build installed straight onto a phone attests in `development`.
 - **Every write path has a ceiling, because anybody can reach this service.** The address ships
-  inside the app, there is no account behind it, and a bucket is claimed by whoever signs for it
-  first — so the only thing between a stranger and the bill is what the code refuses. A day may
+  inside the app, there is no account behind it, and a bucket is claimed by whoever Apple vouches
+  for first — so the only thing between a careless caller and the bill is what the code refuses. A day may
   weigh a mebibyte, a request five, one bucket may be handed half a gigabyte and the service a
   hundred, and a caller gets a count per minute on claims and on uploads. Before those, the free
   plan's own hundred thousand requests a day allowed 1.6 TB to be added daily and kept forever. The
