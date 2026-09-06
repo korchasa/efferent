@@ -33,7 +33,8 @@
     "efferent": "deno run -A tools/efferent.ts",
     "interop": "deno run -A scripts/interop.ts",
     "interop:python": "deno run -A scripts/python-interop.ts",
-    "icons": "deno run -A scripts/icons.ts"
+    "icons": "deno run -A scripts/icons.ts",
+    "screenshots": "deno run -A scripts/screenshots.ts"
   },
   "fmt": {
     "include": [

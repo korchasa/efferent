@@ -318,6 +318,8 @@ deno task check
   gitleaks`). Part of `check`, and the only thing GitHub runs on a push.
 - `generate` — regenerate the Xcode project from `Project.swift`.
 - `icons` — re-render the app icons from `documents/icon.svg`.
+- `screenshots <directory>` — the three store screenshots at 1290 × 2796, drawn offscreen by the app itself
+  (`--snapshot <directory>`) from made-up figures and a key invented on the spot. No phone, no Health, no network.
 - `server:types` — regenerate the Worker bindings and runtime types from `server/wrangler.jsonc`.
 - `server:dev` / `server:deploy` — the bucket service and remote MCP, locally or on
   Cloudflare.

@@ -17,7 +17,6 @@ struct HomeView: View {
     @Environment(\.scenePhase) private var phase
 
     @State private var connecting = false
-    @State private var sharing = false
     @State private var reachingBack = false
     @State private var explainingAccess = false
     @State private var confirmingDisconnect = false
@@ -173,84 +172,17 @@ struct HomeView: View {
 
     private var connectSheet: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        Text("Send this whole prompt to your agent — ChatGPT, Claude, Gemini, "
-                            + "whatever you use. The prompt says what to do, where the archive "
-                            + "is and what opens it.")
-                            .font(.system(size: 15))
-                            .foregroundStyle(Palette.body)
-                            .fixedSize(horizontal: false, vertical: true)
-                        handoffPanel
-                        HStack(spacing: 8) {
-                            Image(systemName: "lock")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(Palette.legend)
-                            Legend("send this prompt only to an agent you trust", size: 9)
-                        }
+            ConnectContent { connecting = false }
+                .pageBackground()
+                .navigationTitle("Connect your agent")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { connecting = false }
+                            .foregroundStyle(Palette.accent)
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 8)
-                    .padding(.bottom, 18)
                 }
-                .scrollBounceBehavior(.basedOnSize)
-
-                if let handoff = services.connectionHandoff {
-                    VStack(spacing: 6) {
-                        Button("Send the prompt to your agent") { sharing = true }
-                            .buttonStyle(ProminentButton())
-                            .sheet(isPresented: $sharing) {
-                                ShareSheet(text: handoff.text) { shared in
-                                    sharing = false
-                                    // Only a share that went through counts as
-                                    // handed over. A cancelled one changes
-                                    // nothing, because nothing happened.
-                                    if shared {
-                                        services.markAgentConnected()
-                                        connecting = false
-                                    }
-                                }
-                            }
-                        Button("Copy the prompt") {
-                            UIPasteboard.general.string = handoff.text
-                            services.markAgentConnected()
-                            connecting = false
-                        }
-                        .buttonStyle(QuietButton())
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 20)
-                }
-            }
-            .pageBackground()
-            .navigationTitle("Connect your agent")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { connecting = false }
-                        .foregroundStyle(Palette.accent)
-                }
-            }
         }
-    }
-
-    /// What the phone hands over is one prompt, exactly as the app composes it.
-    /// Split into fields on screen, it invites pasting a part of it — and a
-    /// part of it opens nothing.
-    private var handoffPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Legend("prompt for your agent", size: 9, colour: Color(white: 0.51))
-            Text(services.connectionHandoff?.text ?? "—")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.white)
-                .lineSpacing(4)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Palette.ink, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
     }
 
     // MARK: - The dial and its face
@@ -589,4 +521,96 @@ struct ShareSheet: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_: UIActivityViewController, context _: Context) {}
+}
+
+/// What the connect sheet shows: the prompt, and the two ways to hand it over.
+///
+/// Its own view rather than a part of the sheet so that the store screenshot
+/// can render it without presenting anything.
+struct ConnectContent: View {
+    @EnvironmentObject private var services: Services
+    @State private var sharing = false
+    /// Called once the prompt has gone somewhere, so the sheet can close.
+    let done: () -> Void
+    /// Off for the store screenshot: an image renderer draws a scroll view as
+    /// nothing at all, and the prompt fits the screen without one.
+    var scrolls = true
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if scrolls {
+                ScrollView { explanation }
+                    .scrollBounceBehavior(.basedOnSize)
+            } else {
+                explanation
+                Spacer(minLength: 0)
+            }
+
+            if let handoff = services.connectionHandoff {
+                VStack(spacing: 6) {
+                    Button("Send the prompt to your agent") { sharing = true }
+                        .buttonStyle(ProminentButton())
+                        .sheet(isPresented: $sharing) {
+                            ShareSheet(text: handoff.text) { shared in
+                                sharing = false
+                                // Only a share that went through counts as
+                                // handed over. A cancelled one changes
+                                // nothing, because nothing happened.
+                                if shared {
+                                    services.markAgentConnected()
+                                    done()
+                                }
+                            }
+                        }
+                    Button("Copy the prompt") {
+                        UIPasteboard.general.string = handoff.text
+                        services.markAgentConnected()
+                        done()
+                    }
+                    .buttonStyle(QuietButton())
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 20)
+            }
+        }
+    }
+
+    private var explanation: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Send this whole prompt to your agent — ChatGPT, Claude, Gemini, "
+                + "whatever you use. The prompt says what to do, where the archive "
+                + "is and what opens it.")
+                .font(.system(size: 15))
+                .foregroundStyle(Palette.body)
+                .fixedSize(horizontal: false, vertical: true)
+            handoffPanel
+            HStack(spacing: 8) {
+                Image(systemName: "lock")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Palette.legend)
+                Legend("send this prompt only to an agent you trust", size: 9)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 8)
+        .padding(.bottom, 18)
+    }
+
+    /// What the phone hands over is one prompt, exactly as the app composes it.
+    /// Split into fields on screen, it invites pasting a part of it — and a
+    /// part of it opens nothing.
+    private var handoffPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Legend("prompt for your agent", size: 9, colour: Color(white: 0.51))
+            Text(services.connectionHandoff?.text ?? "—")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.white)
+                .lineSpacing(4)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.ink, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
+    }
 }
