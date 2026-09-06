@@ -27,7 +27,9 @@ import {
 import { MAX_DAYS_PER_REQUEST, packDays, type SealedDay } from "../protocol/batch.ts";
 import { base64url, signUpload, type UploadHeader } from "../protocol/signing.ts";
 
-const BUCKET = "flgs7wibu26oz5lcrnuc5ftuuk";
+/** Made up here, and derived from no key: an id is the only thing between a
+ * stranger and the ciphertext, so a real one is never written down. */
+const BUCKET = "abucketidmadeupforthistest";
 
 class MemoryBucket {
   readonly store = new Map<string, { body: Uint8Array; uploaded: Date; version: number }>();
