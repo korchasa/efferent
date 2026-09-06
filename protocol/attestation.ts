@@ -309,18 +309,20 @@ const DEVELOPMENT_AAGUID = new TextEncoder().encode("appattestdevelop");
 /**
  * Read one attestation and answer with the key it vouches for.
  *
- * `appId` is `<team id>.<bundle id>`. It is not written down in this repository
- * — the team id names the account rather than the app, so the service takes it
- * as a variable at deploy time.
+ * `appIds` are `<team id>.<bundle id>`, and there is more than one because the
+ * copy installed straight onto a phone for checking carries its own bundle id.
+ * Every one of them is bound to the same team, and none is written down in this
+ * repository — the team id names the account rather than the app, so the
+ * service takes them at deploy time.
  *
  * `challenge` is what the attestation must cover: for a claim, the canonical
  * bytes of that claim.
  */
 export async function verifyAttestation(
-  { attestation, keyId, appId, challenge, now = new Date(), rootCertificate }: {
+  { attestation, keyId, appIds, challenge, now = new Date(), rootCertificate }: {
     attestation: Uint8Array;
     keyId: Uint8Array;
-    appId: string;
+    appIds: string[];
     challenge: Uint8Array;
     now?: Date;
     /** Only a test replaces Apple's root; the service always uses Apple's. */
@@ -377,7 +379,10 @@ export async function verifyAttestation(
   }
 
   const rpIdHash = authData.subarray(0, 32);
-  if (!same(rpIdHash, await sha256(new TextEncoder().encode(appId)))) {
+  const expected = await Promise.all(
+    appIds.map((id) => sha256(new TextEncoder().encode(id))),
+  );
+  if (!expected.some((hash) => same(rpIdHash, hash))) {
     fail("the attestation was made by another app");
   }
   const counter = new DataView(authData.buffer, authData.byteOffset + 33, 4).getUint32(0);

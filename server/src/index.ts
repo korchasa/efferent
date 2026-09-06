@@ -57,6 +57,11 @@ declare global {
     /**
      * `<team id>.<bundle id>`, which is what an attestation is bound to.
      *
+     * A comma-separated list, because the copy installed straight onto a phone
+     * for checking carries a bundle id of its own and would otherwise be told
+     * it is another app — which is exactly what happened the first time a real
+     * attestation reached this service. Every id belongs to the same team.
+     *
      * Deliberately not in this repository: the team id names the account
      * rather than the app, and this repository is public. Set it with
      * `wrangler secret put APP_ID`. Without it no bucket can be claimed —
@@ -520,7 +525,7 @@ async function attestedClaim(
     await verifyAttestation({
       attestation,
       keyId: named,
-      appId: env.APP_ID,
+      appIds: env.APP_ID.split(",").map((id) => id.trim()).filter((id) => id !== ""),
       challenge: new TextEncoder().encode(await canonicalRequest(header, body)),
     });
   } catch (error) {

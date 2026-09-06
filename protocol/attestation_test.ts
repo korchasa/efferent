@@ -243,7 +243,7 @@ async function refused(made: Made, extra: Partial<Parameters<typeof verifyAttest
       verifyAttestation({
         attestation: made.attestation,
         keyId: made.keyId,
-        appId: APP_ID,
+        appIds: [APP_ID],
         challenge: CHALLENGE,
         rootCertificate: made.root,
         ...extra,
@@ -257,7 +257,7 @@ Deno.test("an attestation Apple's chain vouches for names the key it attested", 
   const attested = await verifyAttestation({
     attestation: made.attestation,
     keyId: made.keyId,
-    appId: APP_ID,
+    appIds: [APP_ID],
     challenge: CHALLENGE,
     rootCertificate: made.root,
   });
@@ -270,7 +270,7 @@ Deno.test("a build installed straight onto a phone attests in development", asyn
   const attested = await verifyAttestation({
     attestation: made.attestation,
     keyId: made.keyId,
-    appId: APP_ID,
+    appIds: [APP_ID],
     challenge: CHALLENGE,
     rootCertificate: made.root,
   });
@@ -281,6 +281,25 @@ Deno.test("an attestation made for another request is refused", async () => {
   const made = await attestation({ challenge: new TextEncoder().encode("some other claim") });
   const error = await refused(made);
   assert(error.message.includes("not made for this request"), error.message);
+});
+
+/// The copy installed straight onto a phone for checking carries its own bundle
+/// id. On 2026-09-07 the first real attestation this service ever saw came from
+/// exactly that copy and was refused as another app, which is the check working
+/// and the configuration being wrong. Every id here belongs to one team.
+Deno.test("a second bundle id of the same app is accepted", async () => {
+  const other = "ABCDE12345.dev.korchasa.efferent.dev";
+  const made = await attestation({ appId: other });
+
+  const attested = await verifyAttestation({
+    attestation: made.attestation,
+    keyId: made.keyId,
+    appIds: [APP_ID, other],
+    challenge: CHALLENGE,
+    rootCertificate: made.root,
+  });
+
+  assertEquals([...attested.publicKey], [...made.publicKey]);
 });
 
 Deno.test("an attestation made by another app is refused", async () => {
@@ -304,7 +323,7 @@ Deno.test("an attestation not signed by Apple's own root is refused", async () =
       verifyAttestation({
         attestation: made.attestation,
         keyId: made.keyId,
-        appId: APP_ID,
+        appIds: [APP_ID],
         challenge: CHALLENGE,
       }),
     AttestationError,
@@ -351,7 +370,7 @@ Deno.test("something that is not an attestation at all is refused", async () => 
       verifyAttestation({
         attestation: new Uint8Array([1, 2, 3]),
         keyId: new Uint8Array(32),
-        appId: APP_ID,
+        appIds: [APP_ID],
         challenge: CHALLENGE,
       }),
     AttestationError,
