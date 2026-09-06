@@ -508,7 +508,7 @@ final class Services: ObservableObject {
         do {
             let moved = try stored.following(deployment)
             guard moved != stored else { return stored }
-            UserDefaults.standard.set(try JSONEncoder().encode(moved), forKey: destinationKey)
+            try UserDefaults.standard.set(JSONEncoder().encode(moved), forKey: destinationKey)
             log.info("the service has moved to \(moved.endpoint.absoluteString); sending there now")
             return moved
         } catch {
