@@ -337,7 +337,34 @@ public final class HealthCoordinator {
         let reached = try store.backfillReached()
         try store.recordBackfillReached(min(reached ?? first, first))
         log.info("history back to \(first): \(marked) days to send")
+        try await seedAnchors()
         return marked
+    }
+
+    /// Give every metric that has no anchor yet one that stands at now.
+    ///
+    /// The first anchored read of a metric is offered its whole history, and
+    /// on a fresh install that read used to come *after* the first export had
+    /// sent most of it: 1 737 days went back into the queue as "changed" a
+    /// half hour after they had reached the archive, and the phone read every
+    /// one of them out of Health again to learn that nothing had moved. Done
+    /// here, right after the history is marked, the same read marks nothing —
+    /// the days are already waiting — and only the anchor is written down.
+    /// It costs the one full read a first anchor always costs, about a minute
+    /// for a decade, before the first upload rather than on top of it.
+    private func seedAnchors() async throws {
+        let started = Date()
+        var seeded = 0
+        for metric in SampleMetric.all where try store.anchor(for: metric.type.identifier) == nil {
+            try await noteChanges(metric: metric)
+            seeded += 1
+        }
+        if seeded > 0 {
+            log.info(
+                "\(seeded) metrics got their first anchor in "
+                    + "\(Uploader.milliseconds(since: started)) ms"
+            )
+        }
     }
 
     // MARK: - Checking the archive

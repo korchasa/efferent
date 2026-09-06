@@ -136,7 +136,9 @@ final class Services: ObservableObject {
             refreshConnectionHandoff()
             refreshStats()
             log.info("created bucket \(created.bucket)")
-            await sendNow()
+            // No pass yet: the caller marks the history next, and a pass run
+            // before that marking sends what the archive check found missing,
+            // only for the marking to queue those same days a second time.
         } catch AttestationFailure.notAvailableOnThisDevice {
             // Says what is wrong with the machine rather than with the archive.
             // Without this the simulator answers a person's first tap with a
