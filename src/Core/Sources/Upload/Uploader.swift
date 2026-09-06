@@ -544,16 +544,25 @@ public final class Uploader: NSObject {
         inFlightDays.formUnion(batch.map(\.day))
     }
 
-    /// Take a finished request out of the air.
+    /// Take a finished request out of the air. Its days stay held: they are
+    /// let go by ``settle(_:)`` once the answer has been written down, because a
+    /// day that is neither in the air nor recorded yet is exactly the day a
+    /// concurrent round would take and send a second time.
     private func release(task: Int) -> (batch: [Sending]?, file: URL?) {
         flightLock.lock()
         defer { flightLock.unlock() }
         let batch = inFlightBatches.removeValue(forKey: task)
         let file = stagedFiles.removeValue(forKey: task)
+        return (batch, file)
+    }
+
+    /// Let the days of an answered request be picked up again.
+    private func settle(_ batch: [Sending]?) {
+        flightLock.lock()
+        defer { flightLock.unlock() }
         for day in batch ?? [] {
             inFlightDays.remove(day.day)
         }
-        return (batch, file)
     }
 
     private var batchesInFlight: Int {
@@ -705,6 +714,10 @@ extension Uploader: URLSessionDataDelegate {
             try? FileManager.default.removeItem(at: staged)
         }
         let carried = flight.batch
+        // Recording 31 days takes about a second, and a round running alongside
+        // used to take the still-marked, no-longer-in-flight tail of the batch
+        // and send it again. Held until every exit from here, answered or not.
+        defer { settle(carried) }
 
         if let error {
             // Nothing to undo: the days are still marked, so they go again next
