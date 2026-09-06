@@ -110,8 +110,11 @@ final class WireTests: XCTestCase {
         )
         let date = Date(timeIntervalSince1970: 1_700_000_000)
 
+        let attestation = Attestation(
+            object: Data([9, 8, 7]), keyId: Data(repeating: 4, count: 32)
+        )
         let request = try ArchiveCreator.request(
-            destination: destination, identity: identity, now: date
+            destination: destination, identity: identity, attestation: attestation, now: date
         )
 
         XCTAssertEqual(request.httpMethod, "PUT")
@@ -128,6 +131,30 @@ final class WireTests: XCTestCase {
                 bucket: destination.bucket, days: [], timestamp: 1_700_000_000, body: Data()
             )
         ))
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "x-efferent-attestation"),
+            Base64URL.encode(attestation.object)
+        )
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "x-efferent-attestation-key"),
+            Base64URL.encode(attestation.keyId)
+        )
+    }
+
+    /// One set of bytes carries both proofs, and the service rebuilds them from
+    /// the request alone. If the challenge ever stopped being the canonical
+    /// request, an attestation would be made for something nobody checks.
+    func testWhatAppleAttestsIsWhatTheWriterKeySigns() {
+        let bucket = Self.expectedBucket
+
+        let challenge = ArchiveCreator.challenge(bucket: bucket, timestamp: 1_700_000_000)
+
+        XCTAssertEqual(
+            challenge,
+            CanonicalRequest.bytes(
+                bucket: bucket, days: [], timestamp: 1_700_000_000, body: Data()
+            )
+        )
     }
 
     /// The service checks this string byte for byte. A stray separator or a
