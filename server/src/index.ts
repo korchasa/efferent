@@ -42,19 +42,38 @@ import {
 } from "../../protocol/ids.ts";
 import { MAX_DAYS_PER_REQUEST, type SealedDay, unpackDays } from "../../protocol/batch.ts";
 import {
+  canonicalRequest,
   fromBase64url,
   hasSmallOrder,
   TIMESTAMP_TOLERANCE_SECONDS,
   type UploadHeader,
   verifyUpload,
 } from "../../protocol/signing.ts";
+import { AttestationError, verifyAttestation } from "../../protocol/attestation.ts";
 import { SETUP_GUIDE } from "./setup-guide.ts";
+
+declare global {
+  interface Env {
+    /**
+     * `<team id>.<bundle id>`, which is what an attestation is bound to.
+     *
+     * Deliberately not in this repository: the team id names the account
+     * rather than the app, and this repository is public. Set it with
+     * `wrangler secret put APP_ID`. Without it no bucket can be claimed —
+     * a service that cannot check is not allowed to guess.
+     */
+    APP_ID?: string;
+  }
+}
 
 /** What one request may carry. The phone cuts a batch at four mebibytes of
  * sealed days and adds a few hundred bytes of framing, so this is its own
  * budget with room over it. It used to be sixteen, which was a number about
  * what a Worker can hold rather than about what a person's days weigh. */
 export const MAX_BODY_BYTES = 5 * 1024 * 1024;
+/** What an attestation may weigh. Apple's are about 5 KB — two certificates and
+ * a receipt — so this is room over it rather than a measurement. */
+export const MAX_ATTESTATION_BYTES = 32 * 1024;
 /** What one day may weigh. Measured against the live archive on 2026-09-05:
  * eleven years of days, median 8.7 KB, ninety-ninth percentile 43.8 KB, the
  * heaviest of all 278 KB. A mebibyte is not a limit anybody meets; it is the
@@ -283,6 +302,8 @@ async function createBucket(request: Request, env: Env, bucket: string): Promise
   const authorization = await authorizeWriter(request, env, bucket, [], body);
   if (authorization instanceof Response) return authorization;
   if (!authorization.registered) {
+    const refusal = await attestedClaim(request, env, authorization.header, body);
+    if (refusal) return refusal;
     await env.BLOBS.put(signingKeyObject(bucket), authorization.claimed);
   }
   return json({ bucket, created: !authorization.registered }, authorization.registered ? 200 : 201);
@@ -350,10 +371,12 @@ async function putDays(request: Request, env: Env, bucket: string): Promise<Resp
   );
   if (authorization instanceof Response) return authorization;
 
-  // Registered only after the signature checked out, so a stranger cannot claim
-  // an unused bucket by presenting a key they do not hold.
+  // An upload no longer brings a bucket into existence. It used to, and a
+  // signature was enough — which would have left the whole attestation check
+  // standing beside an open door. Claiming is the one way in, and it is the
+  // one place Apple is asked to vouch for the caller.
   if (!authorization.registered) {
-    await env.BLOBS.put(signingKeyObject(bucket), authorization.claimed);
+    return problem(403, "this bucket has not been claimed");
   }
 
   // Both ceilings are read before anything is written, because a refusal after
@@ -400,7 +423,7 @@ async function authorizeWriter(
   bucket: string,
   days: string[],
   body: Uint8Array,
-): Promise<{ claimed: Uint8Array; registered: boolean } | Response> {
+): Promise<{ claimed: Uint8Array; registered: boolean; header: UploadHeader } | Response> {
   const signature = request.headers.get("x-efferent-signature");
   const writerKey = request.headers.get("x-efferent-writer");
   if (!signature || !writerKey) return problem(400, "missing writer key or signature");
@@ -453,7 +476,58 @@ async function authorizeWriter(
   if (!await verifyUpload(claimed, decodedSignature, header, body)) {
     return problem(403, "signature does not match the request");
   }
-  return { claimed, registered: registered !== null };
+  return { claimed, registered: registered !== null, header };
+}
+
+/**
+ * Apple's word that a bucket is being claimed by this app on a real iPhone.
+ *
+ * Only a claim is checked, and only a claim that creates a bucket: a phone that
+ * claims one it already owns has proved as much with the signature above, and
+ * an attested key can be attested once. Uploads are not checked at all — they
+ * are already bound to the bucket by the key the claim registered.
+ *
+ * What the attestation covers is the canonical bytes of this very claim, which
+ * carry the bucket and a timestamp this service refuses when it is far from its
+ * own clock. That is why there is no challenge endpoint and nothing is kept
+ * between two requests.
+ */
+async function attestedClaim(
+  request: Request,
+  env: Env,
+  header: UploadHeader,
+  body: Uint8Array,
+): Promise<Response | null> {
+  if (!env.APP_ID) return problem(500, "this service cannot check attestations");
+
+  const object = request.headers.get("x-efferent-attestation");
+  const keyId = request.headers.get("x-efferent-attestation-key");
+  if (!object || !keyId) return problem(400, "claiming a bucket needs an App Attest attestation");
+
+  let attestation: Uint8Array;
+  let named: Uint8Array;
+  try {
+    attestation = fromBase64url(object);
+    named = fromBase64url(keyId);
+  } catch {
+    return problem(400, "the attestation and its key id must be base64url");
+  }
+  if (attestation.length > MAX_ATTESTATION_BYTES) {
+    return problem(400, "that attestation is too long");
+  }
+
+  try {
+    await verifyAttestation({
+      attestation,
+      keyId: named,
+      appId: env.APP_ID,
+      challenge: new TextEncoder().encode(await canonicalRequest(header, body)),
+    });
+  } catch (error) {
+    if (error instanceof AttestationError) return problem(403, error.message);
+    throw error;
+  }
+  return null;
 }
 
 async function getDay(env: Env, bucket: string, day: string): Promise<Response> {

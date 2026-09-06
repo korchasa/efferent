@@ -25,7 +25,7 @@ import {
   takenObject,
 } from "../protocol/ids.ts";
 import { MAX_DAYS_PER_REQUEST, packDays, type SealedDay } from "../protocol/batch.ts";
-import { base64url, signUpload, type UploadHeader } from "../protocol/signing.ts";
+import { base64url, fromBase64url, signUpload, type UploadHeader } from "../protocol/signing.ts";
 
 /** Made up here, and derived from no key: an id is the only thing between a
  * stranger and the ciphertext, so a real one is never written down. */
@@ -190,7 +190,12 @@ class MemoryLimiter {
 }
 
 type Writer = { privateKey: CryptoKey; publicKey: string };
-type Environment = { BLOBS: MemoryBucket; CLAIMS: MemoryLimiter; WRITES: MemoryLimiter };
+type Environment = {
+  BLOBS: MemoryBucket;
+  CLAIMS: MemoryLimiter;
+  WRITES: MemoryLimiter;
+  APP_ID: string;
+};
 
 /** The worker only ever touches the parts of R2 its interface names. */
 function bindings(env: Environment): Parameters<typeof worker.fetch>[1] {
@@ -198,7 +203,12 @@ function bindings(env: Environment): Parameters<typeof worker.fetch>[1] {
 }
 
 function environment(): Environment {
-  return { BLOBS: new MemoryBucket(), CLAIMS: new MemoryLimiter(), WRITES: new MemoryLimiter() };
+  return {
+    BLOBS: new MemoryBucket(),
+    CLAIMS: new MemoryLimiter(),
+    WRITES: new MemoryLimiter(),
+    APP_ID: "ABCDE12345.dev.korchasa.efferent",
+  };
 }
 
 function executionContext(): ExecutionContext {
@@ -248,7 +258,11 @@ async function send(
   );
 }
 
-async function claim(env: Environment, writer: Writer): Promise<Response> {
+async function claim(
+  env: Environment,
+  writer: Writer,
+  attestation?: { object: string; keyId: string },
+): Promise<Response> {
   const body = new Uint8Array();
   const header: UploadHeader = {
     bucket: BUCKET,
@@ -262,11 +276,33 @@ async function claim(env: Environment, writer: Writer): Promise<Response> {
         "x-efferent-timestamp": String(header.timestamp),
         "x-efferent-writer": writer.publicKey,
         "x-efferent-signature": base64url(await signUpload(writer.privateKey, header, body)),
+        ...(attestation
+          ? {
+            "x-efferent-attestation": attestation.object,
+            "x-efferent-attestation-key": attestation.keyId,
+          }
+          : {}),
       },
       body,
     }),
     bindings(env),
   );
+}
+
+/**
+ * A bucket this writer has already claimed.
+ *
+ * The claim itself cannot be made here: it needs an attestation signed under
+ * Apple's own root, which nobody outside Apple can produce. What the claim
+ * leaves behind is one object, so a test about uploading writes that object
+ * and starts where a real phone would be.
+ */
+function owned(env: Environment, writer: Writer): void {
+  env.BLOBS.store.set(signingKeyObject(BUCKET), {
+    body: fromBase64url(writer.publicKey),
+    uploaded: new Date(),
+    version: 1,
+  });
 }
 
 function put(
@@ -304,6 +340,7 @@ function stored(env: Environment, day: string): number[] {
 Deno.test("writing a day again replaces it", async () => {
   const env = environment();
   const writer = await writerKey();
+  owned(env, writer);
 
   assertEquals((await put(env, writer, "2026-08-07", sealedBody(2, 3))).status, 200);
   const second = await put(env, writer, "2026-08-07", sealedBody(9, 9, 9, 9));
@@ -319,6 +356,7 @@ Deno.test("writing a day again replaces it", async () => {
 Deno.test("every day in a batch becomes its own object", async () => {
   const env = environment();
   const writer = await writerKey();
+  owned(env, writer);
 
   const response = await send(env, writer, [
     { day: "2026-08-05", blob: sealedBody(5) },
@@ -403,6 +441,7 @@ Deno.test("a day nobody has reached yet is refused", async () => {
 Deno.test("the day a phone further east is already on is taken", async () => {
   const env = environment();
   const writer = await writerKey();
+  owned(env, writer);
   const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
   const response = await put(env, writer, tomorrow);
@@ -413,6 +452,7 @@ Deno.test("the day a phone further east is already on is taken", async () => {
 Deno.test("a bucket that has been handed its fill takes no more", async () => {
   const env = environment();
   const writer = await writerKey();
+  owned(env, writer);
   await put(env, writer, "2026-01-01");
   await env.BLOBS.put(takenObject(BUCKET), String(MAX_BUCKET_BYTES));
 
@@ -427,6 +467,7 @@ Deno.test("a bucket that has been handed its fill takes no more", async () => {
 Deno.test("the service stops taking days once it has taken its fill", async () => {
   const env = environment();
   const writer = await writerKey();
+  owned(env, writer);
   await env.BLOBS.put(SERVICE_TAKEN_OBJECT, String(MAX_SERVICE_BYTES));
 
   const response = await put(env, writer, "2026-01-01");
@@ -441,6 +482,7 @@ Deno.test("the service stops taking days once it has taken its fill", async () =
 Deno.test("the tally counts what was handed over, so one day sent twice counts twice", async () => {
   const env = environment();
   const writer = await writerKey();
+  owned(env, writer);
 
   await put(env, writer, "2026-01-01");
   const once = tally(env, takenObject(BUCKET));
@@ -454,6 +496,7 @@ Deno.test("the tally counts what was handed over, so one day sent twice counts t
 Deno.test("an upload that lands while another is counting still counts", async () => {
   const env = environment();
   const writer = await writerKey();
+  owned(env, writer);
 
   // What the phone does every pass: several uploads in the air at once. Both
   // read the same tally, so a plain write-back keeps whichever landed last and
@@ -534,6 +577,7 @@ Deno.test("more than a month of days in one request is refused", async () => {
 Deno.test("a day comes back exactly as it went in", async () => {
   const env = environment();
   const writer = await writerKey();
+  owned(env, writer);
   await put(env, writer, "2026-08-07", sealedBody(4, 5, 6));
 
   const response = await worker.fetch(
@@ -551,6 +595,7 @@ Deno.test("a day comes back exactly as it went in", async () => {
 Deno.test("a range includes both of its ends", async () => {
   const env = environment();
   const writer = await writerKey();
+  owned(env, writer);
   await send(
     env,
     writer,
@@ -567,6 +612,7 @@ Deno.test("a range includes both of its ends", async () => {
 Deno.test("the listing walks past its own page size", async () => {
   const env = environment();
   const writer = await writerKey();
+  owned(env, writer);
 
   // 120 days across a year boundary: more than one page at the size asked for,
   // which is exactly where a listing that filters after fetching goes blind.
@@ -606,6 +652,7 @@ Deno.test("the listing walks past its own page size", async () => {
 Deno.test("a rewritten day reports a later upload time", async () => {
   const env = environment();
   const writer = await writerKey();
+  owned(env, writer);
   await put(env, writer, "2026-08-07", sealedBody(1));
   const first = (await days(env, "")).days[0].uploaded;
 
@@ -619,6 +666,7 @@ Deno.test("a rewritten day reports a later upload time", async () => {
 Deno.test("stats says what is in the archive without handing any of it over", async () => {
   const env = environment();
   const writer = await writerKey();
+  owned(env, writer);
   await send(env, writer, [
     { day: "2026-08-06", blob: sealedBody(1, 2) },
     { day: "2026-08-07", blob: sealedBody(3) },
@@ -641,6 +689,7 @@ Deno.test("stats says what is in the archive without handing any of it over", as
 Deno.test("stats counts a decade whose years are walked side by side", async () => {
   const env = environment();
   const writer = await writerKey();
+  owned(env, writer);
   // Three years with a gap between them: the years are found from the keys, so
   // an archive that stopped for a while must not be counted as continuous, and
   // the ends of it come from the earliest and latest year rather than from
@@ -707,6 +756,7 @@ Deno.test("stats finds the years a first page never reached", async () => {
 Deno.test("stats counts days, and a key that is not one is not a day", async () => {
   const env = environment();
   const writer = await writerKey();
+  owned(env, writer);
   await send(env, writer, [{ day: "2026-08-07", blob: sealedBody(1) }]);
   // Two shapes of rubbish under the same prefix: one that holds no dash at all,
   // so no year can be read from it, and one that reads as a year and is still
@@ -743,24 +793,94 @@ Deno.test("an unknown bucket is empty rather than an error", async () => {
   });
 });
 
-Deno.test("the phone claims an empty archive before any health day exists", async () => {
+/// A bucket is the one thing this service creates, and creating it is what
+/// costs money for years afterwards. So it is the one place Apple is asked
+/// whether the caller is this app on a real iPhone. What a valid attestation
+/// looks like is settled in `protocol/attestation_test.ts`, which builds its
+/// own certificate chain; nobody outside Apple can sign under the real root,
+/// so the tests here are about every way of arriving without one.
+Deno.test("claiming a bucket without Apple's word is refused", async () => {
+  const env = environment();
+
+  const response = await claim(env, await writerKey());
+
+  assertEquals(response.status, 400);
+  assertEquals(
+    (await response.json() as { error: string }).error,
+    "claiming a bucket needs an App Attest attestation",
+  );
+  assertEquals(env.BLOBS.store.has(signingKeyObject(BUCKET)), false);
+});
+
+Deno.test("an attestation that is not base64url is refused", async () => {
+  const env = environment();
+
+  const response = await claim(env, await writerKey(), { object: "!!!!", keyId: "!!!!" });
+
+  assertEquals(response.status, 400);
+  assertEquals(env.BLOBS.store.has(signingKeyObject(BUCKET)), false);
+});
+
+Deno.test("an attestation nobody vouches for is refused", async () => {
+  const env = environment();
+
+  const response = await claim(env, await writerKey(), {
+    object: base64url(new Uint8Array([1, 2, 3])),
+    keyId: base64url(new Uint8Array(32)),
+  });
+
+  assertEquals(response.status, 403);
+  assertEquals(env.BLOBS.store.has(signingKeyObject(BUCKET)), false);
+});
+
+/// Fail closed. A service that cannot check has no business guessing, and the
+/// alternative — letting the claim through when the app id is missing — is a
+/// hole that opens itself the first time a deploy forgets a secret.
+Deno.test("a service with no app id refuses to claim rather than guess", async () => {
+  const env = { ...environment(), APP_ID: "" };
+
+  const response = await claim(env, await writerKey(), {
+    object: base64url(new Uint8Array([1, 2, 3])),
+    keyId: base64url(new Uint8Array(32)),
+  });
+
+  assertEquals(response.status, 500);
+  assertEquals(env.BLOBS.store.has(signingKeyObject(BUCKET)), false);
+});
+
+/// The phone that already owns the bucket has proved it with the signature, and
+/// an attested key can be attested once — so a repeat claim asks for nothing
+/// further. This is also what makes a pass that claims first cost nothing.
+Deno.test("a phone that already owns its bucket claims it again for free", async () => {
   const env = environment();
   const owner = await writerKey();
+  owned(env, owner);
 
-  const first = await claim(env, owner);
   const repeated = await claim(env, owner);
 
-  assertEquals(first.status, 201);
-  assertEquals(await first.json(), { bucket: BUCKET, created: true });
   assertEquals(repeated.status, 200);
   assertEquals(await repeated.json(), { bucket: BUCKET, created: false });
-  assert(env.BLOBS.store.has(signingKeyObject(BUCKET)));
+  assertEquals(env.BLOBS.store.has(dayKey(BUCKET, "2026-08-07")), false);
+});
+
+/// An upload used to bring a bucket into existence, and a signature was all it
+/// took. That would have left the check above standing beside an open door.
+Deno.test("an upload into a bucket nobody claimed is refused", async () => {
+  const env = environment();
+
+  const response = await put(env, await writerKey(), "2026-08-07", sealedBody(6));
+
+  assertEquals(response.status, 403);
+  assertEquals(
+    (await response.json() as { error: string }).error,
+    "this bucket has not been claimed",
+  );
   assertEquals(env.BLOBS.store.has(dayKey(BUCKET, "2026-08-07")), false);
 });
 
 Deno.test("a writer that did not create the archive cannot upload into it", async () => {
   const env = environment();
-  await claim(env, await writerKey());
+  owned(env, await writerKey());
 
   const stranger = await put(env, await writerKey(), "2026-08-07", sealedBody(6));
 
@@ -870,6 +990,7 @@ Deno.test("versioned HTTP prompts no longer exist", async () => {
 Deno.test("a second writer cannot touch a claimed bucket", async () => {
   const env = environment();
   const owner = await writerKey();
+  owned(env, owner);
   await put(env, owner, "2026-08-07", sealedBody(1));
 
   const stranger = await put(env, await writerKey(), "2026-08-07", sealedBody(6, 6, 6));
