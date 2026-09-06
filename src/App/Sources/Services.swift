@@ -137,6 +137,11 @@ final class Services: ObservableObject {
             refreshStats()
             log.info("created bucket \(created.bucket)")
             await sendNow()
+        } catch AttestationFailure.notAvailableOnThisDevice {
+            // Says what is wrong with the machine rather than with the archive.
+            // Without this the simulator answers a person's first tap with a
+            // sentence about a failure that has nothing to do with them.
+            lastError = "This device cannot claim an archive. App Attest needs a real iPhone."
         } catch {
             lastError = "Could not create the archive. (\(error))"
         }

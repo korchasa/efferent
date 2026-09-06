@@ -123,18 +123,27 @@ public enum ConnectionError: Error, Equatable {
 
 /// Claims the logical archive before there is a day to upload.
 public enum ArchiveCreator {
+    /// The bytes a claim is made of, which are also what Apple attests.
+    ///
+    /// One set of bytes serves both proofs: the writer key signs them, and the
+    /// attestation covers them. That is why claiming needs no separate
+    /// challenge from the service — these bytes name the bucket and carry a
+    /// timestamp the service refuses when it is far from its own clock.
+    public static func challenge(bucket: String, timestamp: Int64) -> Data {
+        CanonicalRequest.bytes(bucket: bucket, days: [], timestamp: timestamp, body: Data())
+    }
+
     public static func request(
         destination: Destination,
         identity: DeviceIdentity,
+        attestation: Attestation?,
         now: Date = Date()
     ) throws -> URLRequest {
         let body = Data()
         let key = try identity.signingKey()
         let timestamp = Int64(now.timeIntervalSince1970)
         let signature = try key.signature(
-            for: CanonicalRequest.bytes(
-                bucket: destination.bucket, days: [], timestamp: timestamp, body: body
-            )
+            for: challenge(bucket: destination.bucket, timestamp: timestamp)
         )
 
         var request = URLRequest(url: destination.bucketURL)
@@ -146,16 +155,39 @@ public enum ArchiveCreator {
             Base64URL.encode(key.publicKey.rawRepresentation), forHTTPHeaderField: "x-efferent-writer"
         )
         request.setValue(Base64URL.encode(Data(signature)), forHTTPHeaderField: "x-efferent-signature")
+        if let attestation {
+            request.setValue(
+                Base64URL.encode(attestation.object), forHTTPHeaderField: "x-efferent-attestation"
+            )
+            request.setValue(
+                Base64URL.encode(attestation.keyId), forHTTPHeaderField: "x-efferent-attestation-key"
+            )
+        }
         return request
     }
 
+    /// Claim the bucket, attesting first.
+    ///
+    /// The timestamp is fixed before Apple is asked, because the attestation
+    /// has to cover the very bytes that are sent — and asking Apple takes a
+    /// round trip of its own. The service allows five minutes of drift, which
+    /// is room enough over it.
     public static func create(
         destination: Destination,
         identity: DeviceIdentity,
-        session: URLSession = .shared
+        attester: Attesting = DeviceAttester(),
+        session: URLSession = .shared,
+        now: Date = Date()
     ) async throws {
+        let timestamp = Int64(now.timeIntervalSince1970)
+        let attestation = try await attester.attest(
+            challenge: challenge(bucket: destination.bucket, timestamp: timestamp)
+        )
         let (body, response) = try await session.data(for: request(
-            destination: destination, identity: identity
+            destination: destination,
+            identity: identity,
+            attestation: attestation,
+            now: Date(timeIntervalSince1970: TimeInterval(timestamp))
         ))
         guard let http = response as? HTTPURLResponse else {
             throw ConnectionError.server(status: 0, message: "the server did not return HTTP")
