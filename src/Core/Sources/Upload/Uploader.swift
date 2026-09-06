@@ -511,6 +511,22 @@ public final class Uploader: NSObject {
         }
     }
 
+    /// What an answer said, short enough to leave a log worth reading.
+    ///
+    /// A body is not always the service talking. An address it no longer
+    /// answers at is answered by a page instead, and 20 KB of markup per failed
+    /// request is what the log would then be made of — on 2026-09-06 a phone
+    /// wrote 338 KB of them into a file capped at half a megabyte, burying
+    /// every step that said why. The service's own refusals are one sentence,
+    /// so nothing is lost by keeping only the start of one.
+    static func said(_ body: Data) -> String {
+        guard let text = String(data: body, encoding: .utf8), !text.isEmpty else {
+            return "no body"
+        }
+        let flat = text.replacingOccurrences(of: "\n", with: " ")
+        return flat.count <= 200 ? flat : String(flat.prefix(200)) + "… (\(flat.count) characters)"
+    }
+
     /// How long something took, in whole milliseconds. Durations are the half
     /// of a sending problem that no count can show: a pass that took a minute
     /// to read Health and a pass that never got there look the same afterwards.
@@ -700,8 +716,10 @@ extension Uploader: URLSessionDataDelegate {
             return carryOn(after: .transport)
         }
         guard (200 ..< 300).contains(response.statusCode) else {
-            let detail = String(data: body, encoding: .utf8) ?? ""
-            log.error("request \(task.taskIdentifier) answered \(response.statusCode): \(detail)")
+            log.error(
+                "request \(task.taskIdentifier) answered \(response.statusCode): "
+                    + Self.said(body)
+            )
 
             // A refusal the phone can act on: its clock is wrong. Learning the
             // difference is the whole repair — the days are still marked, and
@@ -727,9 +745,7 @@ extension Uploader: URLSessionDataDelegate {
         // service never stored would lose it in a way nothing later could
         // notice — the day would simply never be sent again.
         guard let accepted = try? JSONDecoder().decode(Accepted.self, from: body) else {
-            log.error(
-                "could not read what the service stored: \(String(data: body, encoding: .utf8) ?? "")"
-            )
+            log.error("could not read what the service stored: " + Self.said(body))
             return carryOn(after: .refused)
         }
         let stored = Set(accepted.stored)

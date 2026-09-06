@@ -45,6 +45,61 @@ final class WireTests: XCTestCase {
         XCTAssertFalse(handoff.mcpURL.absoluteString.contains(handoff.readingKey))
     }
 
+    func testThePhoneFollowsTheAddressItsBuildCarries() throws {
+        let stored = try Destination(
+            endpoint: XCTUnwrap(URL(string: "https://efferent.example.workers.dev")),
+            readingPublicKey: Self.readingPublicKey
+        )
+        let deployment = try Deployment(
+            serviceURL: XCTUnwrap(URL(string: "https://efferent.example.com")),
+            mcpBaseURL: XCTUnwrap(URL(string: "https://efferent.example.com/mcp/b"))
+        )
+
+        let moved = try stored.following(deployment)
+
+        XCTAssertEqual(moved.endpoint, deployment.serviceURL)
+        // The archive is named by the key, so moving the service moves the
+        // archive with it. A bucket that changed here would leave a decade of
+        // days behind under a name nothing would ever ask for again.
+        XCTAssertEqual(moved.bucket, stored.bucket)
+        XCTAssertEqual(moved.readingPublicKey, stored.readingPublicKey)
+    }
+
+    func testAPhoneAlreadyOnTheBuildsAddressIsLeftAlone() throws {
+        let deployment = try Deployment(
+            serviceURL: XCTUnwrap(URL(string: "https://efferent.example.com")),
+            mcpBaseURL: XCTUnwrap(URL(string: "https://efferent.example.com/mcp/b"))
+        )
+        let stored = try Destination(
+            endpoint: deployment.serviceURL,
+            readingPublicKey: Self.readingPublicKey
+        )
+
+        XCTAssertEqual(try stored.following(deployment), stored)
+    }
+
+    func testARefusalRepeatsOnlyWhatTheServiceItselfSaid() {
+        let said = ConnectionError.refusal(
+            status: 403,
+            body: Data(#"{"error":"signature does not match the request"}"#.utf8)
+        )
+        XCTAssertEqual(
+            said, .server(status: 403, message: "signature does not match the request")
+        )
+    }
+
+    func testAPageInPlaceOfAnAnswerNeverBecomesTheMessage() {
+        // The screen draws the message as one unbounded run of text, so a page
+        // from whatever stands in front of the service becomes the whole app.
+        let page = "<!DOCTYPE html><html><svg>" + String(repeating: "x", count: 20000) + "</svg>"
+        guard case let .server(status, message) = ConnectionError.refusal(
+            status: 404, body: Data(page.utf8)
+        ) else { return XCTFail("a refusal is a server error") }
+        XCTAssertEqual(status, 404)
+        XCTAssertFalse(message.contains("<"))
+        XCTAssertLessThan(message.count, 100)
+    }
+
     func testArchiveCreationIsAnEmptySignedRequest() throws {
         let account = "writer-test-\(UUID().uuidString)"
         let identity = DeviceIdentity(service: "dev.korchasa.efferent.tests", account: account)
