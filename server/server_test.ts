@@ -30,7 +30,11 @@ import { base64url, signUpload, type UploadHeader } from "../protocol/signing.ts
 const BUCKET = "flgs7wibu26oz5lcrnuc5ftuuk";
 
 class MemoryBucket {
-  readonly store = new Map<string, { body: Uint8Array; uploaded: Date }>();
+  readonly store = new Map<string, { body: Uint8Array; uploaded: Date; version: number }>();
+  /** Somebody else's write, slipped in just before the next conditional one.
+   * It is how a race is reproduced without threads: the competing write lands
+   * between the read and the write that is about to be refused for it. */
+  competitor?: (key: string) => void;
   /** Distinct write times without a clock: a day written later must be
    * distinguishable from one written earlier, and a test that ran fast enough
    * would otherwise stamp both the same. */
@@ -42,6 +46,8 @@ class MemoryBucket {
       key,
       size: stored.body.length,
       uploaded: stored.uploaded,
+      etag: `${stored.version}`,
+      httpEtag: `"${stored.version}"`,
       body: new Blob([stored.body.slice().buffer]).stream(),
       // deno-lint-ignore require-await
       arrayBuffer: async () => stored.body.buffer.slice(0) as ArrayBuffer,
@@ -61,7 +67,26 @@ class MemoryBucket {
   }
 
   // deno-lint-ignore require-await
-  async put(key: string, value: ArrayBuffer | Uint8Array | string) {
+  async put(
+    key: string,
+    value: ArrayBuffer | Uint8Array | string,
+    options?: { onlyIf?: Headers },
+  ) {
+    const competitor = this.competitor;
+    if (competitor && options?.onlyIf) {
+      this.competitor = undefined;
+      competitor(key);
+    }
+    // Real R2 answers a failed condition with null and stores nothing, which is
+    // the whole point of the retry the caller is written around.
+    const only = options?.onlyIf;
+    if (only) {
+      const held = this.store.get(key);
+      const ifMatch = only.get("if-match");
+      const ifNoneMatch = only.get("if-none-match");
+      if (ifNoneMatch === "*" && held) return null;
+      if (ifMatch && (!held || `"${held.version}"` !== ifMatch)) return null;
+    }
     this.store.set(key, {
       // Copied, and copied *within the view's bounds*: a day out of a batch is a
       // window onto the request body, and keeping the window would store the
@@ -73,7 +98,9 @@ class MemoryBucket {
         ? value.slice()
         : new Uint8Array(value),
       uploaded: new Date(1_760_000_000_000 + this.writes++ * 1000),
+      version: (this.store.get(key)?.version ?? 0) + 1,
     });
+    return this.object(key);
   }
 
   /**
@@ -420,6 +447,25 @@ Deno.test("the tally counts what was handed over, so one day sent twice counts t
 
   assertEquals(twice, once * 2);
   assertEquals(tally(env, SERVICE_TAKEN_OBJECT), SERVICE_BYTES_ALREADY_TAKEN + twice);
+});
+
+Deno.test("an upload that lands while another is counting still counts", async () => {
+  const env = environment();
+  const writer = await writerKey();
+
+  // What the phone does every pass: several uploads in the air at once. Both
+  // read the same tally, so a plain write-back keeps whichever landed last and
+  // the other request's bytes are never counted. Here the competitor writes
+  // between this request's read and its write.
+  await put(env, writer, "2026-01-01");
+  const one = tally(env, takenObject(BUCKET));
+  env.BLOBS.competitor = (key) => {
+    if (key === takenObject(BUCKET)) env.BLOBS.put(key, `${one + 7}`);
+  };
+
+  await put(env, writer, "2026-01-02");
+
+  assertEquals(tally(env, takenObject(BUCKET)), one + 7 + one);
 });
 
 Deno.test("a caller uploading too fast is refused before the archive is touched", async () => {

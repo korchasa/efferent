@@ -78,6 +78,15 @@ export const SERVICE_BYTES_ALREADY_TAKEN = 153 * 1000 * 1000;
  * person, and an archive reaching back to the year 1 is somebody filling the
  * key space rather than exporting a life. */
 export const EARLIEST_DAY = "1900-01-01";
+
+/// How many times a tally will re-read and write again when another request
+/// changed it first. Three covers the handful of uploads a phone runs at once
+/// and costs at most five extra subrequests per tally, which the free plan's
+/// fifty per request leaves room for beside a batch of days.
+export const TALLY_ATTEMPTS = 3;
+
+/// A tally, and the version of the object it was read from.
+type Tally = { value: number; version?: string };
 /** Days per listing page — R2's own ceiling for one listing, so asking for more
  * would page underneath anyway. Nearly three years in one answer: an ordinary
  * question never pages, and a device checking a decade against the archive does
@@ -350,14 +359,14 @@ async function putDays(request: Request, env: Env, bucket: string): Promise<Resp
   // Both ceilings are read before anything is written, because a refusal after
   // the writes would have cost exactly what it was meant to prevent.
   const bucketTaken = await taken(env, takenObject(bucket), 0);
-  if (bucketTaken + body.length > MAX_BUCKET_BYTES) {
+  if (bucketTaken.value + body.length > MAX_BUCKET_BYTES) {
     return problem(
       507,
-      `this bucket has been handed ${bucketTaken} bytes, and ${MAX_BUCKET_BYTES} is all one bucket may take`,
+      `this bucket has been handed ${bucketTaken.value} bytes, and ${MAX_BUCKET_BYTES} is all one bucket may take`,
     );
   }
   const serviceTaken = await taken(env, SERVICE_TAKEN_OBJECT, SERVICE_BYTES_ALREADY_TAKEN);
-  if (serviceTaken + body.length > MAX_SERVICE_BYTES) {
+  if (serviceTaken.value + body.length > MAX_SERVICE_BYTES) {
     return problem(507, "this service has been handed as much as it may take");
   }
 
@@ -379,8 +388,8 @@ async function putDays(request: Request, env: Env, bucket: string): Promise<Resp
   // landed: what a ceiling is protecting against is the work of taking a
   // request, and that work was done either way.
   await Promise.all([
-    env.BLOBS.put(takenObject(bucket), `${bucketTaken + body.length}`),
-    env.BLOBS.put(SERVICE_TAKEN_OBJECT, `${serviceTaken + body.length}`),
+    add(env, takenObject(bucket), bucketTaken, body.length),
+    add(env, SERVICE_TAKEN_OBJECT, serviceTaken, body.length),
   ]);
   return json({ stored, bytes: body.length });
 }
@@ -679,11 +688,37 @@ async function allowed(limiter: RateLimit, request: Request): Promise<boolean> {
 /** What this name has been handed so far. An unreadable tally is treated as an
  * absent one: it is a budget, and losing count of it must not lock a person out
  * of their own archive. */
-async function taken(env: Env, key: string, whenAbsent: number): Promise<number> {
+async function taken(env: Env, key: string, whenAbsent: number): Promise<Tally> {
   const object = await env.BLOBS.get(key);
-  if (!object) return whenAbsent;
+  if (!object) return { value: whenAbsent };
   const counted = Number(await object.text());
-  return Number.isSafeInteger(counted) && counted >= 0 ? counted : whenAbsent;
+  const value = Number.isSafeInteger(counted) && counted >= 0 ? counted : whenAbsent;
+  return { value, version: object.httpEtag };
+}
+
+/// Add to a tally without losing what another request added at the same time.
+///
+/// R2 has no addition, so a tally is read, added to and written back — and two
+/// uploads that overlap read the same number, with the second write erasing the
+/// first. The phone sends several at once, so that is the ordinary case rather
+/// than a rare one: measured on 2026-09-06, a bucket's tally said 838 906 bytes
+/// where 944 043 had been accepted. The write therefore carries the version it
+/// read, and R2 refuses it if that is no longer the version — which turns the
+/// race into a `null` answer and one more read.
+async function add(env: Env, key: string, read: Tally, bytes: number): Promise<void> {
+  let known = read;
+  for (let attempt = 1; attempt <= TALLY_ATTEMPTS; attempt++) {
+    const written = await env.BLOBS.put(key, `${known.value + bytes}`, {
+      onlyIf: known.version
+        ? new Headers({ "if-match": known.version })
+        : new Headers({ "if-none-match": "*" }),
+    });
+    if (written) return;
+    known = await taken(env, key, known.value);
+  }
+  // Giving up undercounts; it never refuses a request that should be taken and
+  // never loses a day. A ceiling that stopped the archive because its own
+  // bookkeeping was busy would cost more than the bookkeeping is worth.
 }
 
 function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
