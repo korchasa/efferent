@@ -188,6 +188,20 @@ This file is the rulebook.
   the head of the queue in front of days that would go. Nothing is forgotten — `markMissing` and
   `markDirty` both reset the count, so the daily check against the archive owes a parked day back
   once a day. `Stats.stuckDays` counts them apart from the ones still moving.
+- **Where to send belongs to the build; the archive belongs to the reading key.** The address is
+  recorded when the archive is made, so nothing would ever read it from the build again — and when
+  the service moved off `workers.dev` on 2026-09-05 the phone went on sending to a host that no
+  longer exists, a new build changing nothing. `Destination.following(_:)` moves the stored
+  destination onto the address the running build carries, and the bucket is unaffected because it is
+  the hash of the reading key. What made it cost a day rather than a minute is that the failure
+  looked like the service: Cloudflare answered the dead name with a page, and the page is what the
+  screen showed.
+- **Nothing that came from outside the service becomes the sentence on the screen.** A refusal is
+  JSON with one `error` sentence in it, and that is all `ConnectionError.refusal` will repeat; a body
+  of anything else is named by its status alone. The screen draws that message as one unbounded run
+  of red text, so a 20 KB page in place of an answer becomes the whole app — which is what a phone
+  showed on 2026-09-06. The log is bounded for the same reason (`Uploader.said`): 338 KB of markup
+  in a file capped at half a megabyte buries every step that says why.
 - **A phone cannot tell that its own clock is wrong, so the service tells it.** A signature refused
   for being out of time is refused forever, with nothing the phone can measure to say why. The
   service puts its own seconds in that 400 (`now`), the phone learns the difference once

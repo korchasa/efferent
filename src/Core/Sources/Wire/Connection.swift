@@ -102,6 +102,23 @@ public enum ConnectionError: Error, Equatable {
     case missingDeploymentValue(String)
     case unsupportedScheme(String?)
     case server(status: Int, message: String)
+
+    /// A refusal in words that can go on a screen.
+    ///
+    /// The service answers a refusal in JSON, and its `error` is one sentence
+    /// written to be read. A body of anything else was not written by the
+    /// service: an address it no longer answers at is answered by whatever
+    /// stands in front of it, with a page. The screen draws this message as one
+    /// unbounded run of red text, so such a page becomes the whole app — which
+    /// is what a phone showed on 2026-09-06. Only the service's own words get
+    /// through; anything else is named by its status alone.
+    public static func refusal(status: Int, body: Data) -> ConnectionError {
+        struct Said: Decodable { let error: String }
+        guard let said = try? JSONDecoder().decode(Said.self, from: body) else {
+            return .server(status: status, message: "the answer did not come from the service")
+        }
+        return .server(status: status, message: String(said.error.prefix(200)))
+    }
 }
 
 /// Claims the logical archive before there is a day to upload.
@@ -144,8 +161,7 @@ public enum ArchiveCreator {
             throw ConnectionError.server(status: 0, message: "the server did not return HTTP")
         }
         guard (200 ..< 300).contains(http.statusCode) else {
-            let detail = String(data: body, encoding: .utf8) ?? "no error body"
-            throw ConnectionError.server(status: http.statusCode, message: detail)
+            throw ConnectionError.refusal(status: http.statusCode, body: body)
         }
     }
 }

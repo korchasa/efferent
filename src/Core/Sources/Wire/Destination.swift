@@ -54,6 +54,23 @@ public struct Destination: Equatable, Codable, Sendable {
     public var statsURL: URL {
         bucketURL.appendingPathComponent("stats")
     }
+
+    /// The same archive, at the address this build of the app carries.
+    ///
+    /// Where to send is deployment configuration; the archive is named by the
+    /// reading key, so moving the service moves the archive with it and the
+    /// bucket does not change. Without this a phone keeps the address it was
+    /// set up with for good: the service left `workers.dev` on 2026-09-05, a
+    /// new build changed nothing, and every upload went on to a host that no
+    /// longer exists, where Cloudflare answers with a page rather than the
+    /// service's own words.
+    public func following(_ deployment: Deployment) throws -> Destination {
+        guard endpoint != deployment.serviceURL else { return self }
+        return try Destination(
+            endpoint: deployment.serviceURL,
+            readingPublicKey: readingPublicKey
+        )
+    }
 }
 
 public enum DestinationError: Error, Equatable {

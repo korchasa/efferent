@@ -67,7 +67,6 @@ final class Services: ObservableObject {
         // rest of the properties exist, and until they do nothing may be read
         // back off `self`.
         let loaded = Self.loadDestination()
-        destination = loaded
         let defaults = UserDefaults.standard
         agentConnected = defaults.bool(forKey: Self.connectedKey)
         paused = defaults.bool(forKey: Self.pausedKey)
@@ -84,6 +83,7 @@ final class Services: ObservableObject {
             deployment = nil
             deploymentError = String(describing: error)
         }
+        destination = Self.movedToThisBuild(loaded, deployment)
         connectionHandoff = nil
         do {
             if let destination {
@@ -489,6 +489,34 @@ final class Services: ObservableObject {
     private static func loadDestination() -> Destination? {
         guard let data = UserDefaults.standard.data(forKey: destinationKey) else { return nil }
         return try? JSONDecoder().decode(Destination.self, from: data)
+    }
+
+    /// The stored archive, at the address this build carries, written down.
+    ///
+    /// The address was recorded once, when the archive was made, and nothing
+    /// read it from the build again — so the phone kept sending to the host it
+    /// was set up with after the service moved, and Cloudflare answered every
+    /// upload with a page. The bucket comes from the reading key, so following
+    /// the build moves nothing but where the same archive is reached.
+    private static func movedToThisBuild(
+        _ stored: Destination?, _ deployment: Deployment?
+    ) -> Destination? {
+        guard let stored, let deployment else { return stored }
+        // Its own logger: this runs while the properties are still being made,
+        // and nothing may be read off `self` until they all are.
+        let log = Log(category: "services")
+        do {
+            let moved = try stored.following(deployment)
+            guard moved != stored else { return stored }
+            UserDefaults.standard.set(try JSONEncoder().encode(moved), forKey: destinationKey)
+            log.info("the service has moved to \(moved.endpoint.absoluteString); sending there now")
+            return moved
+        } catch {
+            // Keep sending where it was sending. A build with an address this
+            // phone cannot use is a reason to say so, not to stop.
+            log.error("could not follow the address in this build: \(String(describing: error))")
+            return stored
+        }
     }
 
     /// Named for what it holds. It is not an outbox — there is no queue of
