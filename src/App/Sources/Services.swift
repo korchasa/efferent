@@ -51,8 +51,11 @@ final class Services: ObservableObject {
     @Published private(set) var batchTotal: Int
 
     private var uploader: Uploader?
+    /// Built for a screenshot: figures are fixed, and nothing here may move them.
+    private let demonstration: Bool
 
     private init() {
+        demonstration = false
         do {
             store = try Store(url: Self.storeURL())
         } catch {
@@ -108,6 +111,38 @@ final class Services: ObservableObject {
             refreshStats()
             Task { [weak self] in await self?.sendNow() }
         }
+    }
+
+    /// A copy for the store screenshots: an in-memory store, no Health, no
+    /// Keychain, no network, and figures chosen so that each screen shows the
+    /// state it exists for. Only the snapshot run (`--snapshot <dir>`) builds
+    /// one; the app itself always goes through `shared`.
+    init(
+        demoStats: Stats?,
+        batchTotal: Int,
+        setupComplete: Bool,
+        deployment: Deployment?,
+        destination: Destination?,
+        handoff: ConnectionHandoff?
+    ) {
+        demonstration = true
+        do {
+            store = try Store.inMemory()
+        } catch {
+            fatalError("could not open an in-memory day store: \(error)")
+        }
+        calendar = Day.calendar()
+        health = HealthCoordinator(store: store, calendar: calendar)
+        self.deployment = deployment
+        deploymentError = nil
+        stats = demoStats
+        lastError = nil
+        self.destination = destination
+        connectionHandoff = handoff
+        self.setupComplete = setupComplete
+        agentConnected = false
+        paused = false
+        self.batchTotal = batchTotal
     }
 
     // MARK: - Archive creation and connection
@@ -231,6 +266,9 @@ final class Services: ObservableObject {
     }
 
     func refreshStats() {
+        // A screenshot's figures are the point of it; the empty store behind
+        // them must not be allowed to say otherwise.
+        guard !demonstration else { return }
         do {
             let fresh = try store.stats()
             stats = fresh

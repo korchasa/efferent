@@ -31,6 +31,16 @@ public struct Stats: Equatable, Sendable {
     public let lastUploadAt: Date?
     /// How far back the first export has walked, if it has started.
     public let backfillReached: String?
+
+    public init(
+        pendingDays: Int, stuckDays: Int, sentDays: Int, lastUploadAt: Date?, backfillReached: String?
+    ) {
+        self.pendingDays = pendingDays
+        self.stuckDays = stuckDays
+        self.sentDays = sentDays
+        self.lastUploadAt = lastUploadAt
+        self.backfillReached = backfillReached
+    }
 }
 
 public enum StoreError: Error, Equatable {

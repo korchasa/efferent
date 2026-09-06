@@ -5,6 +5,14 @@ import SwiftUI
 struct EfferentApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
+    init() {
+        // The store screenshots are made by this same binary, offscreen, and
+        // it quits before any of the real machinery below wakes up.
+        if Snapshot.runIfAsked() {
+            exit(0)
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()
