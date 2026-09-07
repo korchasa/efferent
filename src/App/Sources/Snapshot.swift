@@ -60,8 +60,8 @@ enum Snapshot {
     /// Health behind it and an archive nobody has connected yet.
     private static func sending() throws -> Services {
         let deployment = try Deployment(
-            serviceURL: URL(string: "https://efferent.korchasa.dev")!,
-            mcpBaseURL: URL(string: "https://efferent.korchasa.dev/mcp/b")!
+            serviceURL: URL(string: "https://api.efferentapp.com")!,
+            mcpBaseURL: URL(string: "https://api.efferentapp.com/mcp/b")!
         )
         let reading = Curve25519.KeyAgreement.PrivateKey()
         let destination = try Destination(
