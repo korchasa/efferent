@@ -291,7 +291,7 @@ would live. With `--post <url>` it also puts that request through a running serv
 days back out separately.
 
 The service itself is a Cloudflare Worker over an R2 bucket, deployed with `deno task server:deploy`
-and answering at `efferent.korchasa.dev`. It is open to the internet by design — there are no
+and answering at `api.efferentapp.com`. It is open to the internet by design — there are no
 accounts, and your bucket is safe because the first writer keeps it. Creating one, though, is what
 costs storage for years, so a bucket is created only for a caller Apple vouches for: the claim
 carries an App Attest attestation over the very bytes the writer key signs, and the service checks
