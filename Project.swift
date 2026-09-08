@@ -42,6 +42,11 @@ public let project = Project(
                 "CFBundleIconName": .string("AppIcon"),
                 "CFBundleShortVersionString": .string("$(MARKETING_VERSION)"),
                 "CFBundleVersion": .string("$(CURRENT_PROJECT_VERSION)"),
+                // Every cipher here comes from CryptoKit, which is Apple's own
+                // implementation and exempt from the export declaration; nothing
+                // third-party does encryption. Without this key every upload
+                // waits on a Missing Compliance question in App Store Connect.
+                "ITSAppUsesNonExemptEncryption": .boolean(false),
                 "UILaunchScreen": .dictionary([:]),
                 "UISupportedInterfaceOrientations": .array([
                     .string("UIInterfaceOrientationPortrait")
