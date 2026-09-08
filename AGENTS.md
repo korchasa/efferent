@@ -268,7 +268,10 @@ byte for byte. When you change anything there, change both sides in the same com
 `deno task interop` — Swift agreeing with Swift proves only that Swift is consistent, and that check
 is the only thing that catches drift before a phone does. The MCP setup guide's Python reference is
 a third implementation: after changing HPKE or the guide, also run `deno task interop:python` with
-PyHPKE 0.6.3 in the selected local interpreter.
+PyHPKE 0.6.3 in the selected local interpreter. No interpreter on the machine carries it, so make one:
+`python3 -m venv <scratch>/venv && <scratch>/venv/bin/pip install pyhpke==0.6.3`, then point
+`EFFERENT_PYTHON` at `<scratch>/venv/bin/python3`. Without the variable the task runs the bare
+`python3` and fails on the import, which reads like a broken reference rather than a missing package.
 
 - **The phone creates the archive and the reading key; the agent only connects.** The phone derives
   the bucket id from the reading public key, seals days with that public half, and keeps the private
@@ -568,6 +571,17 @@ broken, which is exactly what happened once the columnar format let a launch cle
   single-size "universal" icon compiles without one and the App Store listing icon comes out blank.
 - `xcodebuild` needs `/usr/bin` first on PATH. A Homebrew rsync earlier in the path breaks copy
   phases, and the error blames the copy rather than the tool.
+- **A baseline in a git worktree needs an empty `Tuist/` directory before `deno task check` runs.**
+  Tuist finds the project root by looking for a `Tuist` directory or a `.git` directory, and a
+  worktree has a `.git` file instead, so `tuist generate` stops with "Couldn't locate the root
+  directory" while every Deno test before it has passed. `mkdir -p Tuist` in the worktree is the
+  whole fix; the directory is not committed and the main checkout never needs it.
+- **`deno task test` says nothing about how many Swift tests ran.** It passes `-quiet` to
+  `xcodebuild`, so a green run ends on "Testing started" and an exit code, and a class that was
+  skipped or never linked looks the same as one that passed. The counts live in the newest
+  `.xcresult` under `~/Library/Developer/Xcode/DerivedData/Efferent-*/Logs/Test/`; read them with
+  `xcrun xcresulttool get test-results summary --path <bundle>`, and find the bundle with `find`
+  rather than a shell glob, which zsh cancels the whole command over when nothing matches.
 - **Never test-write into a bucket a real phone will use.** The first writer owns a bucket for good,
   so a smoke test claims it and the phone is refused with 403 afterwards — a failure that surfaces
   on the device, long after the test looked like it passed. This bites twice:
