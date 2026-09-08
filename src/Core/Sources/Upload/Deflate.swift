@@ -13,6 +13,8 @@ import Foundation
 public enum Deflate {
     public enum DeflateError: Error, Equatable {
         case didNotCompress(bytes: Int)
+        case didNotInflate
+        case tooLarge(limit: Int)
     }
 
     public static func compress(_ input: Data) throws -> Data {
@@ -43,5 +45,52 @@ public enum Deflate {
 
         destination.removeSubrange(written...)
         return destination
+    }
+
+    /// The other direction, for an edit the agent squeezed the same way.
+    ///
+    /// Streamed rather than buffered, because a caller cannot know how big a
+    /// deflate stream inflates to before inflating it, and an edit is bytes
+    /// somebody else made: `limit` is the size at which it stops being read
+    /// and starts being refused.
+    public static func decompress(_ input: Data, limit: Int) throws -> Data {
+        guard !input.isEmpty else { throw DeflateError.didNotInflate }
+        var output = Data()
+        let chunk = 64 * 1024
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: chunk)
+        defer { buffer.deallocate() }
+
+        var stream = compression_stream(
+            dst_ptr: buffer, dst_size: chunk, src_ptr: buffer, src_size: 0, state: nil
+        )
+        guard compression_stream_init(&stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB) == COMPRESSION_STATUS_OK
+        else { throw DeflateError.didNotInflate }
+        defer { compression_stream_destroy(&stream) }
+
+        try input.withUnsafeBytes { (source: UnsafeRawBufferPointer) in
+            stream.src_ptr = source.bindMemory(to: UInt8.self).baseAddress!
+            stream.src_size = input.count
+            while true {
+                stream.dst_ptr = buffer
+                stream.dst_size = chunk
+                let status = compression_stream_process(&stream, Int32(COMPRESSION_STREAM_FINALIZE.rawValue))
+                let produced = chunk - stream.dst_size
+                output.append(buffer, count: produced)
+                guard output.count <= limit else { throw DeflateError.tooLarge(limit: limit) }
+                switch status {
+                case COMPRESSION_STATUS_END:
+                    return
+                case COMPRESSION_STATUS_OK:
+                    // Nothing consumed and nothing produced is a stream that
+                    // needs more input than it has: a truncated edit.
+                    if produced == 0, stream.src_size == 0 {
+                        throw DeflateError.didNotInflate
+                    }
+                default:
+                    throw DeflateError.didNotInflate
+                }
+            }
+        }
+        return output
     }
 }

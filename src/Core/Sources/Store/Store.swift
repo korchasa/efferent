@@ -106,11 +106,12 @@ public final class Store {
                 arguments: [now]
             )
             try db.execute(
-                sql: "DELETE FROM meta WHERE key IN (?, ?, ?)",
+                sql: "DELETE FROM meta WHERE key IN (?, ?, ?, ?)",
                 arguments: [
                     MetaKey.lastUploadAt.rawValue,
                     MetaKey.backfillReached.rawValue,
                     MetaKey.lastReconciledAt.rawValue,
+                    MetaKey.editorRegisteredFor.rawValue,
                 ]
             )
             try Self.setString(db, MetaKey.archiveBucket.rawValue, bucket)
@@ -412,6 +413,59 @@ public final class Store {
                 sql: "UPDATE day SET dirty = 0, updatedAt = ? WHERE day = ?",
                 arguments: [Date().timeIntervalSince1970, day]
             )
+        }
+    }
+
+    // MARK: - What was written into Health
+
+    /// The version to hand HealthKit for the next write under `id`: one more
+    /// than the last, starting at 1, in one transaction so two writes of the
+    /// same id cannot draw the same number.
+    ///
+    /// The number only climbs. HealthKit replaces a sample whose sync
+    /// identifier arrives with a higher version and quietly ignores a lower or
+    /// equal one, so applying an edit twice — after a crash before the phone
+    /// could say it had — ends with one sample, and never with a stale one.
+    public func nextVersion(for id: String) throws -> Int {
+        try dbQueue.write { db in
+            let now = Date().timeIntervalSince1970
+            try db.execute(
+                sql: """
+                INSERT INTO written (id, version, updatedAt) VALUES (?, 1, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    version = written.version + 1, updatedAt = excluded.updatedAt
+                """,
+                arguments: [id, now]
+            )
+            return try Int.fetchOne(
+                db, sql: "SELECT version FROM written WHERE id = ?", arguments: [id]
+            ) ?? 1
+        }
+    }
+
+    /// The sample under `id` was removed from Health. The version is kept:
+    /// HealthKit remembers the one it last saw, and an id that came back at 1
+    /// would be ignored for as long as that memory lasts.
+    public func forgetWritten(_ id: String) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE written SET updatedAt = ? WHERE id = ?",
+                arguments: [Date().timeIntervalSince1970, id]
+            )
+        }
+    }
+
+    /// Whether this phone has told `bucket`'s service which editor key to take
+    /// edits from.
+    public func editorRegistered(for bucket: String) throws -> Bool {
+        try dbQueue.read { db in
+            try Self.string(db, MetaKey.editorRegisteredFor.rawValue) == bucket
+        }
+    }
+
+    public func recordEditorRegistered(for bucket: String) throws {
+        try dbQueue.write { db in
+            try Self.setString(db, MetaKey.editorRegisteredFor.rawValue, bucket)
         }
     }
 

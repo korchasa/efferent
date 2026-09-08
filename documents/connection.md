@@ -49,10 +49,14 @@ This is the whole flow:
 phone -> sealed days -> R2
 agent -> remote MCP -> setup guide, listing and sealed days
 agent + local reading key -> decryption and analysis on the agent's machine
+agent + local editor key -> sealed edit -> R2 -> phone -> HealthKit -> the day re-uploaded
 ```
 
-There is no invitation protocol, pairing session, rendezvous object or server-side copy of the
-reading key.
+There is no invitation protocol, pairing session, rendezvous object or server-side copy of either
+key. Writing runs the same boundary backwards: the agent seals an edit to the phone's own reading
+key and signs it with the editor key, the service stores ciphertext it cannot open and names it, and
+the phone collects it, checks the signature itself, writes into Health and reports an outcome of
+counts and codes. Nothing on the service ever holds a metric name or a value in either direction.
 
 ## What the phone creates
 
@@ -63,38 +67,50 @@ On first setup the phone:
 3. creates the logical bucket on the service and claims it with its separate signing key;
 4. keeps the public half for sealing days and keeps the private half in the Keychain for connection
    handoff;
-5. starts sending sealed days without waiting for an agent.
+5. creates the Ed25519 editor key, registers its public half with a writer-signed
+   `PUT /b/<bucket-id>/editor`, and keeps the private half in the Keychain for the same handoff;
+6. starts sending sealed days without waiting for an agent.
 
-The signing key and reading key stay separate. Possession of the reading private key grants read
-access, not the ability to forge an upload.
+The three keys stay separate. Possession of the reading private key grants read access, not the
+ability to forge an upload; possession of the editor key grants the right to ask the phone to write,
+not to read a day or to upload one.
 
 ## What the phone hands to an agent
 
-The phone shares three fields as text:
+The phone shares four fields as text:
 
 ```text
 Instruction:
-Connect the supplied Efferent MCP and call setup_guide first. Keep the reading key local and never
-pass it to a remote tool.
+Connect the supplied Efferent MCP and call setup_guide first. Keep the reading key and the editor
+key local and never pass either to a remote tool.
 
 MCP:
 https://<mcp-host>/mcp/b/<bucket-id>
 
 Reading key:
 <private-reading-key>
+
+Editor key:
+<private-editor-key>
 ```
 
 The exact public hosts are deployment configuration, not protocol constants.
 
-The concrete key value is
-`efferent-reading-v1.<raw-private-base64url>.<raw-public-base64url>`. It remains one field. The public
-half lets the local Python reference derive the bucket and reject a handoff whose key and MCP URL do
-not belong together; the private half is the secret.
+The concrete key values are `efferent-reading-v1.<raw-private-base64url>.<raw-public-base64url>` and
+`efferent-editor-v1.<raw-private-base64url>.<raw-public-base64url>`. Each remains one field. The
+reading key's public half lets the local Python reference derive the bucket and reject a handoff
+whose key and MCP URL do not belong together; the private half is the secret. The editor key's
+public half is what the service holds under `<bucket>/editor`; the importer checks the two halves
+belong together before it keeps them.
 
-The bucket id belongs in the MCP URL; it is an address, not a decryption secret. The reading key is
-a separate field. It must never appear in a URL, an HTTP header, a remote MCP tool argument, a log,
-or server-side storage. The agent keeps the handoff in an owner-only local file and does not repeat
-the key in output.
+A handoff from before the phone could write has three fields. It still imports, and the reader it
+makes reads and cannot write, and says so. A fresh four-field handoff for the same archive adds the
+editor key to that reader and touches nothing else.
+
+The bucket id belongs in the MCP URL; it is an address, not a decryption secret. The keys are
+separate fields. Neither may appear in a URL, an HTTP header, a remote MCP tool argument, a log, or
+server-side storage. The agent keeps the handoff in an owner-only local file and does not repeat
+either key in output.
 
 The setup guide is ordinary MCP tool output. `setup_guide` takes no arguments, so the reading key
 cannot be passed to it, and returns the current runnable Python reference. There is no separate
@@ -105,25 +121,35 @@ checkout, Deno, a local MCP server or a gateway restart.
 
 ### Phone
 
-- Own archive creation and key generation.
+- Own archive creation and key generation, the editor key included.
 - Encrypt every day to its own reading public key.
-- Sign uploads with the independent device signing key.
+- Sign uploads with the independent device signing key, and register the editor's public half with
+  it.
 - Produce the connection handoff whenever the owner chooses to connect an agent.
+- Collect the edit queue on every launch that can reach Health and is not paused, check each edit's
+  editor signature itself, open it with the reading private key, write the items into Health under
+  `efferent:<id>` sync identifiers with phone-kept versions, report an outcome of counts and codes,
+  and mark the touched days so they are re-uploaded whole.
 
 ### Cloudflare service and remote MCP server
 
 - Address an archive by bucket id.
 - List sealed days and return sealed objects or links to them.
-- Keep the existing upload signature boundary.
-- Never accept a reading key through configuration, authorization or tool arguments.
-- Never return plaintext or answer a question about the contents of a day.
+- Keep the existing upload signature boundary, and refuse an edit that is not signed by the
+  registered editor key.
+- Hold sealed edits until the phone answers for them, hand each back only to the phone's writer
+  key, and replace it with the outcome the phone reports.
+- Never accept a reading key or an editor key through configuration, authorization or tool
+  arguments.
+- Never return plaintext or answer a question about the contents of a day or an edit.
 
 The remote MCP server is discovery and ciphertext transport. It is deliberately unable to perform
-the health analysis tools.
+the health analysis tools, and unable to write.
 
-The implemented remote tools are `setup_guide`, `archive_status`, `list_sealed_days` and
-`get_sealed_day`. The first returns the complete local setup procedure and Python source; the last
-returns a resource link to `application/octet-stream`, not the bytes decoded into another shape.
+The implemented remote tools are `setup_guide`, `archive_status`, `list_sealed_days`,
+`get_sealed_day` and `list_edits`. The first returns the complete local setup procedure and Python
+source; `get_sealed_day` returns a resource link to `application/octet-stream`, not the bytes decoded
+into another shape; `list_edits` names what is waiting for the phone and what became of the rest.
 The phone claims an empty archive with a signed `PUT /b/<bucket-id>` before any Health day exists.
 
 ### Agent machine
@@ -135,6 +161,9 @@ The phone claims an empty archive with a signed `PUT /b/<bucket-id>` before any 
 - Use the remote tools to select dates.
 - Run the Python reference to fetch and decrypt each selected day.
 - Analyse the resulting NDJSON locally and never send plaintext to a remote tool.
+- To write, run the same reference with `--write <items.json>`: it validates the items, seals them
+  to the reading key, signs them with the editor key and posts ciphertext; `--edits` says what the
+  phone did with each. Neither key leaves the machine.
 
 An agent that cannot execute code locally cannot read an Efferent archive under this security model.
 That is a capability boundary, not a reason to give the key to Cloudflare.

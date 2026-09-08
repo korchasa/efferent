@@ -19,6 +19,9 @@ final class Services: ObservableObject {
     let calendar: Calendar
     let identity = DeviceIdentity()
     let readingIdentity = ReadingIdentity()
+    /// The key an agent signs edits with. Made here, handed over beside the
+    /// reading key, and named to the service so it takes edits from nobody else.
+    let editor = EditorIdentity()
     let deployment: Deployment?
     let deploymentError: String?
     private let log = Log(category: "services")
@@ -51,6 +54,7 @@ final class Services: ObservableObject {
     @Published private(set) var batchTotal: Int
 
     private var uploader: Uploader?
+    private var applier: Applier?
     /// Built for a screenshot: figures are fixed, and nothing here may move them.
     private let demonstration: Bool
 
@@ -111,6 +115,12 @@ final class Services: ObservableObject {
             refreshStats()
             Task { [weak self] in await self?.sendNow() }
         }
+        // Once per bucket, and retried at the head of every pass until it
+        // lands: a phone that made its archive before edits existed has an
+        // editor key the service has never heard of.
+        if destination != nil {
+            Task { [weak self] in await self?.ensureEditorRegistered() }
+        }
     }
 
     /// A copy for the store screenshots: an in-memory store, no Health, no
@@ -167,10 +177,12 @@ final class Services: ObservableObject {
             try UserDefaults.standard.set(JSONEncoder().encode(created), forKey: Self.destinationKey)
             destination = created
             uploader = nil
+            applier = nil
             lastError = nil
             refreshConnectionHandoff()
             refreshStats()
             log.info("created bucket \(created.bucket)")
+            await ensureEditorRegistered()
             // No pass yet: the caller marks the history next, and a pass run
             // before that marking sends what the archive check found missing,
             // only for the marking to queue those same days a second time.
@@ -184,6 +196,31 @@ final class Services: ObservableObject {
         }
     }
 
+    /// Tell the service which key edits come from, once per archive.
+    ///
+    /// A failure is written down and not shown: the archive works without it,
+    /// and the next pass tries again. Until it lands the handoff still carries
+    /// the editor key, and an edit made with it is refused by the service with
+    /// a sentence saying no editor is registered — which is true, and mends
+    /// itself the next time the phone is online.
+    func ensureEditorRegistered() async {
+        guard !demonstration, let destination else { return }
+        do {
+            guard try !store.editorRegistered(for: destination.bucket) else { return }
+            let key = try editor.signingKey()
+            try await ArchiveCreator.registerEditor(
+                destination: destination,
+                identity: identity,
+                editorPublicKey: key.publicKey.rawRepresentation
+            )
+            try store.recordEditorRegistered(for: destination.bucket)
+            log.info("the editor key is registered with the archive")
+            refreshConnectionHandoff()
+        } catch {
+            log.error("could not register the editor key: \(String(describing: error))")
+        }
+    }
+
     private func refreshConnectionHandoff() {
         do {
             guard let deployment, let destination,
@@ -192,10 +229,13 @@ final class Services: ObservableObject {
                 connectionHandoff = nil
                 return
             }
+            let editorKey = try editor.signingKey()
             connectionHandoff = ConnectionHandoff(
                 deployment: deployment,
                 destination: destination,
-                privateKey: privateKey.rawRepresentation
+                privateKey: privateKey.rawRepresentation,
+                editorPrivateKey: editorKey.rawRepresentation,
+                editorPublicKey: editorKey.publicKey.rawRepresentation
             )
         } catch {
             connectionHandoff = nil
@@ -219,9 +259,11 @@ final class Services: ObservableObject {
         destination = nil
         connectionHandoff = nil
         uploader = nil
+        applier = nil
         do {
             try identity.forget()
             try readingIdentity.forget()
+            try editor.forget()
         } catch {
             lastError = String(describing: error)
         }
@@ -256,6 +298,26 @@ final class Services: ObservableObject {
         // uploader being built, or the first send would start under it.
         built.setStopped(paused)
         uploader = built
+        return built
+    }
+
+    /// The applier, for a phone that holds its archive's reading key. A phone
+    /// on a legacy reader-first archive cannot open an edit and gets none.
+    func applierIfPaired() -> Applier? {
+        if let applier {
+            return applier
+        }
+        guard let destination, (try? readingIdentity.existingPrivateKey()) != nil else { return nil }
+        let built = Applier(
+            destination: destination,
+            identity: identity,
+            readingKey: { [readingIdentity] in try readingIdentity.privateKey() },
+            editorPublicKey: { [editor] in try editor.signingKey().publicKey.rawRepresentation },
+            store: store,
+            writer: HealthKitWriter(calendar: calendar),
+            fetch: Applier.session()
+        )
+        applier = built
         return built
     }
 
@@ -342,6 +404,20 @@ final class Services: ObservableObject {
         }
     }
 
+    /// Show the system sheet for writing, once, when a launch with a screen
+    /// finds a type nobody has decided about.
+    ///
+    /// The sheet lists only the undecided types, so a phone that granted
+    /// reading before writing existed is asked once more, about writing alone.
+    /// Background launches never get here, and the applier waits with
+    /// `.notAsked` until one with a screen has.
+    func askForWriteAccessIfNeeded() async {
+        guard !demonstration, destination != nil, HealthReader.isAvailable else { return }
+        guard HealthKitWriter().writeAccessUndecided() else { return }
+        log.info("asking about writing: some writable type has never been decided")
+        await requestHealthAccess()
+    }
+
     func refreshNow() async {
         do {
             _ = try await health.refresh()
@@ -379,6 +455,10 @@ final class Services: ObservableObject {
             lastError = "No archive has been created yet."
             return
         }
+        // Edits first, days second: what an edit changes is a day that then
+        // goes up in the same pass. The pause above holds edits back exactly as
+        // it holds days back.
+        await applyEdits()
         do {
             let started = Date()
             let outcome = try await uploader.send()
@@ -401,6 +481,28 @@ final class Services: ObservableObject {
             lastError = String(describing: error)
         }
         refreshStats()
+    }
+
+    /// Write what the agent asked for into Health and owe the days it changed.
+    ///
+    /// A failure is written down and does not stop the send behind it: the
+    /// edits stay in the queue, and the days already changed are marked
+    /// whatever stopped the run.
+    private func applyEdits() async {
+        await ensureEditorRegistered()
+        guard let applier = applierIfPaired() else { return }
+        do {
+            let outcome = try await applier.run()
+            guard case let .applied(applied) = outcome else { return }
+            if !applied.days.isEmpty {
+                let marked = try store.markDirty(applied.days)
+                log.info("\(applied.days.count) days changed by edits, \(marked) newly waiting")
+            }
+        } catch where HealthReader.isLocked(error) {
+            log.debug("the phone is locked, so no edit could be applied; they wait")
+        } catch {
+            log.error("applying edits failed: \(String(describing: error))")
+        }
     }
 
     /// The first day Health has anything about, for the screen that offers a

@@ -48,6 +48,14 @@ description = "Phone-owned X25519 reading key handoff"
 regex = '''efferent-reading-v1\.[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}'''
 keywords = ["efferent-reading-v1"]
 
+[[rules]]
+id = "efferent-phone-editor-key"
+description = "Phone-owned Ed25519 editor key handoff"
+# The same shape over the key an agent signs edits with. It cannot read a day,
+# but whoever holds it can ask the phone to write into Health.
+regex = '''efferent-editor-v1\.[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}'''
+keywords = ["efferent-editor-v1"]
+
 [[allowlists]]
 description = "the local mirror: decrypted days and the reading key itself"
 # Never committed — it is in .gitignore — but a scan of the working directory

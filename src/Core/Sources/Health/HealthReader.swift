@@ -84,9 +84,15 @@ public struct HealthReader {
         return types
     }
 
+    /// Ask for everything at once: reading every metric collected, writing
+    /// every metric an agent may edit. The sheet shows only the types the
+    /// person has not decided yet, so a phone that granted reading before
+    /// writing existed is asked once more, about writing alone.
     public func requestAuthorization() async throws {
         guard Self.isAvailable else { throw HealthError.notAvailableOnThisDevice }
-        try await healthStore.requestAuthorization(toShare: [], read: Self.readTypes)
+        try await healthStore.requestAuthorization(
+            toShare: WritableMetric.shareTypes, read: Self.readTypes
+        )
     }
 
     // MARK: - Aggregates

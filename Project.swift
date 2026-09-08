@@ -56,13 +56,14 @@ public let project = Project(
                 "NSHealthShareUsageDescription": .string(
                     "Efferent reads your health data so it can send it to the server you configure. Nothing is shared with anyone else."
                 ),
-                // Required even though the app never writes. Upload validation
+                // Shown when the app asks to write, which it does for the
+                // metrics an agent may edit and for nothing else.
                 // refuses any binary that links HealthKit without both purpose
                 // strings (error 90683), and it refuses it after the whole
                 // build has been uploaded. Nobody ever reads this one: write
                 // access is never requested, so the sheet never shows it.
                 "NSHealthUpdateUsageDescription": .string(
-                    "Efferent never writes to your health data. It only reads what is already there."
+                    "Efferent writes the entries an agent you connected asks for — meals, sleep, weight — and only those."
                 ),
                 // Public deployment configuration. These are addresses, not
                 // credentials; the reading key never enters the plist.

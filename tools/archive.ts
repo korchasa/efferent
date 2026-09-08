@@ -10,10 +10,18 @@
  */
 
 import { bucketId, dayBefore, isDay } from "../protocol/ids.ts";
-import { fromBase64url } from "../protocol/signing.ts";
-import { associatedData, open, rawPrivateKey } from "../protocol/sealedbox.ts";
+import { base64url, canonicalEdit, fromBase64url, signMessage } from "../protocol/signing.ts";
+import { associatedData, open, rawPrivateKey, seal } from "../protocol/sealedbox.ts";
 import { decompress } from "../protocol/framing.ts";
 import { expand } from "../protocol/day.ts";
+import {
+  editAssociatedData,
+  type EditItem,
+  type Outcome,
+  type OutcomeCode,
+  packEdits,
+  validateItems,
+} from "../protocol/edits.ts";
 
 export { dayBefore, isDay };
 
@@ -21,6 +29,47 @@ export interface ReadingKey {
   /** X25519 private key, pkcs8. The whole secret of the system. */
   readingPrivate: string;
   readingPublic: string;
+}
+
+/** The key that signs edits. It cannot open a day; whoever holds it can ask
+ * the phone to write into Health, which is why it is kept like the other one. */
+export interface EditorKey {
+  /** Ed25519 private key, pkcs8. */
+  editorPrivate: string;
+  editorPublic: string;
+}
+
+/** What one item was about, kept locally so a later session can find the id
+ * it needs to replace or delete a sample it wrote. Never a value. */
+export interface SubmittedItem {
+  op: "put" | "delete";
+  id: string;
+  metric?: string;
+  /** The UTC day the item began on. The phone cuts days in its own zone, so
+   * this is a place to look rather than the day the archive will show. */
+  day?: string;
+}
+
+/** One edit this profile submitted, as the service named it. */
+export interface SubmittedEdit {
+  name: string;
+  at: string;
+  items: SubmittedItem[];
+}
+
+/** One line of the service's listing, with what this profile knows about it. */
+export interface EditEntry {
+  name: string;
+  bytes: number;
+  at: string;
+  status: "pending" | "applied" | "partial" | "failed";
+  applied?: number;
+  refused?: number;
+  /** Present when this profile submitted the edit. */
+  items?: SubmittedItem[];
+  /** Present when the phone refused something: which item, which word, and the
+   * id it carried when this profile submitted it. */
+  refusals?: { item: number; code: OutcomeCode; id?: string }[];
 }
 
 /** One fact, in the shape a reader sees it.
@@ -71,6 +120,8 @@ export interface Stats {
 export const HOME = Deno.env.get("EFFERENT_HOME") ?? ".efferent";
 const DAYS = "days";
 const STATE = "mirror.json";
+const EDITOR = "editor-key.json";
+const EDITS = "edits.json";
 
 /** An absolute path, for error messages. A relative one in a message about a
  * missing directory tells the reader nothing about where it was looked for. */
@@ -140,6 +191,50 @@ export async function loadState(url?: string): Promise<MirrorState> {
 
 export async function saveState(state: MirrorState): Promise<void> {
   await write(STATE, { ...state, syncedAt: new Date().toISOString() });
+}
+
+// MARK: - The editor key and the record of edits
+
+/**
+ * The key that signs edits, or a sentence saying why there is none.
+ *
+ * A reader connected from a three-field handoff has no such key: the phone
+ * that made that handoff did not write yet. The cure is a fresh handoff from
+ * the phone, which `installConnectionHandoff` adds to this reader without
+ * touching the rest.
+ */
+export async function loadEditor(): Promise<EditorKey> {
+  try {
+    return await load<EditorKey>(EDITOR);
+  } catch {
+    throw new Error(
+      `no editor key in ${resolve(HOME)} — the handoff this reader was connected with predates ` +
+        `writing; ask the phone for a fresh one and run \`efferent connect\` with it`,
+    );
+  }
+}
+
+/** Every edit this profile submitted, oldest first. */
+export async function submittedEdits(): Promise<SubmittedEdit[]> {
+  try {
+    return await load<SubmittedEdit[]>(EDITS);
+  } catch {
+    return [];
+  }
+}
+
+async function recordSubmitted(edit: SubmittedEdit): Promise<void> {
+  await write(EDITS, [...await submittedEdits(), edit]);
+}
+
+function summarize(item: EditItem): SubmittedItem {
+  if (item.op === "delete") return { op: "delete", id: item.id };
+  return {
+    op: "put",
+    id: item.id,
+    metric: item.metric,
+    day: new Date(item.start * 1000).toISOString().slice(0, 10),
+  };
 }
 
 // MARK: - The mirror, one file per day
@@ -226,6 +321,12 @@ export interface Archive {
   list(range: { from?: string; to?: string }): Promise<DayEntry[]>;
   several(names: string[], width?: number): AsyncGenerator<{ day: string; events: Event[] }>;
   stats(): Promise<Stats>;
+  /** Seal, sign and hand over an edit; the service answers with its name. */
+  submitEdits(items: EditItem[]): Promise<{ name: string; at: string; bytes: number }>;
+  /** One page of the queue and, with `status: "all"`, of what became of it. */
+  edits(
+    options: { after?: string; status?: "pending" | "all"; limit?: number },
+  ): Promise<{ edits: EditEntry[]; next: string | null }>;
 }
 
 export async function openArchive(endpoint: string): Promise<Archive> {
@@ -294,7 +395,101 @@ export async function openArchive(endpoint: string): Promise<Archive> {
 
   const stats = () => fetchJSON<Stats>(`${endpoint}/b/${bucket}/stats`);
 
-  return { bucket, day, list, several, stats };
+  /**
+   * An edit, the way the phone will check it: sealed to the reading key with
+   * the bucket in the tag, signed by the editor key over the canonical message.
+   *
+   * Validated before anything is sealed, so a wrong unit is a sentence here
+   * rather than a refusal code from the phone a day later. Written down
+   * locally afterwards, because the service knows an edit by a name and a
+   * count and nothing else — the ids inside it are the agent's, and a later
+   * session has no other way to find them.
+   */
+  async function submitEdits(
+    items: EditItem[],
+  ): Promise<{ name: string; at: string; bytes: number }> {
+    validateItems(items);
+    const editor = await loadEditor();
+    const sealed = await seal(readingPublic, await packEdits(items), editAssociatedData(bucket));
+
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signingKey = await crypto.subtle.importKey(
+      "pkcs8",
+      fromBase64url(editor.editorPrivate) as BufferSource,
+      { name: "Ed25519" },
+      false,
+      ["sign"],
+    );
+    const signature = await signMessage(signingKey, await canonicalEdit(bucket, timestamp, sealed));
+
+    const response = await fetch(`${endpoint}/b/${bucket}/edits`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/octet-stream",
+        "x-efferent-timestamp": String(timestamp),
+        "x-efferent-editor": editor.editorPublic,
+        "x-efferent-signature": base64url(signature),
+      },
+      body: sealed as BodyInit,
+    });
+    if (!response.ok) {
+      throw new Error(
+        `the service refused the edit: ${response.status} ${await refusal(response)}`,
+      );
+    }
+    const answer = await response.json() as { name: string; at: string; bytes: number };
+    await recordSubmitted({ name: answer.name, at: answer.at, items: items.map(summarize) });
+    return answer;
+  }
+
+  /**
+   * The service's listing, with this profile's own record laid over it.
+   *
+   * An edit the phone refused part of is worth a second request: the listing
+   * carries counts, the outcome carries which item and which word, and with the
+   * local record the item becomes an id the agent recognises.
+   */
+  async function edits(
+    options: { after?: string; status?: "pending" | "all"; limit?: number },
+  ): Promise<{ edits: EditEntry[]; next: string | null }> {
+    const parameters = new URLSearchParams();
+    if (options.after) parameters.set("after", options.after);
+    if (options.status) parameters.set("status", options.status);
+    if (options.limit) parameters.set("limit", String(options.limit));
+    const page = await fetchJSON<{ edits: EditEntry[]; next: string | null }>(
+      `${endpoint}/b/${bucket}/edits?${parameters}`,
+    );
+
+    const known = new Map((await submittedEdits()).map((edit) => [edit.name, edit.items]));
+    const entries: EditEntry[] = [];
+    for (const entry of page.edits) {
+      const items = known.get(entry.name);
+      const laid: EditEntry = items ? { ...entry, items } : { ...entry };
+      if ((entry.refused ?? 0) > 0) {
+        const outcome = await fetchJSON<Outcome>(`${endpoint}/b/${bucket}/o/${entry.name}`);
+        laid.refusals = outcome.refused.map((refusal) => ({
+          ...refusal,
+          ...(items?.[refusal.item] ? { id: items[refusal.item].id } : {}),
+        }));
+      }
+      entries.push(laid);
+    }
+    return { edits: entries, next: page.next };
+  }
+
+  return { bucket, day, list, several, stats, submitEdits, edits };
+}
+
+/** The one sentence a refusal carries, or the status text when it carries none. */
+async function refusal(response: Response): Promise<string> {
+  const text = await response.text();
+  try {
+    const parsed = JSON.parse(text) as { error?: unknown };
+    if (typeof parsed.error === "string") return parsed.error;
+  } catch {
+    // not JSON
+  }
+  return text || response.statusText;
 }
 
 export async function fetchJSON<T>(url: string): Promise<T> {

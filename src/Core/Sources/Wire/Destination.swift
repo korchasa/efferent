@@ -55,6 +55,34 @@ public struct Destination: Equatable, Codable, Sendable {
         bucketURL.appendingPathComponent("stats")
     }
 
+    /// Where the phone says who may edit.
+    public var editorURL: URL {
+        bucketURL.appendingPathComponent("editor")
+    }
+
+    /// The queue of edits still waiting, or a page of it.
+    public func editsURL(after: String? = nil, limit: Int) -> URL {
+        var components = URLComponents(
+            url: bucketURL.appendingPathComponent("edits"), resolvingAgainstBaseURL: false
+        )!
+        var query = [URLQueryItem(name: "limit", value: String(limit))]
+        if let after {
+            query.append(URLQueryItem(name: "after", value: after))
+        }
+        components.queryItems = query
+        return components.url!
+    }
+
+    /// One sealed edit, read with the writer's signature.
+    public func editURL(_ name: String) -> URL {
+        bucketURL.appendingPathComponent("e").appendingPathComponent(name)
+    }
+
+    /// Where the phone says what became of one edit.
+    public func outcomeURL(_ name: String) -> URL {
+        editURL(name).appendingPathComponent("outcome")
+    }
+
     /// The same archive, at the address this build of the app carries.
     ///
     /// Where to send is deployment configuration; the archive is named by the
@@ -111,5 +139,39 @@ public enum CanonicalRequest {
     /// date's object — the decryption simply stops working.
     public static func associatedData(bucket: String, day: String) -> Data {
         Data("\(protocolName)\n\(bucket)\n\(day)".utf8)
+    }
+
+    // MARK: - Edits
+
+    /// Each of these names its purpose on its first line, so a captured
+    /// message of one kind can never be replayed as another. The same strings
+    /// as `canonicalEditorRegistration`, `canonicalEdit`, `canonicalOutcome`
+    /// and `canonicalFetch` in `protocol/signing.ts`.
+    public static func editorRegistration(bucket: String, timestamp: Int64, body: Data) -> Data {
+        canonical(["\(protocolName) editor", bucket, String(timestamp)], body: body)
+    }
+
+    public static func edit(bucket: String, timestamp: Int64, sealed: Data) -> Data {
+        canonical(["\(protocolName) edit", bucket, String(timestamp)], body: sealed)
+    }
+
+    public static func outcome(bucket: String, name: String, timestamp: Int64, body: Data) -> Data {
+        canonical(["\(protocolName) outcome", bucket, name, String(timestamp)], body: body)
+    }
+
+    /// A fetch has no body, so nothing is hashed: the name is the whole of it.
+    public static func fetch(bucket: String, name: String, timestamp: Int64) -> Data {
+        Data(["\(protocolName) fetch", bucket, name, String(timestamp)].joined(separator: "\n").utf8)
+    }
+
+    /// What a sealed edit is bound to: the bucket alone, because the name is
+    /// given by the service after the agent has sealed it.
+    public static func associatedData(editBucket bucket: String) -> Data {
+        Data("\(protocolName) edit\n\(bucket)".utf8)
+    }
+
+    private static func canonical(_ lines: [String], body: Data) -> Data {
+        let digest = Data(SHA256.hash(data: body))
+        return Data((lines + [Base64URL.encode(digest)]).joined(separator: "\n").utf8)
     }
 }

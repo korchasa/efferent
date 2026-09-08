@@ -34,6 +34,7 @@ import {
   writeDay,
 } from "./archive.ts";
 import { installConnectionHandoff } from "./connection.ts";
+import type { EditItem } from "../protocol/edits.ts";
 
 interface WriterKey {
   /** Ed25519 private key, pkcs8. Stands in for the one a phone would make. */
@@ -73,6 +74,10 @@ async function main(args: string[]): Promise<void> {
       return await ask(options);
     case "status":
       return await status(options.url);
+    case "write":
+      return await writeEdits(options);
+    case "edits":
+      return await edits(options);
     default:
       console.error(
         [
@@ -86,6 +91,8 @@ async function main(args: string[]): Promise<void> {
           "  efferent status [--url <endpoint>]    what the archive holds, and what the mirror does",
           "  efferent query [filters]              answer from the mirror, offline",
           "  efferent ask [filters]                answer from the archive, fetching only those days",
+          "  efferent write --file <items.json>    seal, sign and hand the phone an edit (- for stdin)",
+          "  efferent edits [--all] [--after <n>]  what became of the edits; pending only by default",
           "",
           "filters (query, ask and read):",
           "  --metric <steps|sleep|…>             --bucket <hour|day>",
@@ -106,8 +113,15 @@ async function connect(path: string): Promise<void> {
   const connection = await installConnectionHandoff(text);
   console.log(`connected: ${connection.bucket}`);
   console.log(`saved:     ${HOME}/reading-key.json`);
+  if (connection.editor) console.log(`saved:     ${HOME}/editor-key.json`);
   console.log(`archive:   ${connection.endpoint}`);
   console.log("the reading key stayed on this machine");
+  if (!connection.editor) {
+    console.log(
+      "this handoff predates writing: the agent can read the archive and cannot write into " +
+        "Health — a fresh handoff from the phone adds the editor key",
+    );
+  }
 }
 
 async function keygen(): Promise<void> {
@@ -271,6 +285,68 @@ async function status(url?: string): Promise<void> {
   );
 }
 
+/**
+ * Hand the phone an edit: a JSON list of items, or an object with `items` in it.
+ *
+ * Everything that can be wrong with an item is said here before anything is
+ * sealed; what the phone then does with it is a question for `edits`.
+ */
+async function writeEdits(options: Record<string, string>): Promise<void> {
+  const path = requireOption(options, "file");
+  const text = path === "-"
+    ? await new Response(Deno.stdin.readable).text()
+    : await Deno.readTextFile(path);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    return fail(`${path} is not JSON: ${(error as Error).message}`);
+  }
+  const items = Array.isArray(parsed) ? parsed : (parsed as { items?: unknown })?.items;
+  if (!Array.isArray(items)) fail(`${path} must hold a list of items, or an object with "items"`);
+
+  const state = await loadState(options.url);
+  const archive = await openArchive(state.endpoint);
+  const answer = await archive.submitEdits(items as EditItem[]);
+  console.log(`submitted: ${answer.name}`);
+  console.log(`at:        ${answer.at}`);
+  console.log(`bytes:     ${answer.bytes}, ${items.length} item${items.length === 1 ? "" : "s"}`);
+  console.log(
+    "the phone applies it the next time it is opened or wakes to send; `efferent edits` says when",
+  );
+}
+
+/** What the service holds for the phone, and what the phone said about it. */
+async function edits(options: Record<string, string>): Promise<void> {
+  const state = await loadState(options.url);
+  const archive = await openArchive(state.endpoint);
+  const page = await archive.edits({
+    status: options.all ? "all" : "pending",
+    after: options.after || undefined,
+  });
+  if (page.edits.length === 0) {
+    console.log(options.all ? "no edits" : "nothing pending — --all shows what was applied");
+    return;
+  }
+  for (const entry of page.edits) {
+    const counts = entry.status === "pending"
+      ? ""
+      : `  ${entry.applied} applied, ${entry.refused} refused`;
+    console.log(`${entry.name}  ${entry.status.padEnd(7)}  ${entry.at}${counts}`);
+    for (const item of entry.items ?? []) {
+      console.log(
+        `    ${item.op.padEnd(6)} ${item.id}${item.metric ? `  ${item.metric} ${item.day}` : ""}`,
+      );
+    }
+    for (const refusal of entry.refusals ?? []) {
+      console.log(
+        `    refused item ${refusal.item}${refusal.id ? ` (${refusal.id})` : ""}: ${refusal.code}`,
+      );
+    }
+  }
+  if (page.next) console.log(`more: --after ${page.next}`);
+}
+
 /** Answer from the mirror. No network, so it works on a plane and it is fast
  * enough to call in a loop. */
 async function query(options: Record<string, string>): Promise<void> {
@@ -422,12 +498,19 @@ function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/** `--name value` pairs, and a bare `--name` at the end or before another
+ * option is a flag, held as "true" so `--all` is not read as an empty value. */
 function parseOptions(args: string[]): Record<string, string> {
   const options: Record<string, string> = {};
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
     if (!argument.startsWith("--")) continue;
-    options[argument.slice(2)] = args[index + 1] ?? "";
+    const next = args[index + 1];
+    if (next === undefined || next.startsWith("--")) {
+      options[argument.slice(2)] = "true";
+      continue;
+    }
+    options[argument.slice(2)] = next;
     index++;
   }
   return options;

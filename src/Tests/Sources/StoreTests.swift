@@ -139,6 +139,40 @@ final class StoreTests: XCTestCase {
         XCTAssertFalse(try store.activateArchive("new-bucket"), "the same archive reset twice")
     }
 
+    // MARK: - What the phone wrote into Health
+
+    func testVersionsClimbPerIdAndNotAcrossIds() throws {
+        let store = try Store.inMemory()
+        XCTAssertEqual(try store.nextVersion(for: "agent:meal:1"), 1)
+        XCTAssertEqual(try store.nextVersion(for: "agent:meal:1"), 2)
+        XCTAssertEqual(try store.nextVersion(for: "agent:meal:2"), 1)
+        XCTAssertEqual(try store.nextVersion(for: "agent:meal:1"), 3)
+        try store.forgetWritten("agent:meal:1")
+        XCTAssertEqual(
+            try store.nextVersion(for: "agent:meal:1"), 4,
+            "a forgotten id must not start over: HealthKit keeps the old version and would refuse a lower one"
+        )
+        XCTAssertEqual(try store.nextVersion(for: "agent:meal:2"), 2)
+    }
+
+    func testTheEditorIsRegisteredPerArchiveAndTheWrittenIdsStayWithThePhone() throws {
+        let store = try Store.inMemory()
+        try store.activateArchive("old-bucket")
+        XCTAssertFalse(try store.editorRegistered(for: "old-bucket"))
+        try store.recordEditorRegistered(for: "old-bucket")
+        XCTAssertTrue(try store.editorRegistered(for: "old-bucket"))
+        XCTAssertFalse(try store.editorRegistered(for: "new-bucket"))
+        _ = try store.nextVersion(for: "agent:meal:1")
+
+        XCTAssertTrue(try store.activateArchive("new-bucket"))
+        XCTAssertFalse(try store.editorRegistered(for: "old-bucket"), "a new archive registers its editor again")
+        XCTAssertFalse(try store.editorRegistered(for: "new-bucket"))
+        XCTAssertEqual(
+            try store.nextVersion(for: "agent:meal:1"), 2,
+            "the samples in Health are the phone's whatever the archive"
+        )
+    }
+
     func testRememberingALegacyArchiveDoesNotRequeueItsDays() throws {
         let store = try Store.inMemory()
         try store.recordSent(day: "2026-08-07", digest: Data([0xAB]), sampleIdentifiers: [])

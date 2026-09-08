@@ -13,7 +13,8 @@ import GRDB
 /// - `sample` — which day each HealthKit record belongs to. The one place a
 ///              record's own contents are shadowed, and only its date;
 /// - `anchor` — where each HealthKit reader stopped, one row per sample type;
-/// - `meta`   — how far the first export has walked, and when the last day went.
+/// - `meta`   — how far the first export has walked, and when the last day went;
+/// - `written` — the version each agent-given id was last written to Health at.
 enum Database {
     static func migrator() -> DatabaseMigrator {
         var migrator = DatabaseMigrator()
@@ -77,6 +78,22 @@ enum Database {
             try db.create(
                 index: "day_on_dirty", on: "day", columns: ["dirty", "attempts", "day"]
             )
+        }
+
+        // What the phone has written into Health at an agent's request.
+        //
+        // `written` is one row per id an agent has used: the version HealthKit
+        // was last handed for it. HealthKit replaces a sample when the same
+        // sync identifier arrives with a higher version and ignores a lower or
+        // equal one, so the number has to climb across launches and survive
+        // the id being deleted — a deleted id that came back at version 1 would
+        // be silently ignored for as long as the old version was higher.
+        migrator.registerMigration("v3.edits") { db in
+            try db.create(table: "written") { table in
+                table.column("id", .text).primaryKey().notNull()
+                table.column("version", .integer).notNull()
+                table.column("updatedAt", .double).notNull()
+            }
         }
 
         return migrator
@@ -158,4 +175,9 @@ enum MetaKey: String {
     /// re-cut a decade of history into different days — every one of them
     /// changed, every one of them owed again.
     case dayTimeZone = "day.timezone"
+    /// The bucket whose service holds this phone's editor key. Registering is
+    /// a writer-signed request the service answers the same way every time, so
+    /// this only saves the round trip; it is cleared with the archive because
+    /// another archive is another service-side record.
+    case editorRegisteredFor = "editor.bucket"
 }

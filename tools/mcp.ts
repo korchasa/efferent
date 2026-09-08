@@ -16,6 +16,12 @@
  * and distributions — shapes where the corrections have already happened — with
  * one raw escape hatch for the questions nobody anticipated.
  *
+ * **Writing goes through the phone, and only the phone.** `phone_data_write`
+ * seals an edit to the reading key and signs it with the editor key; the
+ * service holds ciphertext it cannot open, and the phone opens it, checks the
+ * signature itself and puts the samples into Health. Nothing here can put a
+ * number into Health directly, and nothing on the service can either.
+ *
  * The descriptions carry what a reader has to know, because that is the point:
  * no prompt is written anywhere, so anything the agent needs must arrive with
  * the tool.
@@ -57,6 +63,14 @@ import {
   whatADayHolds,
   workouts,
 } from "./analysis.ts";
+import {
+  type EditItem,
+  MAX_ITEMS_PER_EDIT,
+  OUTCOME_CODES,
+  SLEEP_STAGES,
+  WRITABLE,
+} from "../protocol/edits.ts";
+import { isEditName } from "../protocol/ids.ts";
 
 const NAME = "efferent";
 const VERSION = "1.0.0";
@@ -415,6 +429,7 @@ const TOOLS: Tool[] = [
           note: note(remote, mirrored.length),
         },
         metrics: fold(days),
+        writable: WRITABLE,
         howToRead: [
           "A total (steps, distance, energy, exercise and stand minutes) is already summed by",
           "Health and must never be summed again from records — several devices write the same",
@@ -422,6 +437,9 @@ const TOOLS: Tool[] = [
           "Totals come bucketed by day, and by hour only from the day the app was installed.",
           "A record belongs to the day it started on, so a night that began before midnight is",
           "in the evening's day.",
+          "`writable` is what phone_data_write may put into Health, with the one unit each",
+          "takes; a metric written there shows up in the other tools once the phone has applied",
+          "it and re-uploaded the day.",
         ],
       };
     },
@@ -431,7 +449,9 @@ const TOOLS: Tool[] = [
     title: "Daily totals",
     description: [
       "One row per day with the day's totals: steps, distance, flights, active and basal",
-      "energy, exercise and stand minutes. This is the table to answer 'how active was I'.",
+      "energy, exercise and stand minutes, and — once something has written them — dietary",
+      "energy, protein, carbohydrates, fat and water. This is the table to answer 'how active",
+      "was I' and 'what did I eat'.",
       "",
       "Reads the daily buckets only, so it can never double-count against the hourly ones.",
       "A null means the day carries no total for that metric, which is not the same as a zero.",
@@ -696,6 +716,138 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: "phone_data_write",
+    title: "Write into Health",
+    description: [
+      "Put entries into Apple Health through the phone: meals as dietary energy, protein,",
+      "carbohydrates, fat and water; sleep by stage; body mass. The edit is sealed to the",
+      "phone's key and signed here, the service stores it unopened, and the phone applies it",
+      "the next time it is opened or wakes to send — minutes to hours, never at once.",
+      "phone_data_edits says when it has, and the days it touched are re-uploaded so the",
+      "other tools show the result.",
+      "",
+      "Each item is a `put` or a `delete`. The `id` is your handle for one entry: a second",
+      "`put` under the same id replaces the entry, a `delete` removes it, so pick ids you can",
+      "rebuild — `agent:meal:2026-09-07:lunch` — and reuse them for a correction. Only entries",
+      "written this way can be replaced or removed; what the watch, the phone or another app",
+      "recorded is Health's and stays as it is.",
+      "",
+      "`start` and `end` are whole seconds since 1970 and both must be in the past — Health",
+      "refuses an entry that ends in the future. A quantity needs `value` and the metric's",
+      `exact unit (${
+        Object.entries(WRITABLE)
+          .filter(([, shape]) => shape.kind === "quantity")
+          .map(([name, shape]) => `${name} in ${shape.kind === "quantity" ? shape.unit : ""}`)
+          .join(", ")
+      }); sleep needs \`stage\` and no value.`,
+      "A meal is a short interval; a night of sleep is one item per stage, or one",
+      "asleepUnspecified stretch when the stages are not known. Anything wrong with an item",
+      "is refused here, before anything is sealed, with the field named.",
+    ].join("\n"),
+    inputSchema: {
+      type: "object",
+      required: ["items"],
+      properties: {
+        items: {
+          type: "array",
+          minItems: 1,
+          maxItems: MAX_ITEMS_PER_EDIT,
+          description: `The entries to write, up to ${MAX_ITEMS_PER_EDIT} in one edit.`,
+          items: {
+            type: "object",
+            required: ["op", "id"],
+            properties: {
+              op: {
+                type: "string",
+                enum: ["put", "delete"],
+                description: "put adds or replaces the entry under this id; delete removes it.",
+              },
+              id: {
+                type: "string",
+                description:
+                  "Your handle for the entry: 1 to 120 characters of letters, digits, . _ : -",
+              },
+              metric: {
+                type: "string",
+                enum: Object.keys(WRITABLE),
+                description: "What the entry is. put only.",
+              },
+              start: { type: "integer", description: "Whole seconds since 1970. put only." },
+              end: {
+                type: "integer",
+                description: "Whole seconds since 1970, not before start, in the past. put only.",
+              },
+              value: {
+                type: "number",
+                description: "For a quantity: the amount, zero or more, in the metric's unit.",
+              },
+              unit: {
+                type: "string",
+                description: "For a quantity: the metric's own unit, exactly.",
+              },
+              stage: {
+                type: "string",
+                enum: [...SLEEP_STAGES],
+                description: "For sleep: which stage this stretch was.",
+              },
+            },
+          },
+        },
+      },
+    },
+    run: async (input) => {
+      const items = input.items;
+      if (!Array.isArray(items)) throw new Error("items must be a list");
+      const { archive } = await reader.open();
+      const answer = await archive.submitEdits(items as EditItem[]);
+      return {
+        ...answer,
+        items: items.length,
+        note: "Stored sealed; the phone applies it the next time it is opened or wakes to send. " +
+          "phone_data_edits reports what became of it, by this name.",
+      };
+    },
+  },
+  {
+    name: "phone_data_edits",
+    title: "What became of the edits",
+    description: [
+      "The edits sent to the phone and what it did with each: `pending` until the phone has",
+      "looked, then `applied`, `partial` or `failed` with counts. For anything refused, the",
+      "phone's word for why is listed per item — badRange for an end in the future, badUnit",
+      "for a unit the metric does not take, unauthorized when Health access to that type was",
+      "declined on the phone, notFound for a delete of an id never written, healthRefused when",
+      "Health itself said no. Edits this machine submitted also show the ids they carried.",
+      "",
+      "An edit stays pending until the phone is opened or wakes to send, which can be hours.",
+      "Newest last; follow `next` for more.",
+    ].join("\n"),
+    inputSchema: {
+      type: "object",
+      properties: {
+        status: {
+          type: "string",
+          enum: ["pending", "all"],
+          description: "pending lists only what the phone has not applied yet. Defaults to all.",
+        },
+        after: {
+          type: "string",
+          description: "Continue after this edit name, as the previous answer's `next` gave it.",
+        },
+      },
+    },
+    run: async (input) => {
+      const status = input.status === "pending" ? "pending" : "all";
+      const after = input.after ? String(input.after) : undefined;
+      if (after && !isEditName(after)) {
+        throw new Error("after must be the name of an edit, as an earlier answer gave it");
+      }
+      const { archive } = await reader.open();
+      const page = await archive.edits({ after, status });
+      return { ...page, codes: [...OUTCOME_CODES] };
+    },
+  },
+  {
     name: "phone_data_sync",
     title: "Copy the archive down",
     description: [
@@ -862,6 +1014,7 @@ export async function handle(request: Request): Promise<unknown | null> {
           "This is one person's Apple Health history, day by day, from an end-to-end encrypted",
           "archive. Call phone_data_overview first: it says what the data covers, when each metric",
           "starts, and the few ways this data misleads a reader who treats it as a plain table.",
+          "phone_data_write puts meals, sleep and weight into Health through the phone.",
         ].join(" "),
       });
     }

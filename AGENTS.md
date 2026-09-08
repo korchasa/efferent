@@ -234,6 +234,32 @@ This file is the rulebook.
   The size the service accepted is written down per day (`day.bytes`) and compared against the
   listing; days sent before that was recorded have nothing to compare and are left alone rather than
   suspected.
+- **An edit never becomes a day on the wire.** An edit is applied to Health, the days it touched are
+  marked, and the uploader rebuilds those days from Health like any other change. A path that turned
+  an edit into a day directly would put a second shape into the archive and skip the one source of
+  truth; if you find yourself writing a day from an edit's items, the design has gone wrong.
+- **The phone verifies the editor signature itself.** The service checks it too, to keep strangers
+  out of the queue, but a phone that trusted the service's check would let a service that decided
+  on its own what goes into Health write into Health. `Applier` checks the header key against the
+  editor key the phone registered and the signature over `CanonicalRequest.edit`, and a failure is
+  reported as `badSignature` so the queue moves on.
+- **An edit is replaced by its outcome, and never dropped without one.** The service deletes `e/`
+  only when it writes `o/`, and the phone reports an outcome only after it has applied what it could.
+  A transport failure on the outcome leaves the edit in the queue and it is applied again next
+  launch — which is safe because of the next rule.
+- **An id maps to a sync identifier, and the version lives on the phone.** `efferent:<id>` is the
+  HealthKit sync identifier and `Store.nextVersion` hands out the version, climbing per id. That is
+  what makes applying the same edit twice end with one sample instead of two, and it is why the
+  agent never sends a version: it cannot know how many times the phone has already tried.
+- **An outcome carries indexes and codes only.** The service and whoever lists the queue learn how
+  many items landed and a word per refusal — never a metric, never a value, never a day. Anything
+  more in the outcome would say what was in the edit, which the seal exists to keep.
+- **The pause holds edits as it holds days.** A paused phone neither sends nor applies; the queue
+  waits and nothing is lost. Write access not yet asked for is the same shape: the applier answers
+  `notAsked` and touches nothing until the sheet has been shown.
+- **A writable metric is a readable one.** `WritableMetric.all` is a subset of the two reading
+  catalogues, and a test holds them together, because an edit that could never show up in the
+  archive afterwards would be a write nobody can check.
 
 ## The parts that must agree across languages
 
@@ -254,6 +280,12 @@ PyHPKE 0.6.3 in the selected local interpreter.
   returns ciphertext only.
 - **The signing key and the reading key are separate on purpose.** One writes, one reads. Merging
   them would mean an agent's config file grants the right to forge uploads.
+- **The editor key is a third key, and it is separate too.** The phone makes it, registers its public
+  half with a writer-signed `PUT /b/<bucket>/editor`, and hands the private half to the agent as
+  the fourth field of the handoff (`efferent-editor-v1.<private>.<public>`). It can sign an edit and
+  nothing else: not open a day, not forge an upload. It goes from phone to agent and nowhere else,
+  exactly like the reading key, and `.gitleaks.toml` matches its handoff prefix as it does the
+  reading key's. A three-field handoff still imports; the reader it makes cannot write, and says so.
 - **The stored reader key is bare base64 PKCS8; the phone handoff key is raw base64url.** A stock
   secret scanner looks for PEM armour and can read either as ordinary text. `.gitleaks.toml` matches
   the stored PKCS8 prefix and excuses the interop fixture by file *and* value, so replacing that
@@ -333,6 +365,17 @@ it exists because the wrong version fails quietly.
 - Read permission is unknowable. `authorizationStatus(for:)` always answers `.notDetermined` for
   reads, on purpose, so an app cannot work out what is being hidden from it. Do not build a "no
   access" screen — it cannot be correct. Show counters instead.
+- **Write permission is knowable, and the writer uses it.** `authorizationStatus(for:)` answers
+  honestly for a type the app asked to share: `.notDetermined` before the sheet has been shown
+  (the applier waits — `notAsked`), `.sharingDenied` afterwards (an item is refused `unauthorized`).
+  The sheet is asked for on the first active launch after the update, from `applicationDidBecomeActive`,
+  never from a background launch that has no screen to show it on.
+- **Only samples this app wrote can be replaced or removed.** HealthKit lets an app delete its own
+  objects and nobody else's, and a sync identifier replaces only a sample from the same source. So
+  a `put` under an id can never overwrite the watch's sleep, and a `delete` of something the app did
+  not write answers `notFound`. This is the reason the agent's handle is an id of its own choosing.
+- **A sample that ends in the future is refused by HealthKit** with an error that names nothing.
+  The writer says `badRange` before it gets there.
 - Raw samples must not be summed. iPhone, Watch and third-party apps all write steps, and adding
   them up double-counts. Totals come from `HKStatisticsCollectionQuery` with `.cumulativeSum`, which
   picks a source per interval the way the Health app does.
