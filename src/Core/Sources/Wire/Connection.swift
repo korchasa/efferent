@@ -67,34 +67,52 @@ public struct Deployment: Equatable, Sendable {
 ///
 /// `readingKey` is one value but contains both raw X25519 halves. Including the
 /// public half lets a local importer prove the secret belongs to the bucket in
-/// the MCP URL before it overwrites any local state.
+/// the MCP URL before it overwrites any local state. `editorKey` is the same
+/// shape over the Ed25519 key the phone registered for edits: with it the agent
+/// can ask the phone to write into Health, and without it — an older phone, or
+/// an archive nobody may write to — it can only read.
 public struct ConnectionHandoff: Equatable, Sendable {
     public static let instruction =
-        "Connect the supplied Efferent MCP and call setup_guide first. Keep the reading key local and never pass it to a remote tool."
+        "Connect the supplied Efferent MCP and call setup_guide first. Keep the reading key and the editor key local and never pass either to a remote tool."
 
     public let mcpURL: URL
     public let readingKey: String
+    public let editorKey: String?
 
-    public init(deployment: Deployment, destination: Destination, privateKey: Data) {
+    public init(
+        deployment: Deployment,
+        destination: Destination,
+        privateKey: Data,
+        editorPrivateKey: Data? = nil,
+        editorPublicKey: Data? = nil
+    ) {
         mcpURL = deployment.mcpBaseURL.appendingPathComponent(destination.bucket)
         readingKey = [
             "efferent-reading-v1",
             Base64URL.encode(privateKey),
             Base64URL.encode(destination.readingPublicKey),
         ].joined(separator: ".")
+        if let editorPrivateKey, let editorPublicKey {
+            editorKey = [
+                "efferent-editor-v1",
+                Base64URL.encode(editorPrivateKey),
+                Base64URL.encode(editorPublicKey),
+            ].joined(separator: ".")
+        } else {
+            editorKey = nil
+        }
     }
 
     public var text: String {
-        """
-        Instruction:
-        \(Self.instruction)
-
-        MCP:
-        \(mcpURL.absoluteString)
-
-        Reading key:
-        \(readingKey)
-        """
+        var blocks = [
+            "Instruction:\n\(Self.instruction)",
+            "MCP:\n\(mcpURL.absoluteString)",
+            "Reading key:\n\(readingKey)",
+        ]
+        if let editorKey {
+            blocks.append("Editor key:\n\(editorKey)")
+        }
+        return blocks.joined(separator: "\n\n")
     }
 }
 
@@ -164,6 +182,55 @@ public enum ArchiveCreator {
             )
         }
         return request
+    }
+
+    /// The request that tells the service which editor key to take edits from.
+    ///
+    /// Signed by the writer key over the canonical registration message — the
+    /// bucket, the moment and a hash of the key — so only the phone that owns
+    /// the bucket can name its editor. Idempotent: the service answers the same
+    /// key with 200 and a new one with 201.
+    public static func editorRequest(
+        destination: Destination,
+        identity: DeviceIdentity,
+        editorPublicKey: Data,
+        now: Date = Date()
+    ) throws -> URLRequest {
+        let key = try identity.signingKey()
+        let timestamp = Int64(now.timeIntervalSince1970)
+        let signature = try key.signature(for: CanonicalRequest.editorRegistration(
+            bucket: destination.bucket, timestamp: timestamp, body: editorPublicKey
+        ))
+
+        var request = URLRequest(url: destination.editorURL)
+        request.httpMethod = "PUT"
+        request.httpBody = editorPublicKey
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        request.setValue(String(timestamp), forHTTPHeaderField: "x-efferent-timestamp")
+        request.setValue(
+            Base64URL.encode(key.publicKey.rawRepresentation), forHTTPHeaderField: "x-efferent-writer"
+        )
+        request.setValue(Base64URL.encode(Data(signature)), forHTTPHeaderField: "x-efferent-signature")
+        return request
+    }
+
+    /// Register the editor key with the archive's service.
+    public static func registerEditor(
+        destination: Destination,
+        identity: DeviceIdentity,
+        editorPublicKey: Data,
+        session: URLSession = .shared,
+        now: Date = Date()
+    ) async throws {
+        let (body, response) = try await session.data(for: editorRequest(
+            destination: destination, identity: identity, editorPublicKey: editorPublicKey, now: now
+        ))
+        guard let http = response as? HTTPURLResponse else {
+            throw ConnectionError.server(status: 0, message: "the server did not return HTTP")
+        }
+        guard (200 ..< 300).contains(http.statusCode) else {
+            throw ConnectionError.refusal(status: http.statusCode, body: body)
+        }
     }
 
     /// Claim the bucket, attesting first.

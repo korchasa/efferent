@@ -10,11 +10,14 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
+from urllib.error import HTTPError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 import zlib
 
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from pyhpke import AEADId, CipherSuite, KDFId, KEMId
 
@@ -26,20 +29,34 @@ SUITE = CipherSuite.new(
     KDFId.HKDF_SHA256,
     AEADId.CHACHA20_POLY1305,
 )
+USER_AGENT = "efferent-local-reader/1.0"
+RAW = (serialization.Encoding.Raw, serialization.PublicFormat.Raw)
 
 
 def base64url(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
 
-def field(handoff: str, name: str) -> str:
+def to_base64url(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode()
+
+
+def optional_field(handoff: str, name: str) -> str | None:
     match = re.search(rf"(?:^|\n){re.escape(name)}:\s*\r?\n([^\r\n]+)", handoff)
-    if not match:
+    return match.group(1).strip() if match else None
+
+
+def field(handoff: str, name: str) -> str:
+    value = optional_field(handoff, name)
+    if not value:
         raise ValueError(f"the handoff has no {name} field")
-    return match.group(1).strip()
+    return value
 
 
-def connection(handoff: str) -> tuple[str, str, bytes]:
+def connection(handoff: str) -> tuple[str, str, bytes, bytes | None]:
+    """The endpoint, the bucket, the raw reading private key, and the raw editor
+    private key when the handoff carries one. A handoff from before writing
+    existed has three fields; such a connection reads and cannot write."""
     mcp = urlsplit(field(handoff, "MCP"))
     if mcp.scheme not in ("http", "https") or mcp.query or mcp.fragment:
         raise ValueError("MCP must be an HTTP URL without a query or fragment")
@@ -65,14 +82,31 @@ def connection(handoff: str) -> tuple[str, str, bytes]:
     if derived != bucket:
         raise ValueError("the reading key belongs to a different bucket than the MCP URL")
 
+    editor_raw = None
+    editor_field = optional_field(handoff, "Editor key")
+    if editor_field:
+        editor_parts = editor_field.split(".")
+        if len(editor_parts) != 3 or editor_parts[0] != "efferent-editor-v1":
+            raise ValueError("the editor key is not an Efferent editor key version 1")
+        editor_raw, editor_public = map(base64url, editor_parts[1:])
+        if len(editor_raw) != 32 or len(editor_public) != 32:
+            raise ValueError("the editor key must contain two 32-byte Ed25519 keys")
+        actual_editor = Ed25519PrivateKey.from_private_bytes(editor_raw).public_key().public_bytes(*RAW)
+        if not hmac.compare_digest(actual_editor, editor_public):
+            raise ValueError("the private and public halves of the editor key do not match")
+
     endpoint = urlunsplit((mcp.scheme, mcp.netloc, prefix, "", "")).rstrip("/")
-    return endpoint, bucket, private_raw
+    return endpoint, bucket, private_raw, editor_raw
+
+
+def load_handoff(handoff_path: Path) -> tuple[str, str, bytes, bytes | None]:
+    if os.name == "posix" and handoff_path.stat().st_mode & 0o077:
+        raise PermissionError("the handoff file must be readable only by its owner: chmod 600")
+    return connection(handoff_path.read_text())
 
 
 def read_day(handoff_path: Path, day: str) -> bytes:
-    if os.name == "posix" and handoff_path.stat().st_mode & 0o077:
-        raise PermissionError("the handoff file must be readable only by its owner: chmod 600")
-    endpoint, bucket, private_raw = connection(handoff_path.read_text())
+    endpoint, bucket, private_raw, _ = load_handoff(handoff_path)
     aad = f"efferent/v1\n{bucket}\n{day}".encode()
 
     # This request contains only the bucket and date. The reading key remains local.
@@ -80,7 +114,7 @@ def read_day(handoff_path: Path, day: str) -> bytes:
         f"{endpoint}/b/{bucket}/d/{day}",
         headers={
             "Accept": "application/octet-stream",
-            "User-Agent": "efferent-local-reader/1.0",
+            "User-Agent": USER_AGENT,
         },
     )
     with urlopen(request, timeout=30) as response:
@@ -163,11 +197,170 @@ def instant(seconds: int) -> str:
     return datetime.fromtimestamp(seconds, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# Writing into Health goes the other way: an edit is sealed to the phone's own
+# reading key, signed with the editor key, and handed to the service, which
+# stores it unopened. The phone opens it, checks the signature itself and puts
+# the samples into Health. Nothing here, and nothing on the service, can put a
+# number into Health directly.
+
+EDIT_FORMAT_VERSION = 1
+MAX_ITEMS_PER_EDIT = 500
+SLEEP_STAGES = ("inBed", "awake", "asleepUnspecified", "asleepCore", "asleepDeep", "asleepREM")
+WRITABLE = {
+    "sleep": None,
+    "dietaryEnergy": "kcal",
+    "dietaryProtein": "g",
+    "dietaryCarbohydrates": "g",
+    "dietaryFat": "g",
+    "dietaryWater": "mL",
+    "bodyMass": "kg",
+}
+PUT_KEYS = ("op", "id", "metric", "start", "end", "value", "unit", "stage")
+DELETE_KEYS = ("op", "id")
+ID = re.compile(r"[A-Za-z0-9._:-]{1,120}")
+
+
+def validate_items(items: object) -> list[dict]:
+    """Every way an item can be wrong is said here, before anything is sealed."""
+    if not isinstance(items, list) or not items:
+        raise ValueError("items must be a list with at least one item")
+    if len(items) > MAX_ITEMS_PER_EDIT:
+        raise ValueError(f"an edit may carry {MAX_ITEMS_PER_EDIT} items, not {len(items)}")
+    for index, item in enumerate(items):
+        try:
+            validate_item(item)
+        except ValueError as error:
+            raise ValueError(f"item {index}: {error}") from None
+    return items
+
+
+def validate_item(item: object) -> None:
+    if not isinstance(item, dict):
+        raise ValueError("an item must be an object")
+    if item.get("op") not in ("put", "delete"):
+        raise ValueError("op must be put or delete")
+    if not isinstance(item.get("id"), str) or not ID.fullmatch(item["id"]):
+        raise ValueError("id must be 1 to 120 characters of letters, digits, . _ : -")
+    allowed = PUT_KEYS if item["op"] == "put" else DELETE_KEYS
+    for key in item:
+        if key not in allowed:
+            raise ValueError(f"{key} is not a field of a {item['op']} item")
+    if item["op"] == "delete":
+        return
+    if item.get("metric") not in WRITABLE:
+        raise ValueError(f"metric {item.get('metric')!r} cannot be written")
+    for name in ("start", "end"):
+        value = item.get(name)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"{name} must be whole seconds since 1970")
+    if item["end"] < item["start"]:
+        raise ValueError("end must not be before start")
+    unit = WRITABLE[item["metric"]]
+    if unit is not None:
+        if "stage" in item:
+            raise ValueError("stage belongs to sleep, not to a quantity")
+        value = item.get("value")
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0 or value != value:
+            raise ValueError("value must be a finite number, zero or more")
+        if item.get("unit") != unit:
+            raise ValueError(f"unit must be {unit} for {item['metric']}")
+    else:
+        if "value" in item or "unit" in item:
+            raise ValueError("value and unit belong to a quantity, not to sleep")
+        if item.get("stage") not in SLEEP_STAGES:
+            raise ValueError(f"stage must be one of {', '.join(SLEEP_STAGES)}")
+
+
+def pack_edit(items: list[dict]) -> bytes:
+    """Raw-deflate-compressed {"v":1,"items":[...]}, keys in a fixed order."""
+    ordered = [
+        {key: item[key] for key in (PUT_KEYS if item["op"] == "put" else DELETE_KEYS) if key in item}
+        for item in items
+    ]
+    text = json.dumps({"v": EDIT_FORMAT_VERSION, "items": ordered}, separators=(",", ":"))
+    compressor = zlib.compressobj(wbits=-zlib.MAX_WBITS)
+    return compressor.compress(text.encode()) + compressor.flush()
+
+
+def write_edit(handoff_path: Path, items_path: Path) -> str:
+    endpoint, bucket, private_raw, editor_raw = load_handoff(handoff_path)
+    if editor_raw is None:
+        raise ValueError(
+            "this handoff has no Editor key field, so it predates writing: "
+            "the agent can read the archive and cannot write into Health"
+        )
+    loaded = json.loads(items_path.read_text())
+    items = validate_items(loaded["items"] if isinstance(loaded, dict) else loaded)
+
+    # Sealed to the phone's reading key, with the bucket in the tag; the service
+    # names the edit afterwards and never sees inside it.
+    public_raw = X25519PrivateKey.from_private_bytes(private_raw).public_key().public_bytes(*RAW)
+    enc, context = SUITE.create_sender_context(
+        SUITE.kem.deserialize_public_key(public_raw), info=INFO
+    )
+    sealed = bytes([SEALED_VERSION]) + enc + context.seal(
+        pack_edit(items), aad=f"efferent/v1 edit\n{bucket}".encode()
+    )
+
+    # Signed by the editor key over the canonical message the service and the
+    # phone both check: the purpose, the bucket, the time and a digest of the bytes.
+    timestamp = int(time.time())
+    digest = to_base64url(hashlib.sha256(sealed).digest())
+    message = f"efferent/v1 edit\n{bucket}\n{timestamp}\n{digest}".encode()
+    editor = Ed25519PrivateKey.from_private_bytes(editor_raw)
+
+    request = Request(
+        f"{endpoint}/b/{bucket}/edits",
+        data=sealed,
+        method="POST",
+        headers={
+            "Content-Type": "application/octet-stream",
+            "User-Agent": USER_AGENT,
+            "X-Efferent-Timestamp": str(timestamp),
+            "X-Efferent-Editor": to_base64url(editor.public_key().public_bytes(*RAW)),
+            "X-Efferent-Signature": to_base64url(editor.sign(message)),
+        },
+    )
+    try:
+        with urlopen(request, timeout=30) as response:
+            return response.read().decode()
+    except HTTPError as error:
+        raise SystemExit(f"the service refused the edit: {error.code} {error.read().decode()}")
+
+
+def list_edits(handoff_path: Path) -> str:
+    """Every edit and what the phone said about it, one JSON object per line.
+    The listing is keyless: it names edits and counts, never their contents."""
+    endpoint, bucket, _, _ = load_handoff(handoff_path)
+    lines = []
+    after = ""
+    while True:
+        query = f"?status=all&after={after}" if after else "?status=all"
+        request = Request(
+            f"{endpoint}/b/{bucket}/edits{query}", headers={"User-Agent": USER_AGENT}
+        )
+        with urlopen(request, timeout=30) as response:
+            page = json.loads(response.read())
+        lines.extend(json.dumps(entry, sort_keys=True) for entry in page["edits"])
+        if not page.get("next"):
+            return "".join(line + "\n" for line in lines)
+        after = page["next"]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--handoff", required=True, type=Path)
-    parser.add_argument("--day", required=True, help="YYYY-MM-DD")
+    what = parser.add_mutually_exclusive_group(required=True)
+    what.add_argument("--day", help="YYYY-MM-DD: fetch and decrypt that day")
+    what.add_argument("--write", type=Path, help="a JSON file of items to write into Health")
+    what.add_argument("--edits", action="store_true", help="list the edits and their outcomes")
     args = parser.parse_args()
+    if args.write:
+        sys.stdout.write(write_edit(args.handoff, args.write) + "\n")
+        return
+    if args.edits:
+        sys.stdout.write(list_edits(args.handoff))
+        return
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.day):
         parser.error("--day must be YYYY-MM-DD")
     try:

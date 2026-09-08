@@ -43,6 +43,40 @@ final class WireTests: XCTestCase {
         XCTAssertTrue(handoff.text.contains("MCP:\n\(handoff.mcpURL.absoluteString)"))
         XCTAssertTrue(handoff.text.contains("Reading key:\n\(handoff.readingKey)"))
         XCTAssertFalse(handoff.mcpURL.absoluteString.contains(handoff.readingKey))
+        XCTAssertNil(handoff.editorKey, "no editor key was given, so none is promised")
+        XCTAssertFalse(handoff.text.contains("Editor key:"))
+    }
+
+    /// With an editor key the handoff carries a fourth block, in the same
+    /// shape as the reading key, so an agent that imports it can write as well
+    /// as read — and one that only knows three fields can still read.
+    func testTheHandoffCarriesTheEditorKeyAsAFourthField() throws {
+        let destination = try Destination(
+            endpoint: XCTUnwrap(URL(string: "https://efferent.example.com")),
+            readingPublicKey: Self.readingPublicKey
+        )
+        let deployment = try Deployment(
+            serviceURL: destination.endpoint,
+            mcpBaseURL: XCTUnwrap(URL(string: "https://efferent.example.com/mcp/b"))
+        )
+        let editor = Curve25519.Signing.PrivateKey()
+        let handoff = ConnectionHandoff(
+            deployment: deployment,
+            destination: destination,
+            privateKey: Data(repeating: 7, count: 32),
+            editorPrivateKey: editor.rawRepresentation,
+            editorPublicKey: editor.publicKey.rawRepresentation
+        )
+
+        let editorKey = try XCTUnwrap(handoff.editorKey)
+        XCTAssertTrue(editorKey.hasPrefix("efferent-editor-v1."))
+        XCTAssertEqual(editorKey.split(separator: ".").count, 3)
+        XCTAssertEqual(
+            Base64URL.decode(String(editorKey.split(separator: ".")[2])),
+            editor.publicKey.rawRepresentation
+        )
+        XCTAssertTrue(handoff.text.hasSuffix("Editor key:\n\(editorKey)"))
+        XCTAssertTrue(handoff.text.contains("Keep the reading key and the editor key local"))
     }
 
     func testThePhoneFollowsTheAddressItsBuildCarries() throws {

@@ -39,6 +39,36 @@ Worker requests once a day.
 Class A dominates both, and the tally writes are two thirds of it in the hourly case — the price of
 knowing what the service has been handed.
 
+## Edits, the other direction
+
+Counted from `server/src/index.ts` on **2026-09-08**, when the write path landed; not yet measured
+against a phone. An edit is one sealed object in `e/` until the phone answers for it, and then one
+small outcome in `o/` for good. In operations:
+
+- **The agent posting one edit**: 4 Class A — the queue is listed to count what is waiting, the edit
+  is written, both tallies are written back — and 3 Class B: the editor key and the two tallies. One
+  Worker request.
+- **The phone collecting it**: 1 Class A to list the queue per pass, however many edits are waiting,
+  then per edit 2 Class A — the outcome written, the edit deleted — and 4 Class B: the writer key
+  twice (once for the fetch, once for the outcome), the edit itself, and its head when the outcome
+  lands. Two Worker requests per edit and one per pass.
+- **The agent asking what became of it**: 2 Class A per page (`status=all` lists both prefixes) and,
+  for an edit the phone refused part of, 1 Class B for the outcome.
+- **Registering the editor key** is once per archive: 2 Class B and 1 Class A.
+
+So one edit, posted, collected and answered for, is about 7 Class A, 7 Class B and 4 Worker
+requests → **$0.000035**, or 3.5 cents per thousand edits. The days it touched are then rebuilt and
+sent by the ordinary path, which on an hourly phone is a request that exists anyway: one more Class A
+per past day named. A user who has an agent log ten entries a day, each as its own edit, adds about
+**$0.011 per user-month** — the same order as sending hourly. Batching a day's meals into one edit
+divides that by the number of items, since every ceiling above is per edit rather than per item.
+Storage is not worth the arithmetic: an edit of a few items is about 300 bytes and lives until it is
+applied, an outcome is under 100 bytes and lives forever.
+
+`MAX_PENDING_EDITS` is 500 per bucket, which is the R2 page size with room to count past it; a phone
+that has not been opened in a month against an agent writing ten edits a day reaches it in about
+seven weeks, and the agent is then refused with a 429 that says so until the phone catches up.
+
 ## One-time
 
 The first eleven-year export is 127 requests of 31 days each: 4,168 Class A, 381 Class B →
@@ -71,5 +101,5 @@ never come down when data is replaced. That makes them budgets rather than sizes
   first imports. It is a lifetime figure for the whole service, so it has to be raised long before
   that many people arrive, not when they do.
 
-Recalculate when prices, batch size, the archive's size, the walk's page count or either ceiling
-changes.
+Recalculate when prices, batch size, the archive's size, the walk's page count, the operations behind
+an edit or either ceiling changes.

@@ -119,7 +119,8 @@ struct SetupView: View {
             VStack(spacing: 0) {
                 numbered(
                     "01", "Efferent reads whatever you tick",
-                    "Steps, sleep, workouts, heart, weight — day by day."
+                    "Steps, sleep, workouts, heart, weight — day by day. "
+                        + "An agent you connect may also write meals, sleep and weight."
                 )
                 numbered(
                     "02", "Nothing goes twice",

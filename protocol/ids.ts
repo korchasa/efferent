@@ -116,3 +116,60 @@ export function dayBefore(day: string): string {
   date.setUTCDate(date.getUTCDate() - 1);
   return date.toISOString().slice(0, 10);
 }
+
+// MARK: - Edits
+
+/**
+ * `<bucket>/editor`: the Ed25519 public key of whoever may put edits into this
+ * bucket's queue. Registered by the phone with its writer key, so the phone
+ * decides who edits; the service only refuses everybody else. Outside `d/`
+ * for the same reason the writer key is.
+ */
+export function editorKeyObject(bucket: string): string {
+  return `${bucket}/editor`;
+}
+
+/** Everything still waiting to be applied lives under this prefix. */
+export const EDIT_PREFIX = "e/";
+/** What became of an edit lives here, under the same name, once the phone said. */
+export const OUTCOME_PREFIX = "o/";
+
+/**
+ * `<bucket>/e/1757228400000-abcdefgh`.
+ *
+ * Thirteen digits of milliseconds since 1970 and eight characters of base32
+ * from five random bytes. The milliseconds order a listing by the moment the
+ * service took the edit; the random tail keeps two edits taken in the same
+ * millisecond from sharing a name. Two colocations do not share a clock, so
+ * the order is only approximate across a second or so, and nothing depends on
+ * it more than that.
+ */
+export function editKey(bucket: string, name: string): string {
+  return `${bucket}/${EDIT_PREFIX}${name}`;
+}
+
+export function editPrefix(bucket: string): string {
+  return `${bucket}/${EDIT_PREFIX}`;
+}
+
+export function outcomeKey(bucket: string, name: string): string {
+  return `${bucket}/${OUTCOME_PREFIX}${name}`;
+}
+
+export function outcomePrefix(bucket: string): string {
+  return `${bucket}/${OUTCOME_PREFIX}`;
+}
+
+export function isEditName(value: string): boolean {
+  return /^\d{13}-[a-z2-7]{8}$/.test(value);
+}
+
+export function newEditName(milliseconds: number, random: Uint8Array): string {
+  if (!Number.isSafeInteger(milliseconds) || milliseconds < 0 || milliseconds > 9_999_999_999_999) {
+    throw new Error(`${milliseconds} is not a moment this name can carry`);
+  }
+  if (random.length !== 5) {
+    throw new Error(`an edit name needs 5 random bytes, not ${random.length}`);
+  }
+  return `${String(milliseconds).padStart(13, "0")}-${base32(random)}`;
+}

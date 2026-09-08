@@ -31,6 +31,13 @@ export const TOTALS = [
   "basalEnergy",
   "exerciseTime",
   "standTime",
+  // What an agent may write, summed by Health like everything else here: a
+  // day of meals is one number per nutrient, however many entries made it.
+  "dietaryEnergy",
+  "dietaryProtein",
+  "dietaryCarbohydrates",
+  "dietaryFat",
+  "dietaryWater",
 ] as const;
 
 /** Metrics that travel record by record, because a total of them says nothing. */
@@ -40,6 +47,7 @@ export const RECORDS = [
   "heartRateVariability",
   "respiratoryRate",
   "oxygenSaturation",
+  "bodyMass",
   "sleep",
   "workout",
 ] as const;

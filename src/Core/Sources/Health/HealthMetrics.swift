@@ -30,6 +30,14 @@ public struct AggregateMetric: Sendable {
         .init(name: "flightsClimbed", .flightsClimbed, .count()),
         .init(name: "exerciseTime", .appleExerciseTime, .minute()),
         .init(name: "standTime", .appleStandTime, .minute()),
+        // What the person eats and drinks: logged by hand or by an agent, and
+        // a total either way — two apps writing the same meal is the same
+        // double count as two devices writing the same steps.
+        .init(name: "dietaryEnergy", .dietaryEnergyConsumed, .kilocalorie()),
+        .init(name: "dietaryProtein", .dietaryProtein, .gram()),
+        .init(name: "dietaryCarbohydrates", .dietaryCarbohydrates, .gram()),
+        .init(name: "dietaryFat", .dietaryFatTotal, .gram()),
+        .init(name: "dietaryWater", .dietaryWater, .literUnit(with: .milli)),
     ]
 }
 
@@ -52,6 +60,8 @@ public struct SampleMetric: Sendable {
         quantity("restingHeartRate", .restingHeartRate, HKUnit.count().unitDivided(by: .minute())),
         quantity("respiratoryRate", .respiratoryRate, HKUnit.count().unitDivided(by: .minute())),
         quantity("oxygenSaturation", .oxygenSaturation, .percent()),
+        // A weight is a reading at a moment, never a total of the day's readings.
+        quantity("bodyMass", .bodyMass, .gramUnit(with: .kilo)),
     ]
 
     private static func quantity(
@@ -99,7 +109,7 @@ public enum HealthError: Error, Equatable {
 /// with stages. They are sent exactly as recorded; stitching them into "a night"
 /// is a judgement call, and it belongs where it can be changed without shipping
 /// a new build.
-private func sleepStageName(_ value: Int) -> String {
+func sleepStageName(_ value: Int) -> String {
     switch HKCategoryValueSleepAnalysis(rawValue: value) {
     case .inBed: return "inBed"
     case .awake: return "awake"

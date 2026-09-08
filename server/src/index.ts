@@ -22,6 +22,18 @@
  *
  * What it learns is which days exist and how big they are. Not what happened in
  * them, not at what time, not of what kind.
+ *
+ * Since the phone can write as well as read, the service also holds a queue of
+ * sealed edits — an agent's request to put a meal or a night's sleep into
+ * Health — until the phone has applied them. The queue is the `e/` prefix
+ * itself: an edit sits there from the moment the editor key the phone
+ * registered signs it in until the phone answers with an outcome, at which
+ * point the outcome takes its place under `o/`. There is no cursor to keep
+ * and nothing to reconcile; what is under `e/` is what is waiting. The
+ * service checks the editor's signature to keep strangers out of the queue,
+ * and the phone checks it again before writing anything, because a service
+ * that decided on its own what goes into Health would be able to write into
+ * Health.
  */
 
 /// <reference path="../worker-configuration.d.ts" />
@@ -34,21 +46,34 @@ import {
   dayBefore,
   dayKey,
   dayPrefix,
+  editKey,
+  editorKeyObject,
+  editPrefix,
   isBucketId,
   isDay,
+  isEditName,
+  newEditName,
+  outcomeKey,
+  outcomePrefix,
   SERVICE_TAKEN_OBJECT,
   signingKeyObject,
   takenObject,
 } from "../../protocol/ids.ts";
 import { MAX_DAYS_PER_REQUEST, type SealedDay, unpackDays } from "../../protocol/batch.ts";
 import {
+  canonicalEdit,
+  canonicalEditorRegistration,
+  canonicalFetch,
+  canonicalOutcome,
   canonicalRequest,
   fromBase64url,
   hasSmallOrder,
   TIMESTAMP_TOLERANCE_SECONDS,
   type UploadHeader,
+  verifyMessage,
   verifyUpload,
 } from "../../protocol/signing.ts";
+import { type Outcome, validateOutcome } from "../../protocol/edits.ts";
 import { AttestationError, verifyAttestation } from "../../protocol/attestation.ts";
 import { SETUP_GUIDE } from "./setup-guide.ts";
 
@@ -102,6 +127,20 @@ export const SERVICE_BYTES_ALREADY_TAKEN = 153 * 1000 * 1000;
  * person, and an archive reaching back to the year 1 is somebody filling the
  * key space rather than exporting a life. */
 export const EARLIEST_DAY = "1900-01-01";
+
+/** What one sealed edit may weigh. Five hundred items of meals and sleep pack
+ * to a few tens of kilobytes; this is room over that, and well under a day. */
+export const MAX_EDIT_BYTES = 256 * 1024;
+/** How many edits may wait for one phone. Deliberately below R2's page of a
+ * thousand, so one listing asked for one more than this is the whole answer
+ * and a truncated page can never hide the count. A phone that has not applied
+ * five hundred edits is a phone that is not coming back. */
+export const MAX_PENDING_EDITS = 500;
+/** What the phone's answer may weigh. Five hundred refusals are about twenty
+ * kilobytes of JSON. */
+export const MAX_OUTCOME_BYTES = 64 * 1024;
+/** Edits per listing page, and every entry is a name, a size and a moment. */
+export const MAX_EDITS_PER_PAGE = 200;
 
 /// How many times a tally will re-read and write again when another request
 /// changed it first. Three covers the handful of uploads a phone runs at once
@@ -162,6 +201,41 @@ export default {
     }
     if (segments.length === 3 && segments[2] === "stats" && request.method === "GET") {
       return await describe(env, bucket);
+    }
+    if (segments.length === 3 && segments[2] === "editor" && request.method === "PUT") {
+      // Counted with the claims: a phone does this once, when it makes the archive.
+      if (!await allowed(env.CLAIMS, request)) {
+        return problem(429, "too many registrations from here just now");
+      }
+      return await registerEditor(request, env, bucket);
+    }
+    if (segments.length === 3 && segments[2] === "edits") {
+      if (request.method === "GET") return await listEdits(env, bucket, url);
+      if (request.method === "POST") {
+        if (!await allowed(env.EDITS, request)) {
+          return problem(429, "too many edits from here just now");
+        }
+        return await postEdit(request, env, bucket);
+      }
+    }
+    if (segments.length >= 4 && (segments[2] === "e" || segments[2] === "o")) {
+      const name = segments[3];
+      if (!isEditName(name)) return problem(400, "that is not the name of an edit");
+      if (segments.length === 4 && segments[2] === "e" && request.method === "GET") {
+        return await getEdit(request, env, bucket, name);
+      }
+      if (segments.length === 4 && segments[2] === "o" && request.method === "GET") {
+        return await getOutcome(env, bucket, name);
+      }
+      if (
+        segments.length === 5 && segments[2] === "e" && segments[4] === "outcome" &&
+        request.method === "PUT"
+      ) {
+        if (!await allowed(env.WRITES, request)) {
+          return problem(429, "too many uploads from here just now");
+        }
+        return await putOutcome(request, env, bucket, name);
+      }
     }
     if (segments.length === 4 && segments[2] === "d" && request.method === "GET") {
       const day = segments[3];
@@ -258,6 +332,31 @@ function createRemoteServer(env: Env, bucket: string, origin: string): McpServer
           mimeType: "application/octet-stream",
         }],
       };
+    },
+  );
+
+  server.registerTool(
+    "list_edits",
+    {
+      title: "List submitted edits",
+      description:
+        "List the edits submitted to this archive by name, size, submission time and status: " +
+        "pending until the phone applies one, then applied, partial or failed with the counts. " +
+        "Edits are submitted with the local reference code — sealed to the reading key and " +
+        "signed with the editor key — and this server never sees their contents. " +
+        "`after` is a paging key, not a watermark; follow next until it is null.",
+      inputSchema: z.object({
+        after: z.string().regex(/^\d{13}-[a-z2-7]{8}$/).optional(),
+        limit: z.number().int().min(1).max(MAX_EDITS_PER_PAGE).optional(),
+        status: z.enum(["pending", "all"]).optional(),
+      }),
+    },
+    async (arguments_) => {
+      const url = new URL(`/b/${bucket}/edits`, origin);
+      for (const [name, value] of Object.entries(arguments_)) {
+        if (value !== undefined) url.searchParams.set(name, String(value));
+      }
+      return responseTool(await listEdits(env, bucket, url));
     },
   );
 
@@ -429,9 +528,78 @@ async function authorizeWriter(
   days: string[],
   body: Uint8Array,
 ): Promise<{ claimed: Uint8Array; registered: boolean; header: UploadHeader } | Response> {
+  const proof = await writerProof(request, env, bucket);
+  if (proof instanceof Response) return proof;
+
+  // For an upload, `days` came from the unpacked frame. This proves the service
+  // parsed exactly what the phone signed. For creation it is deliberately empty.
+  const header: UploadHeader = { bucket, days, timestamp: proof.timestamp };
+  if (!await verifyUpload(proof.claimed, proof.signature, header, body)) {
+    return problem(403, "signature does not match the request");
+  }
+  return { claimed: proof.claimed, registered: proof.registered !== null, header };
+}
+
+/**
+ * The phone, for the routes only the bucket's owner may use: registering the
+ * editor, reading an edit back, answering it. The proof is the writer key's
+ * signature over one canonical message rather than over an upload, and the
+ * bucket has to exist already — these routes never bring one into being.
+ */
+async function authorizeOwner(
+  request: Request,
+  env: Env,
+  bucket: string,
+  message: (timestamp: number) => Promise<string> | string,
+): Promise<{ timestamp: number } | Response> {
+  const proof = await writerProof(request, env, bucket);
+  if (proof instanceof Response) return proof;
+  if (!proof.registered) return problem(403, "claim the bucket first");
+  if (!await verifyMessage(proof.claimed, proof.signature, await message(proof.timestamp))) {
+    return problem(403, "signature does not match the request");
+  }
+  return { timestamp: proof.timestamp };
+}
+
+/** The writer key a request names, checked against the one that claimed the
+ * bucket. Whether the signature holds is the caller's question, because what
+ * it is over differs by route. */
+async function writerProof(
+  request: Request,
+  env: Env,
+  bucket: string,
+): Promise<
+  | { claimed: Uint8Array; signature: Uint8Array; timestamp: number; registered: Uint8Array | null }
+  | Response
+> {
+  const named = signedHeaders(request, "writer");
+  if (named instanceof Response) return named;
+
+  const registered = await env.BLOBS.get(signingKeyObject(bucket));
+  const known = registered ? new Uint8Array(await registered.arrayBuffer()) : null;
+  if (known && !sameBytes(known, named.key)) {
+    return problem(403, "this bucket already belongs to another writer");
+  }
+  return {
+    claimed: named.key,
+    signature: named.signature,
+    timestamp: named.timestamp,
+    registered: known,
+  };
+}
+
+/**
+ * The three headers every signed request carries — a key, a signature and the
+ * moment it was made — read and checked for shape. `who` names the key header:
+ * `x-efferent-writer` for the phone, `x-efferent-editor` for the agent.
+ */
+function signedHeaders(
+  request: Request,
+  who: "writer" | "editor",
+): { key: Uint8Array; signature: Uint8Array; timestamp: number } | Response {
   const signature = request.headers.get("x-efferent-signature");
-  const writerKey = request.headers.get("x-efferent-writer");
-  if (!signature || !writerKey) return problem(400, "missing writer key or signature");
+  const named = request.headers.get(`x-efferent-${who}`);
+  if (!signature || !named) return problem(400, `missing ${who} key or signature`);
 
   const timestamp = Number(request.headers.get("x-efferent-timestamp"));
   if (!Number.isSafeInteger(timestamp) || timestamp < 0) {
@@ -450,38 +618,23 @@ async function authorizeWriter(
     }, 400);
   }
 
-  let claimed: Uint8Array;
+  let key: Uint8Array;
   let decodedSignature: Uint8Array;
   try {
-    claimed = fromBase64url(writerKey);
+    key = fromBase64url(named);
     decodedSignature = fromBase64url(signature);
   } catch {
-    return problem(400, "writer key and signature must be base64url");
+    return problem(400, `${who} key and signature must be base64url`);
   }
-  if (claimed.length !== 32 || decodedSignature.length !== 64) {
-    return problem(400, "writer key or signature has the wrong length");
+  if (key.length !== 32 || decodedSignature.length !== 64) {
+    return problem(400, `${who} key or signature has the wrong length`);
   }
   // Said plainly here, because the answer "that signature does not match" would
   // send whoever reads it looking for a bug in their signing.
-  if (hasSmallOrder(claimed)) {
-    return problem(400, "that writer key is not a key anybody holds");
+  if (hasSmallOrder(key)) {
+    return problem(400, `that ${who} key is not a key anybody holds`);
   }
-
-  const registered = await env.BLOBS.get(signingKeyObject(bucket));
-  if (registered) {
-    const known = new Uint8Array(await registered.arrayBuffer());
-    if (!sameBytes(known, claimed)) {
-      return problem(403, "this bucket already belongs to another writer");
-    }
-  }
-
-  // For an upload, `days` came from the unpacked frame. This proves the service
-  // parsed exactly what the phone signed. For creation it is deliberately empty.
-  const header: UploadHeader = { bucket, days, timestamp };
-  if (!await verifyUpload(claimed, decodedSignature, header, body)) {
-    return problem(403, "signature does not match the request");
-  }
-  return { claimed, registered: registered !== null, header };
+  return { key, signature: decodedSignature, timestamp };
 }
 
 /**
@@ -533,6 +686,354 @@ async function attestedClaim(
     throw error;
   }
   return null;
+}
+
+/**
+ * The phone names the key an agent may submit edits with.
+ *
+ * The editor key is made on the phone and handed to the agent beside the
+ * reading key, so a config file that reads the archive can also ask to write
+ * into it — and nothing else can: the service takes an edit only from this key.
+ * Registering again with the same key is a phone that forgot it had; with
+ * another key it is the owner changing their mind, and the owner may.
+ */
+async function registerEditor(request: Request, env: Env, bucket: string): Promise<Response> {
+  const body = new Uint8Array(await request.arrayBuffer());
+  if (body.length !== 32) return problem(400, "an editor key is 32 bytes");
+  if (hasSmallOrder(body)) return problem(400, "that editor key is not a key anybody holds");
+
+  const owner = await authorizeOwner(
+    request,
+    env,
+    bucket,
+    (timestamp) => canonicalEditorRegistration(bucket, timestamp, body),
+  );
+  if (owner instanceof Response) return owner;
+
+  const known = await env.BLOBS.get(editorKeyObject(bucket));
+  const same = known !== null && sameBytes(new Uint8Array(await known.arrayBuffer()), body);
+  if (!same) await env.BLOBS.put(editorKeyObject(bucket), body);
+  return json({ bucket, registered: !same }, same ? 200 : 201);
+}
+
+/**
+ * Take a sealed edit into the queue.
+ *
+ * The body is ciphertext the phone alone can open, and the service keeps it as
+ * it came, with the editor's signature beside it, so the phone can check for
+ * itself that the editor and not the service asked for this. The name is the
+ * moment the service took it, which is what orders the queue.
+ */
+async function postEdit(request: Request, env: Env, bucket: string): Promise<Response> {
+  const body = new Uint8Array(await request.arrayBuffer());
+  if (body.length === 0) return problem(400, "empty body");
+  if (body.length > MAX_EDIT_BYTES) return problem(413, `an edit over ${MAX_EDIT_BYTES} bytes`);
+  // The envelope's first byte says which HPKE suite sealed it, and the phone
+  // opens only the current one. Refusing the rest here saves an edit from
+  // sitting in the queue until the phone says `cannotOpen`.
+  if (body[0] !== 2) return problem(400, "an edit is sealed in envelope version 2");
+
+  const editor = await authorizeEditor(request, env, bucket, body);
+  if (editor instanceof Response) return editor;
+
+  const waiting = await pendingCount(env, bucket);
+  if (waiting >= MAX_PENDING_EDITS) {
+    return problem(
+      429,
+      `${waiting} edits are waiting for this phone, and ${MAX_PENDING_EDITS} is all the queue holds`,
+    );
+  }
+
+  // The same two ceilings an upload meets: an edit is bytes handed over.
+  const bucketTaken = await taken(env, takenObject(bucket), 0);
+  if (bucketTaken.value + body.length > MAX_BUCKET_BYTES) {
+    return problem(
+      507,
+      `this bucket has been handed ${bucketTaken.value} bytes, and ${MAX_BUCKET_BYTES} is all one bucket may take`,
+    );
+  }
+  const serviceTaken = await taken(env, SERVICE_TAKEN_OBJECT, SERVICE_BYTES_ALREADY_TAKEN);
+  if (serviceTaken.value + body.length > MAX_SERVICE_BYTES) {
+    return problem(507, "this service has been handed as much as it may take");
+  }
+
+  const name = newEditName(Date.now(), crypto.getRandomValues(new Uint8Array(5)));
+  const stored = await env.BLOBS.put(editKey(bucket, name), body, {
+    customMetadata: {
+      editor: editor.key,
+      signature: editor.signature,
+      timestamp: String(editor.timestamp),
+    },
+  });
+  await Promise.all([
+    add(env, takenObject(bucket), bucketTaken, body.length),
+    add(env, SERVICE_TAKEN_OBJECT, serviceTaken, body.length),
+  ]);
+  return json({ name, at: stored.uploaded.toISOString(), bytes: body.length }, 201);
+}
+
+/** The agent, proved by the editor key the phone registered for this bucket. */
+async function authorizeEditor(
+  request: Request,
+  env: Env,
+  bucket: string,
+  body: Uint8Array,
+): Promise<{ key: string; signature: string; timestamp: number } | Response> {
+  const named = signedHeaders(request, "editor");
+  if (named instanceof Response) return named;
+
+  const registered = await env.BLOBS.get(editorKeyObject(bucket));
+  if (!registered) return problem(403, "no editor is registered for this bucket");
+  if (!sameBytes(new Uint8Array(await registered.arrayBuffer()), named.key)) {
+    return problem(403, "that is not this bucket's editor");
+  }
+  const message = await canonicalEdit(bucket, named.timestamp, body);
+  if (!await verifyMessage(named.key, named.signature, message)) {
+    return problem(403, "signature does not match the request");
+  }
+  return {
+    key: request.headers.get("x-efferent-editor")!,
+    signature: request.headers.get("x-efferent-signature")!,
+    timestamp: named.timestamp,
+  };
+}
+
+/** How many edits are waiting. One listing, asked for one more than the cap,
+ * is exact: the cap is below a page, so the answer cannot be truncated. */
+async function pendingCount(env: Env, bucket: string): Promise<number> {
+  const listing = await env.BLOBS.list({
+    prefix: editPrefix(bucket),
+    limit: MAX_PENDING_EDITS + 1,
+  });
+  return listing.objects.length;
+}
+
+type EditEntry = {
+  name: string;
+  bytes: number;
+  at: string;
+  status: "pending" | "applied" | "partial" | "failed";
+  applied?: number;
+  refused?: number;
+};
+
+/**
+ * What is waiting, or everything that was ever submitted.
+ *
+ * `after` is where a walk continues and nothing more — never a watermark. The
+ * queue is the `e/` prefix itself, so what is pending is what is listed, and a
+ * reader that wants the outcomes too gets the two prefixes merged by name,
+ * which is by the moment each edit was taken.
+ */
+async function listEdits(env: Env, bucket: string, url: URL): Promise<Response> {
+  const asked = Number(url.searchParams.get("limit") ?? MAX_EDITS_PER_PAGE);
+  if (!Number.isSafeInteger(asked) || asked < 1) return problem(400, "limit must be a count");
+  const limit = Math.min(asked, MAX_EDITS_PER_PAGE);
+
+  const after = url.searchParams.get("after");
+  if (after && !isEditName(after)) return problem(400, "after must be the name of an edit");
+
+  const status = url.searchParams.get("status") ?? "pending";
+  if (status !== "pending" && status !== "all") {
+    return problem(400, "status must be pending or all");
+  }
+
+  const pending = await listPrefix(env, editPrefix(bucket), after, limit);
+  const entries: EditEntry[] = pending.objects.map((object) => ({
+    name: object.name,
+    bytes: object.size,
+    at: object.uploaded.toISOString(),
+    status: "pending",
+  }));
+  let truncatedAt = pending.truncated ? pending.objects[pending.objects.length - 1].name : null;
+
+  if (status === "all") {
+    const done = await listPrefix(env, outcomePrefix(bucket), after, limit);
+    for (const object of done.objects) entries.push(outcomeEntry(object));
+    if (done.truncated) {
+      const last = done.objects[done.objects.length - 1].name;
+      truncatedAt = truncatedAt === null || last < truncatedAt ? last : truncatedAt;
+    }
+  }
+
+  // Merged by name, and cut at the earliest point either listing stopped: past
+  // it one of the two prefixes has entries this page never saw, and a page that
+  // reached beyond it would skip them for good.
+  entries.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+  const within = truncatedAt === null
+    ? entries
+    : entries.filter((entry) => entry.name <= truncatedAt!);
+  const page = within.slice(0, limit);
+  const more = truncatedAt !== null || within.length > limit;
+
+  return json({
+    edits: page,
+    next: more && page.length > 0 ? page[page.length - 1].name : null,
+  });
+}
+
+/** An outcome, described from the metadata the answer left beside it, so a
+ * listing of hundreds needs no read per entry. */
+function outcomeEntry(object: ListedObject): EditEntry {
+  const metadata = object.customMetadata ?? {};
+  const applied = Number(metadata.applied ?? 0);
+  const refused = Number(metadata.refused ?? 0);
+  return {
+    name: object.name,
+    bytes: Number(metadata.bytes ?? 0),
+    at: metadata.at ?? object.uploaded.toISOString(),
+    status: refused === 0 ? "applied" : applied === 0 ? "failed" : "partial",
+    applied,
+    refused,
+  };
+}
+
+type ListedObject = {
+  name: string;
+  size: number;
+  uploaded: Date;
+  customMetadata?: Record<string, string>;
+};
+
+async function listPrefix(
+  env: Env,
+  prefix: string,
+  after: string | null,
+  limit: number,
+): Promise<{ objects: ListedObject[]; truncated: boolean }> {
+  const listing = await env.BLOBS.list({
+    prefix,
+    startAfter: after ? `${prefix}${after}` : undefined,
+    limit,
+    include: ["customMetadata"],
+  });
+  const objects = listing.objects
+    .map((object) => ({
+      name: object.key.slice(prefix.length),
+      size: object.size,
+      uploaded: object.uploaded,
+      customMetadata: object.customMetadata,
+    }))
+    .filter((object) => isEditName(object.name));
+  return { objects, truncated: listing.truncated };
+}
+
+/**
+ * Hand an edit to the phone, with the editor's proof beside it.
+ *
+ * Only the phone: the request is signed by the writer key over the name and
+ * the moment, so a stranger who learnt a bucket id and a name can neither read
+ * the ciphertext nor replay it anywhere. Gone once the phone has answered.
+ */
+async function getEdit(
+  request: Request,
+  env: Env,
+  bucket: string,
+  name: string,
+): Promise<Response> {
+  const owner = await authorizeOwner(
+    request,
+    env,
+    bucket,
+    (timestamp) => canonicalFetch(bucket, name, timestamp),
+  );
+  if (owner instanceof Response) return owner;
+
+  const object = await env.BLOBS.get(editKey(bucket, name));
+  if (!object) {
+    const answered = await env.BLOBS.head(outcomeKey(bucket, name));
+    return answered ? problem(410, "this edit has been applied") : problem(404, "no such edit");
+  }
+  const metadata = object.customMetadata ?? {};
+  return new Response(object.body, {
+    headers: {
+      "content-type": "application/octet-stream",
+      "last-modified": object.uploaded.toUTCString(),
+      "x-efferent-editor": metadata.editor ?? "",
+      "x-efferent-signature": metadata.signature ?? "",
+      "x-efferent-timestamp": metadata.timestamp ?? "",
+    },
+  });
+}
+
+/**
+ * The phone says what became of an edit, and the edit leaves the queue.
+ *
+ * The outcome is counts and codes and nothing else — never a metric, never a
+ * value — so the service learns only that an edit was answered and how much of
+ * it landed. Answering twice is the ordinary case, not an error: a phone that
+ * crashed between the store taking the outcome and hearing so applies the edit
+ * again (which HealthKit makes idempotent) and answers again.
+ */
+async function putOutcome(
+  request: Request,
+  env: Env,
+  bucket: string,
+  name: string,
+): Promise<Response> {
+  const body = new Uint8Array(await request.arrayBuffer());
+  if (body.length > MAX_OUTCOME_BYTES) {
+    return problem(413, `an outcome over ${MAX_OUTCOME_BYTES} bytes`);
+  }
+  let outcome: Outcome;
+  try {
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(body));
+    validateOutcome(parsed);
+    outcome = parsed;
+  } catch (error) {
+    return problem(400, `malformed outcome: ${(error as Error).message}`);
+  }
+
+  const owner = await authorizeOwner(
+    request,
+    env,
+    bucket,
+    (timestamp) => canonicalOutcome(bucket, name, timestamp, body),
+  );
+  if (owner instanceof Response) return owner;
+
+  // The edit's own size and moment travel onto the outcome, so a listing of
+  // everything can describe an answered edit without the edit.
+  const edit = await env.BLOBS.head(editKey(bucket, name));
+  let bytes: number;
+  let at: string;
+  if (edit) {
+    bytes = edit.size;
+    at = edit.uploaded.toISOString();
+  } else {
+    const earlier = await env.BLOBS.get(outcomeKey(bucket, name));
+    if (!earlier) return problem(404, "no such edit");
+    const previous = JSON.parse(await earlier.text()) as { bytes: number; at: string };
+    bytes = previous.bytes;
+    at = previous.at;
+  }
+
+  const record = { applied: outcome.applied, refused: outcome.refused, bytes, at };
+  await env.BLOBS.put(outcomeKey(bucket, name), JSON.stringify(record), {
+    customMetadata: {
+      applied: String(outcome.applied),
+      refused: String(outcome.refused.length),
+      bytes: String(bytes),
+      at,
+    },
+  });
+  // Deleted after the outcome is safely down: the other order could lose an
+  // edit to a crash between the two, and a lost edit is lost silently.
+  await env.BLOBS.delete(editKey(bucket, name));
+  return json({ name, applied: outcome.applied, refused: outcome.refused.length });
+}
+
+/** The whole of an answer: counts, and which items were refused with which
+ * word. Readable by name, like a day, and as revealing as one. */
+async function getOutcome(env: Env, bucket: string, name: string): Promise<Response> {
+  const object = await env.BLOBS.get(outcomeKey(bucket, name));
+  if (!object) return problem(404, "no such outcome");
+  return new Response(object.body, {
+    headers: {
+      "content-type": "application/json",
+      "last-modified": object.uploaded.toUTCString(),
+    },
+  });
 }
 
 async function getDay(env: Env, bucket: string, day: string): Promise<Response> {

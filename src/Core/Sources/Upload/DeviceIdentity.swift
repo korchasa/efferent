@@ -37,6 +37,40 @@ public struct DeviceIdentity {
     }
 }
 
+/// The key that says who may put edits into this phone's queue.
+///
+/// Made by the phone, registered with the service under the writer's
+/// signature, and handed to an agent as the fourth field of the connection
+/// handoff. It is a third key on purpose: the reading key opens the archive,
+/// the writer key fills it, this one asks the phone to write into Health —
+/// and it can be replaced with one signed request, leaving the archive alone.
+public struct EditorIdentity {
+    private let keychain: KeychainItem
+
+    public init(service: String = "dev.korchasa.efferent", account: String = "editor") {
+        keychain = KeychainItem(service: service, account: account)
+    }
+
+    /// The editor key, made on first use.
+    public func signingKey() throws -> Curve25519.Signing.PrivateKey {
+        if let stored = try keychain.read() {
+            return try Curve25519.Signing.PrivateKey(rawRepresentation: stored)
+        }
+        let created = Curve25519.Signing.PrivateKey()
+        try keychain.save(created.rawRepresentation)
+        return created
+    }
+
+    public func existingSigningKey() throws -> Curve25519.Signing.PrivateKey? {
+        guard let stored = try keychain.read() else { return nil }
+        return try Curve25519.Signing.PrivateKey(rawRepresentation: stored)
+    }
+
+    public func forget() throws {
+        try keychain.delete()
+    }
+}
+
 /// One blob of bytes in the Keychain.
 ///
 /// Accessibility is `afterFirstUnlock`, and that is load-bearing. Uploads are

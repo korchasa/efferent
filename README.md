@@ -4,7 +4,8 @@ An iPhone app that sends your Health data to a server you own, so that software 
 Apple device can read it.
 
 The name comes from the efferent nerves — the ones carrying signals away from the centre. That is
-the whole design in one word: the phone only ever sends.
+most of the design in one word: nothing ever connects to the phone. It sends its days out, and when
+an agent has something to write into Health it collects that too, on its own schedule.
 
 ## Why it works this way
 
@@ -167,7 +168,25 @@ reachable, or still owned by the same person.
   any of it over. It is encrypted anyway; this is for deciding whether to fetch.
 - **`/mcp/b/<bucket>`** exposes the keyless remote MCP tools for archive metadata and ciphertext
   links plus `setup_guide`, which returns the complete local Python reference without accepting any
-  arguments. It never accepts the reading key.
+  arguments, and `list_edits`, which says what is waiting for the phone. It never accepts a key.
+
+And the queue in the other direction, which the service holds until the phone has collected it:
+
+- **`PUT /b/<bucket>/editor`** records, signed by the phone's writer key, the public half of the
+  editor key the phone made for its agent. Whoever signs with that key may put edits into the queue;
+  the service refuses everybody else and decides nothing further.
+- **`POST /b/<bucket>/edits`** takes one sealed edit — the agent's items, packed, sealed to the
+  reading key and signed by the editor — and names it. The name is the service's clock in
+  milliseconds and a random tail, so the queue is in the order it was written to.
+- **`GET /b/<bucket>/edits`** lists what is waiting, or with `status=all` what became of everything:
+  `pending`, `applied`, `partial` or `failed`, with counts. It pages like the day listing.
+- **`GET /b/<bucket>/e/<name>`** hands one edit back to the phone, exactly as it went in, with the
+  editor's key, signature and timestamp in headers so the phone can check the signature itself. Only
+  the phone's writer key may ask; an edit is nobody else's business, ciphertext or not.
+- **`PUT /b/<bucket>/e/<name>/outcome`** is the phone saying what it did — how many items landed
+  and, for each that did not, its index and a word. The service keeps that under `o/<name>` and
+  deletes the edit, so the queue is exactly what the phone has not yet answered for.
+- **`GET /b/<bucket>/o/<name>`** hands the outcome back to whoever asks.
 
 The upload time in a listing is what keeps a mirror in step. A day can be rewritten at any moment,
 so "everything after where I stopped" is not a question that can be asked any more. "Everything that
@@ -185,6 +204,11 @@ what metric — happens after decryption, on the machine holding the reading key
 Batching adds one thing to that list and it is worth naming rather than glossing over: the service
 sees which days arrived together. It already knew as much from their write times landing in the same
 second, so nothing new is given away, but the frame says it outright.
+
+An edit adds to the list in the same coin: that one arrived, how big it was, which editor key
+signed it, and afterwards how many items the phone applied and the word it gave for each it refused.
+Never a metric name, never a value, never which day inside the edit changed — the phone re-uploads
+those days whole, and a rewritten day looks like every other rewritten day.
 
 Encryption hides contents, not the fact of them, and the privacy copy should say so plainly.
 
@@ -235,6 +259,48 @@ tool.
 The TypeScript reader and shaped local health tools remain in this repository for development and
 for people who deliberately choose that interface. They are not a dependency of the public
 connection procedure.
+
+## Letting an agent write
+
+An agent can also put entries into Health — meals as energy, protein, carbohydrates, fat and water;
+sleep by stage; body mass — and it does so without anything on the service ever seeing a number.
+The phone makes a third key for it, an Ed25519 **editor key**, registers its public half with the
+service and hands the private half over as a fourth field of the same handoff, `Editor key:`,
+shaped `efferent-editor-v1.<private>.<public>` like the reading key beside it. A handoff from
+before writing existed has three fields and stays read-only; a fresh one for the same archive adds
+the editor key to an existing reader without touching the rest.
+
+An edit is a list of items. A `put` adds an entry or replaces the one written earlier under the same
+id; a `delete` removes it. The id is the agent's handle — `agent:meal:2026-09-07:lunch` — and the
+phone turns it into a HealthKit sync identifier with a version it keeps itself, so applying the same
+edit twice, after a crash before the phone could say it had, still ends with one sample. Only entries
+written this way can be replaced or removed: what the watch, the phone or another app recorded is
+Health's and stays as it is, and an item that names one is refused with a word rather than skipped.
+
+The path is the archive's path run backwards. The agent packs the items, seals them to the phone's
+own reading key with the bucket in the tag, signs the sealed bytes with the editor key and posts
+them; the service checks the signature, stores the ciphertext and names it. The phone, on any launch
+that can reach Health and is not paused, lists the queue, fetches each edit with a writer-signed
+request, **checks the editor signature itself** — a service that decided on its own what goes into
+Health would be able to write into Health — opens it, applies the items and reports an outcome: a
+count of what landed and, per refused item, its index and one of a closed set of words. The service
+replaces the edit with its outcome, and the days the items touched are marked and re-uploaded whole,
+so the entry shows up in the archive afterwards like anything logged by hand. An edit whose outcome
+the service did not accept stays in the queue and is applied again; that is what the version is for.
+
+The phone applies edits when it is opened or wakes to send, which is minutes to hours and never at
+once. Write access is asked for the first time the app is opened after the update; until it has
+been, edits wait rather than fail.
+
+```bash
+deno task efferent write --file items.json   # seal, sign and hand the phone an edit
+deno task efferent edits --all               # what became of each, by name
+```
+
+The local MCP server offers the same as `phone_data_write` and `phone_data_edits`, and its overview
+names what may be written and in which unit. The Python reference returned by `setup_guide` writes
+too — `--write <items.json>` and `--edits` — so the public connection path needs nothing from this
+repository in either direction.
 
 ## Who can read it
 
@@ -323,13 +389,16 @@ deno task check
 - `server:types` — regenerate the Worker bindings and runtime types from `server/wrangler.jsonc`.
 - `server:dev` / `server:deploy` — the bucket service and remote MCP, locally or on
   Cloudflare.
-- `interop` — check that Swift and TypeScript agree on request bytes, HPKE and the phone handoff key.
+- `interop` — check that Swift and TypeScript agree on request bytes, HPKE and the phone handoff
+  key, and that the phone opens and verifies an edit the reader sealed and signed.
 - `interop:python` — with PyHPKE installed in the selected Python, prove that the exact source
-  returned by `setup_guide` opens a TypeScript-sealed day. Set `EFFERENT_PYTHON` to that interpreter.
+  returned by `setup_guide` opens a TypeScript-sealed day and seals and signs an edit TypeScript
+  opens and verifies. Set `EFFERENT_PYTHON` to that interpreter.
 - `efferent` — the local reading side: `connect --handoff <file>`, `ask`, `sync`, `status`, `query`,
-  plus `keygen`, `send` and `read` for protocol development. `connect --handoff -` reads the handoff
-  from standard input without putting the key in a process argument.
-- `mcp` — the same archive as an MCP server on stdio, for an agent to read.
+  `write --file <items.json>` and `edits`, plus `keygen`, `send` and `read` for protocol
+  development. `connect --handoff -` reads the handoff from standard input without putting the key
+  in a process argument.
+- `mcp` — the same archive as an MCP server on stdio, for an agent to read and write.
 
 `EFFERENT_HOME` is not optional in practice. Unset, the reading side falls back to `.efferent`
 relative to the working directory, so a stale profile left in a checkout answers as if it were the
@@ -342,7 +411,7 @@ Trying the phone-first path without a phone:
 deno task server:dev
 ```
 
-Create an archive in the app, share its three-field handoff into a private file, then set a fresh
+Create an archive in the app, share its four-field handoff into a private file, then set a fresh
 `EFFERENT_HOME` and run `deno task efferent connect --handoff <file>`. Delete the temporary file
 after import. `send` still stands in for a phone during protocol development and writes as many days
 in one request as are named.
@@ -356,16 +425,18 @@ certificate, and the archive path above is the whole of the agreement with whate
 
 ## Layout
 
-- `src/Core/Sources/Health` — the metric catalogue, the readers, the day builder.
-- `src/Core/Sources/Wire` — the event type, the day, the columnar body, the request frame.
-- `src/Core/Sources/Store` — schema, day ledger, anchors.
-- `src/Core/Sources/Upload` — Keychain, background upload, reading the archive's listing.
+- `src/Core/Sources/Health` — the metric catalogues, the readers, the day builder, and the writer
+  that puts an agent's items into Health.
+- `src/Core/Sources/Wire` — the event type, the day, the columnar body, the request frame, the edit.
+- `src/Core/Sources/Store` — schema, day ledger, anchors, the versions behind written ids.
+- `src/Core/Sources/Upload` — Keychain, background upload, reading the archive's listing, and the
+  applier that collects edits and reports what became of them.
 - `src/App/Sources` — the setup walkthrough, the everyday screen, the design, the composition root.
 - `src/Tests/Sources` — unit tests.
-- `protocol/` — bucket and day names, the request frame, signing, sealed envelopes.
+- `protocol/` — bucket, day and edit names, the request frame, signing, sealed envelopes, edits.
 - `server/` — the bucket service, a Cloudflare Worker over R2.
 - `documents/server-costs.md` — the measured marginal storage and operation cost per user.
-- `tools/archive.ts` — where days come from: the reading key, the service, the mirror.
+- `tools/archive.ts` — where days come from and where edits go: the keys, the service, the mirror.
 - `tools/analysis.ts` — days turned into answers, and every correction that turning needs.
 - `tools/efferent.ts` — the reading side as a command line tool.
 - `tools/mcp.ts` — the reading side as an MCP server.

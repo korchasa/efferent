@@ -93,6 +93,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         log.debug("the app came back to the front")
     }
 
+    func applicationDidBecomeActive(_: UIApplication) {
+        // A launch with a screen is the only kind that can show the system
+        // sheet, and the applier waits until one has. Asked here rather than
+        // on the way into sending, because sending mostly happens in launches
+        // nobody is looking at.
+        Task { @MainActor in await Services.shared.askForWriteAccessIfNeeded() }
+    }
+
     /// A safety net under background delivery, not a schedule.
     ///
     /// The system decides when this runs — sometimes hourly, sometimes not for

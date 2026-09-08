@@ -138,3 +138,83 @@ export function fromBase64url(value: string): Uint8Array {
   const binary = atob(padded.padEnd(Math.ceil(padded.length / 4) * 4, "="));
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
+
+// MARK: - Edits
+
+/**
+ * The other three things that get signed, each named on its first line.
+ *
+ * An edit is signed by the editor key over the sealed bytes; the registration
+ * of that editor key, the fetch of a signed edit body and the outcome the
+ * phone reports are signed by the writer key. Naming the purpose first means a
+ * captured message of one kind can never be replayed as another, whatever
+ * happens to share its fields.
+ */
+export async function canonicalEditorRegistration(
+  bucket: string,
+  timestamp: number,
+  body: Uint8Array,
+): Promise<string> {
+  return await canonical(["efferent/v1 editor", bucket, String(timestamp)], body);
+}
+
+export async function canonicalEdit(
+  bucket: string,
+  timestamp: number,
+  sealed: Uint8Array,
+): Promise<string> {
+  return await canonical(["efferent/v1 edit", bucket, String(timestamp)], sealed);
+}
+
+export async function canonicalOutcome(
+  bucket: string,
+  name: string,
+  timestamp: number,
+  body: Uint8Array,
+): Promise<string> {
+  return await canonical(["efferent/v1 outcome", bucket, name, String(timestamp)], body);
+}
+
+/** A fetch has no body, so nothing is hashed: the name is the whole of it. */
+export function canonicalFetch(bucket: string, name: string, timestamp: number): string {
+  return ["efferent/v1 fetch", bucket, name, String(timestamp)].join("\n");
+}
+
+async function canonical(lines: string[], body: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", body as BufferSource);
+  return [...lines, base64url(new Uint8Array(digest))].join("\n");
+}
+
+export async function signMessage(privateKey: CryptoKey, message: string): Promise<Uint8Array> {
+  const bytes = new TextEncoder().encode(message);
+  return new Uint8Array(await crypto.subtle.sign("Ed25519", privateKey, bytes as BufferSource));
+}
+
+/** Refuses a key of small order and a signature of the wrong length before asking the curve. */
+export async function verifyMessage(
+  publicKey: Uint8Array,
+  signature: Uint8Array,
+  message: string,
+): Promise<boolean> {
+  if (publicKey.length !== 32 || signature.length !== 64) return false;
+  if (hasSmallOrder(publicKey)) return false;
+  let key: CryptoKey;
+  try {
+    key = await crypto.subtle.importKey(
+      "raw",
+      publicKey as BufferSource,
+      { name: "Ed25519" },
+      false,
+      ["verify"],
+    );
+  } catch {
+    return false;
+  }
+  const bytes = new TextEncoder().encode(message);
+  return await crypto.subtle.verify(
+    "Ed25519",
+    key,
+    signature as BufferSource,
+    bytes as BufferSource,
+  );
+}

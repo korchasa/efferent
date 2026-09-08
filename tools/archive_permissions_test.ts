@@ -16,12 +16,18 @@ Deno.test("the local reader keeps its directory and plaintext private", async ()
     // readings a day, and when each device arrived.
     await archive.write("metrics.json", { "2026-08-27": { v: "1:2" } }, { compact: true });
     await archive.writeDay("2026-08-27", [{ id: "sample", v: 1 }]);
+    // The editor key can ask the phone to write into Health, and the record of
+    // edits names what was written and when.
+    await archive.write("editor-key.json", { editorPrivate: "x", editorPublic: "y" });
+    await archive.write("edits.json", [{ name: "1757228400000-abcdefgh", at: "", items: [] }]);
 
     assertEquals(permission(await Deno.stat(home)), 0o700);
     assertEquals(permission(await Deno.stat(`${home}/mirror.json`)), 0o600);
     assertEquals(permission(await Deno.stat(`${home}/metrics.json`)), 0o600);
     assertEquals(permission(await Deno.stat(`${home}/days`)), 0o700);
     assertEquals(permission(await Deno.stat(`${home}/days/2026-08-27.ndjson`)), 0o600);
+    assertEquals(permission(await Deno.stat(`${home}/editor-key.json`)), 0o600);
+    assertEquals(permission(await Deno.stat(`${home}/edits.json`)), 0o600);
   } finally {
     if (previous === undefined) Deno.env.delete("EFFERENT_HOME");
     else Deno.env.set("EFFERENT_HOME", previous);

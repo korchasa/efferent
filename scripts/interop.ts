@@ -21,8 +21,17 @@ import { associatedData, open, rawPrivateKey } from "../protocol/sealedbox.ts";
 import { decompress } from "../protocol/framing.ts";
 import { type DayEvent, expand, pack } from "../protocol/day.ts";
 import { unpackDays } from "../protocol/batch.ts";
-import { canonicalRequest, fromBase64url, verifyUpload } from "../protocol/signing.ts";
+import {
+  base64url,
+  canonicalEdit,
+  canonicalRequest,
+  fromBase64url,
+  signMessage,
+  verifyUpload,
+} from "../protocol/signing.ts";
 import { bucketId } from "../protocol/ids.ts";
+import { editAssociatedData, type EditItem, packEdits } from "../protocol/edits.ts";
+import { seal } from "../protocol/sealedbox.ts";
 import { parseConnectionHandoff } from "../tools/connection.ts";
 
 /**
@@ -47,7 +56,14 @@ const SECOND_DAY = "2026-08-08";
 
 await generate();
 
-section("Producing a request from the Swift side");
+section("Sealing and signing an edit for the phone to open");
+// Writing goes the other way round, so this side seals and the phone opens.
+// Both keys are made here for this run and never leave the process: the
+// reading key travels to the test as its raw private half, the editor key as
+// its public half beside the signature, all through the environment.
+const edit = await sealAnEdit();
+
+section("Producing a request from the Swift side, and opening the edit there");
 const { stdout } = await run("xcodebuild", {
   args: [
     "test",
@@ -58,10 +74,11 @@ const { stdout } = await run("xcodebuild", {
     "-destination",
     `platform=iOS Simulator,id=${await anyAvailableIPhone()}`,
     "-only-testing:EfferentTests/InteropTests",
+    "-only-testing:EfferentTests/EditInteropTests",
     // Deliberately not `-quiet`: what the test prints is the whole point, and
     // quiet mode swallows it.
   ],
-  env: systemToolPath(),
+  env: { ...systemToolPath(), TEST_RUNNER_EFFERENT_EDIT_FIXTURE: edit.fixture },
   capture: true,
 });
 
@@ -209,8 +226,24 @@ if (postTo) {
   expect(listing.days.length >= 2, `the service listed ${listing.days.length} days back`);
 }
 
+section("Checking what the phone made of the edit");
+expect(
+  marker(stdout, "EDIT_ITEMS") === String(edit.items.length),
+  `the phone unpacked ${marker(stdout, "EDIT_ITEMS")} items out of ${edit.items.length}`,
+);
+expect(
+  marker(stdout, "EDIT_IDS") === edit.items.map((item) => item.id).join(","),
+  `the phone read the ids as ${marker(stdout, "EDIT_IDS")}`,
+);
+expect(
+  marker(stdout, "EDIT_METRICS") ===
+    edit.items.map((item) => item.op === "put" ? item.metric : "delete").join(","),
+  `the phone read the metrics as ${marker(stdout, "EDIT_METRICS")}`,
+);
+
 section(
-  `Both sides agree: bucket ${bucket}, ${packed.length} days, ${frame.length} bytes on the wire`,
+  `Both sides agree: bucket ${bucket}, ${packed.length} days, ${frame.length} bytes on the wire, ` +
+    `and an edit of ${edit.items.length} items opened on the phone`,
 );
 console.log(
   `  canonical request the reader rebuilt:\n${
@@ -238,6 +271,65 @@ async function read(blob: Uint8Array, day: string): Promise<DayEvent[]> {
     `Swift and TypeScript packed ${day} differently:\n  swift ${text}\n  deno  ${pack(events)}`,
   );
   return events;
+}
+
+/**
+ * An edit the way `tools/archive.ts` and the Python reference make one: the
+ * items packed, sealed to the reading key with the bucket in the tag, and
+ * signed by the editor over the canonical message.
+ */
+async function sealAnEdit(): Promise<{ items: EditItem[]; fixture: string }> {
+  const items: EditItem[] = [
+    {
+      op: "put",
+      id: "agent:meal:2026-08-07:lunch",
+      metric: "dietaryEnergy",
+      start: 1_754_568_000,
+      end: 1_754_569_800,
+      value: 640,
+      unit: "kcal",
+    },
+    {
+      op: "put",
+      id: "agent:sleep:2026-08-06:core",
+      metric: "sleep",
+      start: 1_754_517_600,
+      end: 1_754_542_800,
+      stage: "asleepCore",
+    },
+    { op: "delete", id: "agent:meal:2026-08-01:dinner" },
+  ];
+
+  const reading = await crypto.subtle.generateKey({ name: "X25519" }, true, [
+    "deriveBits",
+  ]) as CryptoKeyPair;
+  const readingJWK = await crypto.subtle.exportKey("jwk", reading.privateKey);
+  if (!readingJWK.d) fail("WebCrypto did not export the private X25519 fixture");
+  const readingPublic = new Uint8Array(await crypto.subtle.exportKey("raw", reading.publicKey));
+  const editBucket = await bucketId(readingPublic);
+
+  const editor = await crypto.subtle.generateKey({ name: "Ed25519" }, true, [
+    "sign",
+    "verify",
+  ]) as CryptoKeyPair;
+  const editorPublic = new Uint8Array(await crypto.subtle.exportKey("raw", editor.publicKey));
+
+  const sealed = await seal(readingPublic, await packEdits(items), editAssociatedData(editBucket));
+  const timestamp = 1_700_000_000;
+  const signature = await signMessage(
+    editor.privateKey,
+    await canonicalEdit(editBucket, timestamp, sealed),
+  );
+
+  const fixture = base64url(new TextEncoder().encode(JSON.stringify({
+    bucket: editBucket,
+    readingPrivate: readingJWK.d,
+    editor: base64url(editorPublic),
+    timestamp,
+    signature: base64url(signature),
+    sealed: base64url(sealed),
+  })));
+  return { items, fixture };
 }
 
 function marker(output: string, name: string): string {

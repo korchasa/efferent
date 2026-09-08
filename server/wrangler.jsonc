@@ -43,6 +43,14 @@
       "name": "WRITES",
       "namespace_id": "1002",
       "simple": { "limit": 300, "period": 60 }
+    },
+    {
+      // An agent submits an edit when it has something to say, a few times an
+      // hour at most; sixty a minute is room for a script that batches badly
+      // and a wall for one that loops.
+      "name": "EDITS",
+      "namespace_id": "1003",
+      "simple": { "limit": 60, "period": 60 }
     }
   ],
   "observability": {
