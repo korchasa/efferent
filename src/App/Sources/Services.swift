@@ -183,6 +183,10 @@ final class Services: ObservableObject {
             refreshStats()
             log.info("created bucket \(created.bucket)")
             await ensureEditorRegistered()
+            // The archive was made by a person on a screen, which is the one
+            // moment the writing sheet can be shown without waiting for the
+            // next launch.
+            await askForWriteAccessIfNeeded()
             // No pass yet: the caller marks the history next, and a pass run
             // before that marking sends what the archive check found missing,
             // only for the marking to queue those same days a second time.
