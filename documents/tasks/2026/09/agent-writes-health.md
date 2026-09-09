@@ -1,6 +1,6 @@
 ---
 date: 2026-09-08
-status: in progress
+status: done
 implements: []
 tags: [healthkit, server, protocol, mcp, write-path]
 related_tasks: []
@@ -149,10 +149,10 @@ Acceptance tuple per item: (FR, test or benchmark, evidence command). This repos
 - [x] **DoD-1** An agent holding a handoff can submit a batch of edits (add / replace / delete) for sleep, dietary energy, protein, carbohydrates, fat, water and body mass, with a start and end in the past, through the local MCP, the CLI and the Python reference of the public connection path. — (`DoD-1`, `tools/mcp_test.ts::phone_data_write`, `tools/connection_test.ts::editor key`, `deno test -A tools/`; Python path: `deno task interop:python`)
 - [x] **DoD-2** The service registers an editor key, stores edits sealed, lists them with their status, hands one back byte for byte with its signature headers, records the outcome the phone reports and drops the applied body; it never learns a metric name or a value, and every path has a ceiling. — (`DoD-2`, `server/server_test.ts::edits *`, `deno test -A server/`)
 - [x] **DoD-3** The phone, on any launch that can reach Health and is not paused, and only once write access has been asked for, fetches every pending edit, verifies the editor signature, opens them, applies each item to HealthKit with sync identifier + version, refuses items it cannot apply with a code, and reports the outcome; an edit whose outcome was not accepted stays pending and is applied again. — (`DoD-3`, `src/Tests/Sources/ApplierTests.swift`, `src/Tests/Sources/HealthWriterTests.swift`, `deno task test`)
-- [ ] **DoD-4** The days of applied items are marked and re-uploaded by the existing path, and the read catalogue includes every writable metric, and the agent's read tools accept them, so the archive shows the edit afterwards. — (`DoD-4`, `ApplierTests::testAppliedItemsMarkTheirDays`, `HealthTests::testEveryWritableMetricIsReadable`, `tools/mcp_test.ts::phone_data_daily answers dietaryEnergy`, `deno task test && deno test -A tools/`; end to end on the phone: `manual — korchasa`, `fastlane install app:efferent` then one real edit and `deno task efferent query`)
+- [x] **DoD-4** The days of applied items are marked and re-uploaded by the existing path, and the read catalogue includes every writable metric, and the agent's read tools accept them, so the archive shows the edit afterwards. — (`DoD-4`, `ApplierTests::testAppliedItemsMarkTheirDays`, `HealthTests::testEveryWritableMetricIsReadable`, `tools/mcp_test.ts::phone_data_daily answers dietaryEnergy`, `deno task test && deno test -A tools/`; end to end on the phone: `manual — korchasa`, `fastlane install app:efferent` then one real edit and `deno task efferent query`)
 - [x] **DoD-5** Re-applying the same batch (a crash before the ack) leaves Health with one copy of each sample. — (`DoD-5`, `ApplierTests::testReapplyingKeepsOneCopy`, `deno task test`)
 - [x] **DoD-6** `deno task interop` covers the editor signature and the sealed edit TypeScript → Swift; `deno task interop:python` covers the Python write path Python → TypeScript. — (`DoD-6`, `scripts/interop.ts`, `scripts/python-interop.ts`, `deno task interop && deno task interop:python`)
-- [ ] **DoD-7** `README.md`, `AGENTS.md`, `documents/connection.md` describe the write path, the fourth handoff field, the boundary and the new invariants; the walkthrough's second step says the app writes what an agent asks; `NSHealthUpdateUsageDescription` tells the truth. — (`DoD-7`, `manual — korchasa`, `grep -n "Editor key" README.md documents/connection.md src/Core/Sources/Wire/Connection.swift && grep -n "NSHealthUpdateUsageDescription" Project.swift`)
+- [x] **DoD-7** `README.md`, `AGENTS.md`, `documents/connection.md` describe the write path, the fourth handoff field, the boundary and the new invariants; the walkthrough's second step says the app writes what an agent asks; `NSHealthUpdateUsageDescription` tells the truth. — (`DoD-7`, `manual — korchasa`, `grep -n "Editor key" README.md documents/connection.md src/Core/Sources/Wire/Connection.swift && grep -n "NSHealthUpdateUsageDescription" Project.swift`)
 
 ## Solution
 
@@ -259,3 +259,15 @@ Every refusal has a code from one closed set shared by three languages; a code t
 - Workouts and meal correlations (`HKCorrelation`), several editor keys with individual revocation, a push channel: variant C, not started.
 - History of the new read metrics (meals, water, weight logged before this build): not exported automatically; the "Export everything Health has" key does it on request (plan-critic finding 8, deferred by the planner: a one-phone product, and the key exists).
 - Editor key rotation from the phone (a signed `PUT /editor` with a new key plus a fresh handoff): the endpoint is idempotent and allows it; no screen for it yet.
+
+## Verified on the phone (2026-09-09)
+
+Build 17 on the owner's iPhone, Worker version `6240ab4f`. A four-field handoff added
+`editor-key.json` to the existing reader. One `put` of 100 mL water for 2026-09-08 12:00 was
+answered `1 applied, 0 refused`; after the phone's pass the mirrored day carried the hour and the
+day total, with the older water records of that day intact. A `delete` of the same id was answered
+the same way and the re-uploaded day carried no water record. Closes DoD-4 and DoD-7.
+
+One defect found on the way: the write-permission sheet was requested from
+`applicationDidBecomeActive`, which an app built on SwiftUI scenes never receives; fixed in
+`f490083` by asking from `scenePhase` and right after the archive is created.
