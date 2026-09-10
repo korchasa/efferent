@@ -276,12 +276,11 @@ struct HomeView: View {
     /// would be a fact about this morning wearing the clothes of a total.
     private var countedEdits: String {
         let today = services.edits.today
-        // What is waiting belongs to no day: it is the thing to do next, and a
-        // question from yesterday is still the question.
-        if services.edits.ever.waiting > 0 {
-            return EditWords.counted(EditTally(waiting: services.edits.ever.waiting))
-        }
-        if today.total > 0 {
+        // The question is counted here as well, first, but it never takes the
+        // row over: this is the way into the journal, and a row that said only
+        // "2 waiting" would leave a person with no way to what an agent did.
+        // The ask has a strip of its own across the top for that.
+        if today.anything {
             return EditWords.counted(today) + " today"
         }
         return EditWords.counted(services.edits.ever) + " in all"
