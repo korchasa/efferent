@@ -106,14 +106,19 @@ public final class Store {
                 arguments: [now]
             )
             try db.execute(
-                sql: "DELETE FROM meta WHERE key IN (?, ?, ?, ?)",
+                sql: "DELETE FROM meta WHERE key IN (?, ?, ?, ?, ?)",
                 arguments: [
                     MetaKey.lastUploadAt.rawValue,
                     MetaKey.backfillReached.rawValue,
                     MetaKey.lastReconciledAt.rawValue,
                     MetaKey.editorRegisteredFor.rawValue,
+                    MetaKey.editsSeenAt.rawValue,
                 ]
             )
+            // The journal describes one agent's work on one archive. Another
+            // archive is another agent, and a list of edits nobody can undo any
+            // more — the ids in it name records this phone no longer tracks.
+            try db.execute(sql: "DELETE FROM editLog")
             try Self.setString(db, MetaKey.archiveBucket.rawValue, bucket)
             return true
         }
@@ -584,6 +589,204 @@ public final class Store {
                 backfillReached: Self.string(db, MetaKey.backfillReached.rawValue)
             )
         }
+    }
+
+    // MARK: - What an agent changed
+
+    /// Write down one item of an edit, as it was applied.
+    ///
+    /// Keyed by the edit and the item's place in it rather than by the agent's
+    /// id, so the two ways the same row comes round again both land on it: a
+    /// run that died between writing and answering applies the whole edit
+    /// again, and an agent correcting its own record reuses the id on purpose.
+    /// A re-applied item is the same item, so `undoneAt` is cleared with it —
+    /// the record is back in Health, whatever the person did last time.
+    public func recordEdit(
+        _ item: EditItem,
+        at index: Int,
+        in editName: String,
+        state: EditEntry.State,
+        day: String?,
+        code: OutcomeCode? = nil,
+        at moment: Date = Date()
+    ) throws {
+        var metric: String?
+        var start: Double?
+        var end: Double?
+        var value: Double?
+        var unit: String?
+        var stage: String?
+        if case let .put(put) = item {
+            metric = put.metric
+            start = Double(put.start)
+            end = Double(put.end)
+            value = put.value
+            unit = put.unit
+            stage = put.stage
+        }
+        try write(
+            editName: editName, item: index, recordID: item.id, state: state, metric: metric,
+            start: start, end: end, value: value, unit: unit, stage: stage, day: day, code: code,
+            at: moment
+        )
+    }
+
+    /// An edit that could not be opened at all: no signature, no seal, no
+    /// shape. It has no items to speak of, so it is written down as one line
+    /// with the word that turned it away.
+    public func recordUnopenedEdit(
+        _ editName: String, code: OutcomeCode, at moment: Date = Date()
+    ) throws {
+        try write(
+            editName: editName, item: 0, recordID: "", state: .refused, metric: nil, start: nil,
+            end: nil, value: nil, unit: nil, stage: nil, day: nil, code: code, at: moment
+        )
+    }
+
+    private func write(
+        editName: String,
+        item: Int,
+        recordID: String,
+        state: EditEntry.State,
+        metric: String?,
+        start: Double?,
+        end: Double?,
+        value: Double?,
+        unit: String?,
+        stage: String?,
+        day: String?,
+        code: OutcomeCode?,
+        at moment: Date
+    ) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: """
+                INSERT INTO editLog
+                    (editName, item, recordId, state, metric, startAt, endAt, value, unit, stage,
+                     day, code, appliedAt, undoneAt)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                ON CONFLICT(editName, item) DO UPDATE SET
+                    recordId = excluded.recordId,
+                    state = excluded.state,
+                    metric = excluded.metric,
+                    startAt = excluded.startAt,
+                    endAt = excluded.endAt,
+                    value = excluded.value,
+                    unit = excluded.unit,
+                    stage = excluded.stage,
+                    day = excluded.day,
+                    code = excluded.code,
+                    appliedAt = excluded.appliedAt,
+                    undoneAt = NULL
+                """,
+                arguments: [
+                    editName, item, recordID, state.rawValue, metric, start, end, value, unit,
+                    stage, day, code?.rawValue, moment.timeIntervalSince1970,
+                ]
+            )
+        }
+    }
+
+    /// The end of the journal, newest first. There is no screen for the whole
+    /// of it: a person looks at what an agent did lately, and the rest is
+    /// weight nobody reads.
+    public func recentEdits(limit: Int = 300) throws -> [EditEntry] {
+        try dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: "SELECT * FROM editLog ORDER BY appliedAt DESC, id DESC LIMIT ?",
+                arguments: [limit]
+            ).compactMap(Self.entry)
+        }
+    }
+
+    public func edit(_ id: Int64) throws -> EditEntry? {
+        try dbQueue.read { db in
+            try Row.fetchOne(db, sql: "SELECT * FROM editLog WHERE id = ?", arguments: [id])
+                .flatMap(Self.entry)
+        }
+    }
+
+    /// The record is out of Health again, by the person's own hand.
+    public func markEditUndone(_ id: Int64, at moment: Date = Date()) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE editLog SET state = ?, undoneAt = ? WHERE id = ?",
+                arguments: [EditEntry.State.undone.rawValue, moment.timeIntervalSince1970, id]
+            )
+        }
+    }
+
+    /// The three counts the screen asks for, in one read: what has landed since
+    /// the person last looked, what has landed today, and everything there has
+    /// ever been.
+    public func editSummary(seenAt seen: Date?, todayFrom todayStart: Date) throws -> EditSummary {
+        try dbQueue.read { db in
+            try EditSummary(
+                unseen: Self.tally(db, after: seen?.timeIntervalSince1970),
+                today: Self.tally(db, after: todayStart.timeIntervalSince1970),
+                ever: Self.tally(db, after: nil)
+            )
+        }
+    }
+
+    public func editsSeenAt() throws -> Date? {
+        try dbQueue.read { db in
+            try Self.int(db, MetaKey.editsSeenAt.rawValue)
+                .map { Date(timeIntervalSince1970: TimeInterval($0)) }
+        }
+    }
+
+    public func recordEditsSeen(at moment: Date = Date()) throws {
+        try dbQueue.write { db in
+            try Self.setInt(db, MetaKey.editsSeenAt.rawValue, Int64(moment.timeIntervalSince1970))
+        }
+    }
+
+    /// Nothing has been seen when nothing has ever been looked at, which is why
+    /// a nil moment counts the whole journal rather than none of it.
+    private static func tally(_ db: GRDB.Database, after moment: Double?) throws -> EditTally {
+        var tally = EditTally()
+        let rows = try Row.fetchAll(
+            db,
+            sql: "SELECT state, COUNT(*) AS n FROM editLog WHERE appliedAt > ? GROUP BY state",
+            arguments: [moment ?? -1]
+        )
+        for row in rows {
+            let count: Int = row["n"]
+            switch EditEntry.State(rawValue: row["state"]) {
+            case .applied: tally.applied = count
+            case .refused: tally.refused = count
+            case .deleted: tally.deleted = count
+            case .undone: tally.undone = count
+            case nil: break
+            }
+        }
+        return tally
+    }
+
+    private static func entry(_ row: Row) -> EditEntry? {
+        guard let state = EditEntry.State(rawValue: row["state"]) else { return nil }
+        let instant: (String) -> Date? = { column in
+            (row[column] as Double?).map { Date(timeIntervalSince1970: $0) }
+        }
+        return EditEntry(
+            id: row["id"],
+            editName: row["editName"],
+            item: row["item"],
+            recordID: row["recordId"],
+            state: state,
+            metric: row["metric"],
+            start: instant("startAt"),
+            end: instant("endAt"),
+            value: row["value"],
+            unit: row["unit"],
+            stage: row["stage"],
+            day: row["day"],
+            code: (row["code"] as String?).flatMap(OutcomeCode.init(rawValue:)),
+            at: Date(timeIntervalSince1970: row["appliedAt"]),
+            undoneAt: instant("undoneAt")
+        )
     }
 
     // MARK: - meta helpers

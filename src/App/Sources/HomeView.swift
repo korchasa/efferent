@@ -24,6 +24,7 @@ struct HomeView: View {
     @State private var probed = false
     @State private var reachSelection: RangeSelection = .everything
     @State private var readingLog = false
+    @State private var readingEdits = false
     /// Taps on the name so far. The log is not a feature of this app, so it has
     /// no key of its own: five taps on the name open it, and putting the app
     /// down forgets them.
@@ -32,6 +33,7 @@ struct HomeView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            agentNotice
 
             Spacer(minLength: 0)
 
@@ -85,6 +87,7 @@ struct HomeView: View {
             }
         }
         .sheet(isPresented: $readingLog) { LogView() }
+        .sheet(isPresented: $readingEdits) { EditsView() }
         .sheet(isPresented: $connecting) { connectSheet }
         .sheet(isPresented: $reachingBack) { reachBackSheet }
         .sheet(isPresented: $explainingAccess) { accessSheet }
@@ -136,6 +139,9 @@ struct HomeView: View {
     /// person does daily is the dial itself, so nothing else belongs here.
     private var keys: some View {
         VStack(spacing: 0) {
+            if services.edits.ever.total > 0 {
+                editsRow
+            }
             RowDivider()
             HStack(alignment: .top, spacing: 8) {
                 KeyButton(label: "reach back", symbol: "clock.arrow.circlepath") {
@@ -156,6 +162,83 @@ struct HomeView: View {
             }
             .padding(.top, 14)
         }
+    }
+
+    // MARK: - What the agent changed
+
+    /// What an agent has just done, across the top of the screen, until it has
+    /// been looked at.
+    ///
+    /// The one dark surface in the app, and the only thing allowed above the
+    /// dial: a run that has just landed is news, and news has a shelf life.
+    /// Opening the list is what ends it — the same run tomorrow is history, and
+    /// history belongs in the list.
+    @ViewBuilder private var agentNotice: some View {
+        if services.edits.unseen.total > 0 {
+            DarkPanel(padding: 0) {
+                Button { readingEdits = true } label: {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Legend("agent edits · just now", size: 9, colour: Palette.darkLegend)
+                        Text(EditWords.summary(services.edits.unseen))
+                            .font(.system(size: 15))
+                            .foregroundStyle(.white)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                if services.edits.unseen.applied > 0 {
+                    Palette.body.frame(height: 1)
+                    Button {
+                        Task { await services.undoRecentRun() }
+                    } label: {
+                        Legend("undo", size: 11, colour: Palette.accent)
+                            .frame(maxWidth: .infinity, minHeight: 46)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.top, 12)
+        }
+    }
+
+    /// The way into the list, once anything has ever been written. A lamp and a
+    /// legend, the way the brand row says what sending is doing.
+    private var editsRow: some View {
+        Button { readingEdits = true } label: {
+            VStack(spacing: 0) {
+                RowDivider()
+                HStack(spacing: 9) {
+                    Circle()
+                        .fill(services.edits.unseen.total > 0 ? Palette.accent : Palette.legend)
+                        .frame(width: 7, height: 7)
+                    Legend(countedEdits, size: 9, colour: Palette.ink)
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Palette.tick)
+                }
+                .padding(.vertical, 13)
+                .contentShape(Rectangle())
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Today's tally while there is one, and the whole journal's when there is
+    /// not: a row that said "no edits" on a phone an agent writes to every week
+    /// would be a fact about this morning wearing the clothes of a total.
+    private var countedEdits: String {
+        let today = services.edits.today
+        if today.total > 0 {
+            return EditWords.counted(today) + " today"
+        }
+        return EditWords.counted(services.edits.ever) + " in all"
     }
 
     // MARK: - Handing the archive to an agent
@@ -601,7 +684,7 @@ struct ConnectContent: View {
     /// part of it opens nothing.
     private var handoffPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Legend("prompt for your agent", size: 9, colour: Color(white: 0.51))
+            Legend("prompt for your agent", size: 9, colour: Palette.darkLegend)
             Text(services.connectionHandoff?.text ?? "—")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.white)

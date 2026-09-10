@@ -28,6 +28,9 @@ enum Palette {
     static let accent = Color(red: 1.000, green: 0.294, blue: 0.071)
     /// #C0392B — a stopped scale, and the one row that destroys something.
     static let alarm = Color(red: 0.753, green: 0.224, blue: 0.169)
+    /// #828282 — a legend printed on ink, where the ordinary legend colour
+    /// sinks into the panel it is standing on.
+    static let darkLegend = Color(white: 0.51)
 }
 
 /// The small monospaced capitals printed next to a control.
@@ -238,6 +241,40 @@ struct Panel<Content: View>: View {
                 RoundedRectangle(cornerRadius: 3, style: .continuous)
                     .strokeBorder(Palette.hairline, lineWidth: 1)
             )
+    }
+}
+
+/// A block printed in ink rather than on it.
+///
+/// The app has one dark surface and it is used for one kind of thing: what has
+/// just happened, or what is being handed over. Everything a person reads at
+/// leisure is printed on the shell.
+struct DarkPanel<Content: View>: View {
+    var padding: CGFloat = 16
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) { content }
+            .padding(padding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Palette.ink, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
+    }
+}
+
+/// The one row that destroys something.
+///
+/// The same geometry as the way forward, because on the screen it appears on it
+/// *is* the way forward — and the alarm colour, because it is the only thing in
+/// this app that takes something out of Health.
+struct DangerButton: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .medium, design: .monospaced))
+            .textCase(.uppercase)
+            .kerning(2)
+            .foregroundStyle(Palette.alarm)
+            .frame(maxWidth: .infinity, minHeight: 54)
+            .opacity(configuration.isPressed ? 0.6 : 1)
     }
 }
 

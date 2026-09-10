@@ -10,30 +10,37 @@ import HealthKit
 public struct WritableMetric: Sendable {
     /// The name on the wire — the same one the day format uses for the metric.
     public let name: String
+    /// What a person calls it. A wire name on a screen is a leak of the
+    /// protocol into the app, and `dietaryCarbohydrates` is nobody's word for
+    /// lunch. Kept here, beside the name it belongs to, so a metric added to
+    /// the catalogue without one does not compile.
+    public let spoken: String
     public let type: HKSampleType
     /// The one unit a value may arrive in. Nil for a category.
     public let unit: HKUnit?
 
-    private init(name: String, _ identifier: HKQuantityTypeIdentifier, _ unit: HKUnit) {
+    private init(name: String, spoken: String, _ identifier: HKQuantityTypeIdentifier, _ unit: HKUnit) {
         self.name = name
+        self.spoken = spoken
         type = HKQuantityType(identifier)
         self.unit = unit
     }
 
-    private init(name: String, category identifier: HKCategoryTypeIdentifier) {
+    private init(name: String, spoken: String, category identifier: HKCategoryTypeIdentifier) {
         self.name = name
+        self.spoken = spoken
         type = HKCategoryType(identifier)
         unit = nil
     }
 
     public static let all: [WritableMetric] = [
-        .init(name: "sleep", category: .sleepAnalysis),
-        .init(name: "dietaryEnergy", .dietaryEnergyConsumed, .kilocalorie()),
-        .init(name: "dietaryProtein", .dietaryProtein, .gram()),
-        .init(name: "dietaryCarbohydrates", .dietaryCarbohydrates, .gram()),
-        .init(name: "dietaryFat", .dietaryFatTotal, .gram()),
-        .init(name: "dietaryWater", .dietaryWater, .literUnit(with: .milli)),
-        .init(name: "bodyMass", .bodyMass, .gramUnit(with: .kilo)),
+        .init(name: "sleep", spoken: "Sleep", category: .sleepAnalysis),
+        .init(name: "dietaryEnergy", spoken: "Energy", .dietaryEnergyConsumed, .kilocalorie()),
+        .init(name: "dietaryProtein", spoken: "Protein", .dietaryProtein, .gram()),
+        .init(name: "dietaryCarbohydrates", spoken: "Carbohydrates", .dietaryCarbohydrates, .gram()),
+        .init(name: "dietaryFat", spoken: "Fat", .dietaryFatTotal, .gram()),
+        .init(name: "dietaryWater", spoken: "Water", .dietaryWater, .literUnit(with: .milli)),
+        .init(name: "bodyMass", spoken: "Body mass", .bodyMass, .gramUnit(with: .kilo)),
     ]
 
     public static func named(_ name: String) -> WritableMetric? {
@@ -48,6 +55,17 @@ public struct WritableMetric: Sendable {
         "asleepCore": .asleepCore,
         "asleepDeep": .asleepDeep,
         "asleepREM": .asleepREM,
+    ]
+
+    /// What a person calls each stage, in the same order of preference as the
+    /// map above: the wire name is the agent's word, not theirs.
+    public static let sleepStageWords: [String: String] = [
+        "inBed": "in bed",
+        "awake": "awake",
+        "asleepUnspecified": "asleep",
+        "asleepCore": "core sleep",
+        "asleepDeep": "deep sleep",
+        "asleepREM": "REM sleep",
     ]
 
     /// Every type the app asks to write.

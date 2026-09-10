@@ -52,9 +52,16 @@ final class Services: ObservableObject {
     /// launches so a phone restarted in the middle of a first export still
     /// knows what it is counting towards; zero means nothing is outstanding.
     @Published private(set) var batchTotal: Int
+    /// What an agent has changed: since the person last looked, since the start
+    /// of today, and ever. The everyday screen reads all three.
+    @Published private(set) var edits = EditSummary()
 
     private var uploader: Uploader?
     private var applier: Applier?
+    /// The one way into Health's write side. Undo uses it as the applier does,
+    /// because taking a record back out is the same operation the agent's own
+    /// `delete` performs.
+    private lazy var healthWriter = HealthKitWriter(calendar: calendar)
     /// Built for a screenshot: figures are fixed, and nothing here may move them.
     private let demonstration: Bool
 
@@ -153,6 +160,43 @@ final class Services: ObservableObject {
         agentConnected = false
         paused = false
         self.batchTotal = batchTotal
+    }
+
+    /// One line of a demonstration's agent run.
+    struct DemoEdit {
+        let item: EditItem
+        let state: EditEntry.State
+        var day: String?
+        var code: OutcomeCode?
+        let at: Date
+    }
+
+    /// Put a run of an agent's work into a demonstration's journal.
+    ///
+    /// `refreshStats` leaves a screenshot's figures alone on purpose, and the
+    /// edit screens are the ones that read the journal rather than the stats,
+    /// so their contents have to be put in by hand. Does nothing in the app.
+    func demonstrate(_ run: [DemoEdit]) {
+        guard demonstration else { return }
+        do {
+            for (index, edit) in run.enumerated() {
+                try store.recordEdit(
+                    edit.item, at: index, in: "1757336400000-abcdefgh",
+                    // An undone row is an applied one somebody took back, so it
+                    // is written the way the app writes it and then undone.
+                    state: edit.state == .undone ? .applied : edit.state,
+                    day: edit.day, code: edit.code, at: edit.at
+                )
+            }
+            let written = try store.recentEdits()
+            for edit in run where edit.state == .undone {
+                guard let row = written.first(where: { $0.recordID == edit.item.id }) else { continue }
+                try store.markEditUndone(row.id, at: edit.at.addingTimeInterval(240))
+            }
+            edits = try store.editSummary(seenAt: nil, todayFrom: calendar.startOfDay(for: Date()))
+        } catch {
+            lastError = String(describing: error)
+        }
     }
 
     // MARK: - Archive creation and connection
@@ -318,8 +362,9 @@ final class Services: ObservableObject {
             readingKey: { [readingIdentity] in try readingIdentity.privateKey() },
             editorPublicKey: { [editor] in try editor.signingKey().publicKey.rawRepresentation },
             store: store,
-            writer: HealthKitWriter(calendar: calendar),
-            fetch: Applier.session()
+            writer: healthWriter,
+            fetch: Applier.session(),
+            calendar: calendar
         )
         applier = built
         return built
@@ -339,6 +384,9 @@ final class Services: ObservableObject {
             let fresh = try store.stats()
             stats = fresh
             trackBatch(pending: fresh.pendingDays)
+            edits = try store.editSummary(
+                seenAt: store.editsSeenAt(), todayFrom: calendar.startOfDay(for: Date())
+            )
         } catch {
             lastError = String(describing: error)
         }
@@ -502,11 +550,107 @@ final class Services: ObservableObject {
                 let marked = try store.markDirty(applied.days)
                 log.info("\(applied.days.count) days changed by edits, \(marked) newly waiting")
             }
+            // Said once per run, from the launch that did it — which is usually
+            // one nobody is looking at. The screen learns the same fact from
+            // the journal the next time it refreshes.
+            await Notices.tell(applied: applied.items - applied.refused, refused: applied.refused)
         } catch where HealthReader.isLocked(error) {
             log.debug("the phone is locked, so no edit could be applied; they wait")
         } catch {
             log.error("applying edits failed: \(String(describing: error))")
         }
+    }
+
+    // MARK: - What an agent changed
+
+    /// The end of the journal, newest first, for the list.
+    func recentEdits() -> [EditEntry] {
+        do {
+            return try store.recentEdits()
+        } catch {
+            lastError = String(describing: error)
+            return []
+        }
+    }
+
+    /// The person has looked. What lands after this moment is what the dark
+    /// strip on the everyday screen counts.
+    func markEditsSeen() {
+        do {
+            try store.recordEditsSeen()
+            refreshStats()
+        } catch {
+            lastError = String(describing: error)
+        }
+    }
+
+    /// Take a record the agent wrote back out of Health.
+    ///
+    /// The same operation the agent's own `delete` performs, for the same
+    /// reason it is possible at all: an app may remove what it wrote itself. A
+    /// record already gone is not a failure — the journal simply catches up
+    /// with Health, which is the one that decides.
+    func undo(_ entry: EditEntry) async {
+        await takeOut(entry)
+        refreshStats()
+        // The day is owed now, and the person is watching: a day that went up
+        // on the next delivery would leave the archive disagreeing with Health
+        // for an hour, with nothing on screen saying why.
+        await sendNow()
+    }
+
+    /// Take back everything that has landed since the person last looked.
+    ///
+    /// The whole run at once, because that is what the strip on the everyday
+    /// screen is about: a batch that has just arrived and is not wanted. A
+    /// refusal has nothing to take back and a deletion cannot be taken back, so
+    /// both are passed over rather than reported as failures.
+    func undoRecentRun() async {
+        let seen = (try? store.editsSeenAt()) ?? .distantPast
+        for entry in recentEdits() where entry.canBeUndone && entry.at > seen {
+            await takeOut(entry)
+        }
+        markEditsSeen()
+        await sendNow()
+    }
+
+    private func takeOut(_ entry: EditEntry) async {
+        guard entry.canBeUndone else { return }
+        do {
+            let days = try await healthWriter.remove(id: entry.recordID)
+            try store.forgetWritten(entry.recordID)
+            try store.markEditUndone(entry.id)
+            let marked = try store.markDirty(days)
+            log.info(
+                "undid an edit: \(days.count) days changed, \(marked) newly waiting"
+            )
+            lastError = nil
+        } catch WriteRefused.code(.notFound) {
+            // Health has not got it, so there is nothing to take out and
+            // nothing to mark: the day it was on changed when it went.
+            do { try store.markEditUndone(entry.id) } catch {
+                lastError = String(describing: error)
+            }
+            log.info("undid an edit Health no longer had")
+        } catch where HealthReader.isLocked(error) {
+            lastError = "Unlock the phone and try again — Health is sealed while it is locked."
+        } catch {
+            log.error("undoing an edit failed: \(String(describing: error))")
+            lastError = "That record could not be taken out of Health. (\(error))"
+        }
+    }
+
+    /// Ask about notices, but only once an agent has actually written
+    /// something.
+    ///
+    /// Asking on a first launch is asking about a thing that has never
+    /// happened, and a person who says no there says it for good. After the
+    /// first edit the question is about something they have just seen.
+    func askForNoticesIfNeeded() async {
+        guard !demonstration, agentConnected else { return }
+        guard edits.ever.total > 0 else { return }
+        guard await Notices.status() == .notDetermined else { return }
+        await Notices.ask()
     }
 
     /// The first day Health has anything about, for the screen that offers a
