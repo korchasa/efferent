@@ -659,7 +659,7 @@ struct ShareSheet: UIViewControllerRepresentable {
 /// nobody has to guess at, and every other way of sending it is handed the text
 /// itself — a message, a note or the clipboard is meant to hold the prompt, not
 /// an attachment.
-private final class TextToShare: NSObject, UIActivityItemSource {
+final class TextToShare: NSObject, UIActivityItemSource {
     private let text: String
     private let file: URL?
 
