@@ -135,6 +135,16 @@ enum Database {
             try db.create(index: "editLog_on_time", on: "editLog", columns: ["appliedAt"])
         }
 
+        // What a row says and what the service was told can come apart, because
+        // a person may approve or turn down a held item while the phone has no
+        // network. `owed` is that gap: the decision is already made here, and
+        // the service has not heard it yet. The next run pays it.
+        migrator.registerMigration("v5.editLog.owed") { db in
+            try db.alter(table: "editLog") { table in
+                table.add(column: "owed", .boolean).notNull().defaults(to: false)
+            }
+        }
+
         return migrator
     }
 

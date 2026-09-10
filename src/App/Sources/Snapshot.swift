@@ -5,7 +5,7 @@ import UIKit
 
 /// The store screenshots, rendered by the app itself.
 ///
-/// `--snapshot <directory>` on the command line makes the launch render five
+/// `--snapshot <directory>` on the command line makes the launch render six
 /// screens offscreen at the 6.7-inch store size (1290 × 2796) and quit. Nothing
 /// real is touched: the screens are fed a `Services` built on an in-memory store
 /// with figures chosen to show each state, and the archive in the prompt is a
@@ -41,9 +41,17 @@ enum Snapshot {
         let sending = try Self.sending()
         sending.demonstrate(Self.run())
         let journal = sending.recentEdits()
-        guard let lunch = journal.first(where: { $0.metric == "dietaryEnergy" }) else {
+        // The applied one, not the change waiting beside it under the same id:
+        // this screen is the record that is in Health and the way back out of it.
+        guard let lunch = journal.first(where: {
+            $0.metric == "dietaryEnergy" && $0.state == .applied
+        }) else {
             throw SnapshotError.notRendered("05-edit")
         }
+        // In the store's own order, which is the order the person is asked in:
+        // oldest first, and the items of one edit as the agent sent them.
+        let waiting = sending.waitingEdits()
+        guard !waiting.isEmpty else { throw SnapshotError.notRendered("06-waiting") }
 
         let screens: [(name: String, view: AnyView)] = [
             ("01-welcome", AnyView(SetupView().environmentObject(fresh))),
@@ -51,6 +59,7 @@ enum Snapshot {
             ("03-connect", AnyView(ConnectScreen().environmentObject(sending))),
             ("04-edits", AnyView(EditsScreen(journal: journal).environmentObject(sending))),
             ("05-edit", AnyView(EditScreen(entry: lunch, calendar: sending.calendar))),
+            ("06-waiting", AnyView(ReviewScreen(waiting: waiting).environmentObject(sending))),
         ]
         for screen in screens {
             let renderer = ImageRenderer(content: screen.view.frame(width: size.width, height: size.height))
@@ -88,9 +97,10 @@ enum Snapshot {
     }
 
     /// A day and a half of an agent's work, with one of each thing that can
-    /// become of an item: written, taken back out, refused, and a record the
-    /// agent removed. The instants are relative, so the list groups them under
-    /// "today" and "yesterday" whenever the screenshots happen to be taken.
+    /// become of an item: written, taken back out, refused, a record the agent
+    /// removed, and two it is waiting to be allowed to change. The instants are
+    /// relative, so the list groups them under "today" and "yesterday" whenever
+    /// the screenshots happen to be taken.
     private static func run() -> [Services.DemoEdit] {
         let calendar = Day.calendar()
         let morning = calendar.startOfDay(for: Date())
@@ -156,6 +166,21 @@ enum Snapshot {
                 item: .delete(id: "agent:meal:0"),
                 state: .deleted, day: yesterday, at: at(before, 9.1)
             ),
+            // The two waiting ones: a meal the agent wants to correct, and a
+            // record it wants to take away. Both would change what Health holds
+            // now, so neither has been written.
+            .init(
+                item: .put(.init(
+                    id: "agent:meal:1", metric: "dietaryEnergy",
+                    start: seconds(at(morning, 13)), end: seconds(at(morning, 13.25)),
+                    value: 610, unit: "kcal", stage: nil
+                )),
+                state: .waiting, day: today, code: .awaitingApproval, at: at(morning, 14.6)
+            ),
+            .init(
+                item: .delete(id: "agent:mass:1"),
+                state: .waiting, day: today, code: .awaitingApproval, at: at(morning, 14.6)
+            ),
         ]
     }
 }
@@ -194,6 +219,23 @@ private struct EditScreen: View {
                 .foregroundStyle(Palette.ink)
                 .frame(height: 52)
             EditDetailView(entry: entry, calendar: calendar, remove: {}, scrolls: false)
+        }
+        .pageBackground()
+    }
+}
+
+/// The question as a whole screen: the same content under a title row of its
+/// own, because an image renderer presents no navigation.
+private struct ReviewScreen: View {
+    let waiting: [EditEntry]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Text("Waiting for you")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Palette.ink)
+                .frame(height: 52)
+            EditReviewView(showing: waiting, scrolls: false)
         }
         .pageBackground()
     }

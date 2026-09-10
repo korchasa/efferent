@@ -196,24 +196,25 @@ final class EditLogTests: XCTestCase {
         var world = try ApplierTests.World()
         world.writer.refuse["agent:sleep:1"] = .unauthorized
         let written = try world.submit(ApplierTests.breakfast + "," + ApplierTests.sleep)
-        let name = try world.submit(#"{"op":"delete","id":"agent:meal:1"}"#)
+        let name = try world.submit(#"{"op":"delete","id":"agent:water:1"}"#)
 
         _ = try await world.applier().run()
 
         let entries = try world.store.recentEdits()
         XCTAssertEqual(entries.count, 3)
 
+        // Health has nothing under that id, so the removal is nobody's business:
+        // it is refused the way it always was, and no decision is asked for.
         let removed = try XCTUnwrap(entries.first { $0.editName == name })
-        XCTAssertEqual(removed.state, .deleted)
-        XCTAssertEqual(removed.recordID, "agent:meal:1")
+        XCTAssertEqual(removed.state, .refused)
+        XCTAssertEqual(removed.code, .notFound)
+        XCTAssertEqual(removed.recordID, "agent:water:1")
         // A deletion names no metric and no instant: the record was gone before
         // anything could ask it anything.
         XCTAssertNil(removed.metric)
-        XCTAssertEqual(removed.day, "2025-09-07")
+        XCTAssertNil(removed.day)
         XCTAssertFalse(removed.canBeUndone)
 
-        // The same id, twice: written by one edit and taken out by the next.
-        // They are two lines, told apart by the edit each belongs to.
         let meal = try XCTUnwrap(entries.first { $0.editName == written && $0.item == 0 })
         XCTAssertEqual(meal.state, .applied)
         XCTAssertEqual(meal.metric, "dietaryEnergy")
@@ -240,6 +241,95 @@ final class EditLogTests: XCTestCase {
         XCTAssertEqual(entry.state, .refused)
         XCTAssertEqual(entry.code, .badSignature)
         XCTAssertEqual(entry.recordID, "")
+    }
+
+    // MARK: - What is waiting
+
+    func testAHeldItemKeepsEveryFieldAndRebuildsIntoTheItemItCameFrom() throws {
+        let store = try Store.inMemory()
+        try store.recordEdit(
+            lunch(), at: 0, in: "1757336400000-abcdefgh", state: .waiting, day: "2025-09-08",
+            code: .awaitingApproval, at: Self.noon
+        )
+
+        let entry = try XCTUnwrap(store.waitingEdits().first)
+        XCTAssertEqual(entry.state, .waiting)
+        XCTAssertEqual(entry.code, .awaitingApproval)
+        XCTAssertFalse(entry.canBeUndone, "nothing has been written")
+        // This is what lets the person decide next week: the edit is long gone
+        // from the service's queue, and the journal is all there is.
+        XCTAssertEqual(entry.asItem, lunch())
+    }
+
+    func testARemovalWaitingRebuildsAsARemoval() throws {
+        let store = try Store.inMemory()
+        try store.recordEdit(
+            .delete(id: "agent:meal:1"), at: 0, in: "a", state: .waiting, day: nil,
+            code: .awaitingApproval, at: Self.noon
+        )
+
+        let entry = try XCTUnwrap(store.waitingEdits().first)
+        XCTAssertEqual(entry.asItem, .delete(id: "agent:meal:1"))
+    }
+
+    func testAnUnreadableEditRebuildsIntoNothing() throws {
+        let store = try Store.inMemory()
+        try store.recordUnopenedEdit("a", code: .badSignature, at: Self.noon)
+        XCTAssertNil(try XCTUnwrap(store.recentEdits().first).asItem)
+    }
+
+    func testWhatIsWaitingIsCountedWithNoWatermarkOverIt() throws {
+        let store = try Store.inMemory()
+        try store.recordEdit(
+            lunch(), at: 0, in: "a", state: .waiting, day: "2025-09-08",
+            code: .awaitingApproval, at: Self.noon
+        )
+        try store.recordEditsSeen(at: Self.noon.addingTimeInterval(60))
+
+        let summary = try store.editSummary(
+            seenAt: store.editsSeenAt(), todayFrom: Self.noon.addingTimeInterval(-3600)
+        )
+        // Looked at and still unanswered: the screen must keep asking.
+        XCTAssertEqual(summary.ever.waiting, 1)
+        XCTAssertEqual(summary.unseen.total, 0)
+        XCTAssertEqual(summary.ever.total, 0, "a question is not something the agent did")
+        XCTAssertTrue(summary.ever.anything)
+    }
+
+    func testADecisionIsOwedUntilTheServiceHasBeenTold() throws {
+        let store = try Store.inMemory()
+        try store.recordEdit(
+            lunch(), at: 0, in: "a", state: .waiting, day: "2025-09-08",
+            code: .awaitingApproval, at: Self.noon
+        )
+        XCTAssertEqual(try store.owedEdits(), [], "the outcome that said 'waiting' landed")
+
+        try store.declineWaiting()
+
+        let entry = try XCTUnwrap(store.recentEdits().first)
+        XCTAssertEqual(entry.state, .declined)
+        XCTAssertEqual(entry.code, .declined)
+        XCTAssertEqual(entry.at, Self.noon, "a refusal is not news, so it keeps its place")
+        XCTAssertEqual(try store.owedEdits(), ["a"])
+
+        try store.markEditTold("a")
+        XCTAssertEqual(try store.owedEdits(), [])
+        XCTAssertTrue(try store.waitingEdits().isEmpty)
+    }
+
+    func testAnEditComesBackWholeSoAnOutcomeCanBeRebuilt() throws {
+        let store = try Store.inMemory()
+        try store.recordEdit(lunch(), at: 0, in: "a", state: .applied, day: "2025-09-08", at: Self.noon)
+        try store.recordEdit(
+            lunch(id: "agent:meal:2"), at: 1, in: "a", state: .waiting, day: "2025-09-08",
+            code: .awaitingApproval, at: Self.noon
+        )
+        try store.recordEdit(lunch(id: "agent:meal:3"), at: 0, in: "b", state: .applied, day: "2025-09-08", at: Self.noon)
+
+        let rows = try store.edits(of: "a")
+        XCTAssertEqual(rows.map(\.item), [0, 1], "in the order the items arrived in")
+        XCTAssertEqual(rows.map(\.state), [.applied, .waiting])
+        XCTAssertEqual(try store.edits(of: "b").count, 1, "one edit's rows, not another's")
     }
 
     func testAnEditAppliedTwiceLeavesTheJournalAsItWas() async throws {

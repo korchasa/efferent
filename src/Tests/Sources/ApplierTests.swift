@@ -74,6 +74,16 @@ final class ApplierTests: XCTestCase {
             undecided
         }
 
+        func holds(id: String, metric: String?) async throws -> Set<String> {
+            guard let held = samples[id] else { return [] }
+            // A put asks about its own type only, as the real writer does: the
+            // same id under another metric is a record of its own.
+            guard metric == nil || held.put.metric == metric else { return [] }
+            return [Day.of(
+                Date(timeIntervalSince1970: TimeInterval(held.put.start)), in: ApplierTests.utc
+            )]
+        }
+
         func apply(_ item: EditItem.Put, version: Int) async throws -> Set<String> {
             writes += 1
             if let code = refuse[item.id] {
@@ -170,20 +180,23 @@ final class ApplierTests: XCTestCase {
     func testEditsAreAppliedInOrderAndAnsweredWithTheirDays() async throws {
         var world = try World()
         let first = try world.submit(Self.breakfast + "," + Self.sleep)
-        let second = try world.submit(#"{"op":"delete","id":"agent:meal:1"}"#)
+        let second = try world.submit(#"{"op":"put","id":"agent:water:1","metric":"dietaryWater","start":1757228400,"end":1757228400,"value":250,"unit":"mL"}"#)
 
         let outcome = try applied(await world.applier().run())
 
         XCTAssertEqual(outcome.edits, 2)
         XCTAssertEqual(outcome.items, 3)
         XCTAssertEqual(outcome.refused, 0)
+        XCTAssertEqual(outcome.waiting, 0, "three records Health had nothing under: all additions")
         XCTAssertEqual(outcome.days, ["2025-09-07", "2025-09-06"])
         XCTAssertNil(outcome.stoppedBy)
         XCTAssertEqual(world.service.fetched, [first, second], "listing order")
         XCTAssertEqual(world.service.outcomes[first]?["applied"] as? Int, 2)
         XCTAssertEqual(world.service.outcomes[second]?["applied"] as? Int, 1)
         XCTAssertTrue(world.service.queue.isEmpty)
-        XCTAssertEqual(world.writer.samples.keys.sorted(), ["agent:sleep:1"], "the meal was deleted again")
+        XCTAssertEqual(
+            world.writer.samples.keys.sorted(), ["agent:meal:1", "agent:sleep:1", "agent:water:1"]
+        )
         XCTAssertEqual(try world.store.nextVersion(for: "agent:meal:1"), 2, "the version was drawn once and kept")
     }
 
@@ -265,6 +278,128 @@ final class ApplierTests: XCTestCase {
         XCTAssertEqual(refused.map { $0["item"] as? Int }, [0, 2])
         XCTAssertEqual(refused.map { $0["code"] as? String }, ["unauthorized", "notFound"])
         XCTAssertEqual(world.service.outcomes[name]?["applied"] as? Int, 1)
+    }
+
+    // MARK: - What an agent may not do on its own
+
+    /// Health holding the breakfast and the night, and a second edit that would
+    /// change one and remove the other. Returns the name of that second edit.
+    private func held(_ world: inout World) async throws -> String {
+        try world.submit(Self.breakfast + "," + Self.sleep)
+        _ = try applied(await world.applier().run())
+        return try world.submit(
+            #"{"op":"put","id":"agent:meal:1","metric":"dietaryEnergy","start":1757228400,"end":1757229300,"value":610,"unit":"kcal"}"#
+                + #",{"op":"delete","id":"agent:sleep:1"}"#
+        )
+    }
+
+    private func codes(_ world: World, of name: String) throws -> [String] {
+        let refused = try XCTUnwrap(world.service.outcomes[name]?["refused"] as? [[String: Any]])
+        return refused.compactMap { $0["code"] as? String }
+    }
+
+    func testAChangeAndARemovalWaitForThePersonAndTheQueueMovesOn() async throws {
+        var world = try World()
+        let name = try await held(&world)
+
+        let outcome = try applied(await world.applier().run())
+
+        XCTAssertEqual(outcome.waiting, 2)
+        XCTAssertEqual(outcome.refused, 0, "a question is not a refusal")
+        XCTAssertTrue(outcome.days.isEmpty, "nothing was written, so no day is owed")
+        XCTAssertTrue(world.service.queue.isEmpty, "answered at once: a held edit must not stall the queue")
+        XCTAssertEqual(world.writer.samples["agent:meal:1"]?.put.value, 520, "Health is as it was")
+        XCTAssertNotNil(world.writer.samples["agent:sleep:1"])
+        XCTAssertEqual(try codes(world, of: name), ["awaitingApproval", "awaitingApproval"])
+        XCTAssertEqual(world.service.outcomes[name]?["applied"] as? Int, 0)
+
+        let waiting = try world.store.waitingEdits()
+        XCTAssertEqual(waiting.count, 2)
+        XCTAssertEqual(waiting.first?.value, 610, "the item is kept whole, to be applied later")
+        XCTAssertEqual(waiting.first?.day, "2025-09-07")
+        XCTAssertFalse(waiting.contains { $0.canBeUndone }, "nothing to take back out yet")
+    }
+
+    func testTheVersionIsNotDrawnForAnItemThatWasOnlyHeld() async throws {
+        var world = try World()
+        _ = try await held(&world)
+        _ = try applied(await world.applier().run())
+
+        // Drawn once for the breakfast that landed, and not again for the change
+        // that is waiting: a version that climbed while nothing was written would
+        // be spent for good.
+        XCTAssertEqual(try world.store.nextVersion(for: "agent:meal:1"), 2)
+    }
+
+    func testApprovingWritesEverythingWaitingAndRevisesTheOutcome() async throws {
+        var world = try World()
+        let name = try await held(&world)
+        _ = try applied(await world.applier().run())
+
+        let days = try await world.applier().approveWaiting()
+
+        XCTAssertEqual(days, ["2025-09-07", "2025-09-06"], "both days are owed to the archive")
+        XCTAssertEqual(world.writer.samples["agent:meal:1"]?.put.value, 610)
+        XCTAssertNil(world.writer.samples["agent:sleep:1"], "the removal went through")
+        // The whole edit, not the difference: an outcome replaces the one before
+        // it, and an agent must not read its other items as never having landed.
+        XCTAssertEqual(world.service.outcomes[name]?["applied"] as? Int, 2)
+        XCTAssertEqual(try codes(world, of: name), [])
+        XCTAssertTrue(try world.store.waitingEdits().isEmpty)
+        XCTAssertTrue(try world.store.owedEdits().isEmpty, "the service has been told")
+    }
+
+    func testDecliningNeverTouchesHealthAndSaysSo() async throws {
+        var world = try World()
+        let name = try await held(&world)
+        _ = try applied(await world.applier().run())
+        let writes = world.writer.writes
+
+        try await world.applier().declineWaiting()
+
+        XCTAssertEqual(world.writer.writes, writes, "Health was never asked")
+        XCTAssertEqual(world.writer.samples["agent:meal:1"]?.put.value, 520)
+        XCTAssertEqual(try codes(world, of: name), ["declined", "declined"])
+        XCTAssertEqual(world.service.outcomes[name]?["applied"] as? Int, 0)
+        XCTAssertEqual(try world.store.recentEdits().filter { $0.state == .declined }.count, 2)
+        XCTAssertTrue(try world.store.waitingEdits().isEmpty)
+    }
+
+    func testADecisionMadeWithNoNetworkIsToldOnTheNextRun() async throws {
+        var world = try World()
+        let name = try await held(&world)
+        _ = try applied(await world.applier().run())
+
+        world.service.outcomeStatus = 500
+        try await world.applier().declineWaiting()
+        XCTAssertEqual(try world.store.owedEdits(), [name], "the answer is owed, not lost")
+        XCTAssertEqual(try codes(world, of: name), ["awaitingApproval", "awaitingApproval"])
+
+        world.service.outcomeStatus = 200
+        _ = try await world.applier().run()
+
+        XCTAssertEqual(try codes(world, of: name), ["declined", "declined"])
+        XCTAssertTrue(try world.store.owedEdits().isEmpty)
+    }
+
+    func testAnEditFetchedAgainDoesNotReopenADecisionAlreadyMade() async throws {
+        var world = try World()
+        let name = try await held(&world)
+        let again = try XCTUnwrap(world.service.queue.first { $0.name == name })
+        _ = try applied(await world.applier().run())
+        try await world.applier().declineWaiting()
+
+        // The same edit handed over a second time. A phone that asked again here
+        // would ask a question the person has answered, and overwrite their
+        // answer with a new one nobody gave.
+        world.service.queue.append(again)
+        let outcome = try applied(await world.applier().run())
+
+        XCTAssertEqual(outcome.waiting, 0, "nobody was asked twice")
+        XCTAssertEqual(outcome.refused, 2)
+        XCTAssertEqual(world.writer.samples["agent:meal:1"]?.put.value, 520, "Health is still as it was")
+        XCTAssertEqual(try codes(world, of: name), ["declined", "declined"])
+        XCTAssertEqual(try world.store.recentEdits().filter { $0.state == .declined }.count, 2)
     }
 
     // MARK: - Guards

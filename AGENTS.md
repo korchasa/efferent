@@ -254,6 +254,29 @@ This file is the rulebook.
 - **An outcome carries indexes and codes only.** The service and whoever lists the queue learn how
   many items landed and a word per refusal — never a metric, never a value, never a day. Anything
   more in the outcome would say what was in the edit, which the seal exists to keep.
+- **An agent may add, but it may not change or remove without being asked.** An item that would
+  overwrite or take away a record standing in Health *now* waits for the person; a `put` under an id
+  Health holds nothing for is an addition and lands at once. Health itself is asked, through
+  `HealthWriter.holds(id:metric:)` — the `written` ledger keeps its row after an undo, so it would
+  call a fresh `put` a change when Health holds nothing. The version is drawn only when the item is
+  actually written: `Store.nextVersion` climbs on every call, and one spent on an item nobody
+  approved is gone.
+- **A held item is answered at once and kept here.** It is answered `awaitingApproval`, because an
+  edit left unanswered in the queue is fetched again on every launch, forever, in front of
+  everything behind it. What makes that safe is the journal: `EditEntry` carries every field a `put`
+  has, so the item survives without the service holding anything. Nothing about the wait reaches the
+  wire beyond that one word.
+- **An outcome can be revised, and is owed until it lands.** The service accepts a second outcome
+  for the same edit — when `e/` is gone it recovers `bytes` and `at` from the earlier `o/` — so a
+  decision made offline is not lost: `editLog.owed` says the service has not been told what a row
+  now says, and the next run pays it before it reads the queue. A revision is rebuilt from *all* of
+  that edit's rows, never from the item that changed: an outcome replaces the one before it, and a
+  difference would tell the agent its other items had never happened.
+- **A decision already made is never reopened.** An edit handed over a second time must not ask a
+  question the person has answered — that would also overwrite their answer with one nobody gave —
+  so `Applier` reads the edit's own rows first: a declined item is answered `declined` again, and an
+  item this very edit already applied is written again without asking, because the record standing
+  under that id is the one it put there.
 - **The pause holds edits as it holds days.** A paused phone neither sends nor applies; the queue
   waits and nothing is lost. Write access not yet asked for is the same shape: the applier answers
   `notAsked` and touches nothing until the sheet has been shown.
@@ -533,6 +556,14 @@ everything an agent changes is on the screen and can be taken back out.
 - **The strip counts a run nobody has looked at; the list holds the rest.** `edits.seenAt` is the
   watermark, stamped when the list is opened. A run nobody has seen is news across the top of the
   everyday screen; the same run tomorrow is history, and history belongs in the list.
+- **A question is not news, so no watermark applies to it.** What is waiting is counted as
+  `ever.waiting` and asked across the top of the everyday screen until it is answered — looking at
+  it changes nothing, because only an answer does. It is left out of `EditTally.total` for the same
+  reason: it is not something the agent did.
+- **The answer covers the whole run, and there is no per-record answer.** One screen shows
+  everything waiting and carries two actions, allow them all or turn them all down; a record's own
+  page says it is waiting and offers no button. A per-record decision would turn one answer into a
+  chore nobody finishes, and an agent would wait forever on a question that was read and left.
 - **What leaves the phone counts records and names nothing.** The notification says how many records
   changed and never a metric, a value or a day — it is drawn on a lock screen, which is the one
   place this app's contents could be read by somebody who is not the owner. Permission is asked for

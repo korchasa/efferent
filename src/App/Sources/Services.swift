@@ -553,11 +553,66 @@ final class Services: ObservableObject {
             // Said once per run, from the launch that did it — which is usually
             // one nobody is looking at. The screen learns the same fact from
             // the journal the next time it refreshes.
-            await Notices.tell(applied: applied.items - applied.refused, refused: applied.refused)
+            await Notices.tell(
+                applied: applied.items - applied.refused - applied.waiting,
+                refused: applied.refused,
+                waiting: applied.waiting
+            )
         } catch where HealthReader.isLocked(error) {
             log.debug("the phone is locked, so no edit could be applied; they wait")
         } catch {
             log.error("applying edits failed: \(String(describing: error))")
+        }
+    }
+
+    // MARK: - The person's answer to what is waiting
+
+    /// Yes to everything waiting.
+    ///
+    /// One gesture for the whole run, because that is the decision a person
+    /// actually makes: these items arrived together and they are about the same
+    /// few records. What goes into Health is owed to the archive, so the days it
+    /// touched are marked and sent straight away.
+    func approveWaiting() async {
+        guard let applier = applierIfPaired() else { return }
+        do {
+            let days = try await applier.approveWaiting()
+            if !days.isEmpty {
+                let marked = try store.markDirty(days)
+                log.info("approved edits changed \(days.count) days, \(marked) newly waiting")
+            }
+            lastError = nil
+        } catch where HealthReader.isLocked(error) {
+            lastError = "Unlock the phone and try again — Health is sealed while it is locked."
+        } catch {
+            log.error("approving edits failed: \(String(describing: error))")
+            lastError = "Those records could not be written into Health. (\(error))"
+        }
+        refreshStats()
+        await sendNow()
+    }
+
+    /// No to everything waiting. Health is never touched — nothing was written
+    /// — so there is no day to send; the agent is simply told.
+    func declineWaiting() async {
+        guard let applier = applierIfPaired() else { return }
+        do {
+            try await applier.declineWaiting()
+            lastError = nil
+        } catch {
+            log.error("declining edits failed: \(String(describing: error))")
+            lastError = "That decision could not be written down. (\(error))"
+        }
+        refreshStats()
+    }
+
+    /// What the agent is waiting on an answer about, oldest first.
+    func waitingEdits() -> [EditEntry] {
+        do {
+            return try store.waitingEdits()
+        } catch {
+            lastError = String(describing: error)
+            return []
         }
     }
 
@@ -648,7 +703,7 @@ final class Services: ObservableObject {
     /// first edit the question is about something they have just seen.
     func askForNoticesIfNeeded() async {
         guard !demonstration, agentConnected else { return }
-        guard edits.ever.total > 0 else { return }
+        guard edits.ever.anything else { return }
         guard await Notices.status() == .notDetermined else { return }
         await Notices.ask()
     }

@@ -608,6 +608,7 @@ public final class Store {
         state: EditEntry.State,
         day: String?,
         code: OutcomeCode? = nil,
+        owed: Bool = false,
         at moment: Date = Date()
     ) throws {
         var metric: String?
@@ -627,7 +628,7 @@ public final class Store {
         try write(
             editName: editName, item: index, recordID: item.id, state: state, metric: metric,
             start: start, end: end, value: value, unit: unit, stage: stage, day: day, code: code,
-            at: moment
+            owed: owed, at: moment
         )
     }
 
@@ -639,7 +640,8 @@ public final class Store {
     ) throws {
         try write(
             editName: editName, item: 0, recordID: "", state: .refused, metric: nil, start: nil,
-            end: nil, value: nil, unit: nil, stage: nil, day: nil, code: code, at: moment
+            end: nil, value: nil, unit: nil, stage: nil, day: nil, code: code, owed: false,
+            at: moment
         )
     }
 
@@ -656,6 +658,7 @@ public final class Store {
         stage: String?,
         day: String?,
         code: OutcomeCode?,
+        owed: Bool,
         at moment: Date
     ) throws {
         try dbQueue.write { db in
@@ -663,8 +666,8 @@ public final class Store {
                 sql: """
                 INSERT INTO editLog
                     (editName, item, recordId, state, metric, startAt, endAt, value, unit, stage,
-                     day, code, appliedAt, undoneAt)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                     day, code, owed, appliedAt, undoneAt)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                 ON CONFLICT(editName, item) DO UPDATE SET
                     recordId = excluded.recordId,
                     state = excluded.state,
@@ -676,12 +679,13 @@ public final class Store {
                     stage = excluded.stage,
                     day = excluded.day,
                     code = excluded.code,
+                    owed = excluded.owed,
                     appliedAt = excluded.appliedAt,
                     undoneAt = NULL
                 """,
                 arguments: [
                     editName, item, recordID, state.rawValue, metric, start, end, value, unit,
-                    stage, day, code?.rawValue, moment.timeIntervalSince1970,
+                    stage, day, code?.rawValue, owed, moment.timeIntervalSince1970,
                 ]
             )
         }
@@ -704,6 +708,77 @@ public final class Store {
         try dbQueue.read { db in
             try Row.fetchOne(db, sql: "SELECT * FROM editLog WHERE id = ?", arguments: [id])
                 .flatMap(Self.entry)
+        }
+    }
+
+    /// Everything an agent asked for that Health has not seen, oldest edit
+    /// first and in the order the items arrived in. That order is the one the
+    /// agent sent: two items of one edit may be about the same record, and the
+    /// later one is meant to win.
+    public func waitingEdits() throws -> [EditEntry] {
+        try dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                SELECT * FROM editLog WHERE state = ?
+                ORDER BY appliedAt ASC, editName ASC, item ASC
+                """,
+                arguments: [EditEntry.State.waiting.rawValue]
+            ).compactMap(Self.entry)
+        }
+    }
+
+    /// Every row of one edit, in the order the items arrived in. What an
+    /// outcome is rebuilt from: a revised outcome says the whole truth about
+    /// the edit rather than the part of it that has just changed.
+    public func edits(of editName: String) throws -> [EditEntry] {
+        try dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: "SELECT * FROM editLog WHERE editName = ? ORDER BY item ASC",
+                arguments: [editName]
+            ).compactMap(Self.entry)
+        }
+    }
+
+    /// The person said no to everything waiting. Health is not touched — there
+    /// was nothing written to take back — and every edit the rows belong to is
+    /// owed a revised outcome.
+    ///
+    /// `appliedAt` is left alone on purpose: nothing was applied, and moving it
+    /// would put a refusal at the top of the list as though it were news.
+    public func declineWaiting() throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE editLog SET state = ?, code = ?, owed = 1 WHERE state = ?",
+                arguments: [
+                    EditEntry.State.declined.rawValue, OutcomeCode.declined.rawValue,
+                    EditEntry.State.waiting.rawValue,
+                ]
+            )
+        }
+    }
+
+    /// The edits whose outcome the service has not been told, oldest first. A
+    /// decision made with no network is owed until a run pays it.
+    public func owedEdits() throws -> [String] {
+        try dbQueue.read { db in
+            try String.fetchAll(
+                db,
+                sql: """
+                SELECT editName FROM editLog WHERE owed = 1
+                GROUP BY editName ORDER BY MIN(appliedAt) ASC
+                """
+            )
+        }
+    }
+
+    /// The service has the revised outcome of this edit.
+    public func markEditTold(_ editName: String) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE editLog SET owed = 0 WHERE editName = ?", arguments: [editName]
+            )
         }
     }
 
@@ -759,6 +834,8 @@ public final class Store {
             case .refused: tally.refused = count
             case .deleted: tally.deleted = count
             case .undone: tally.undone = count
+            case .waiting: tally.waiting = count
+            case .declined: tally.declined = count
             case nil: break
             }
         }

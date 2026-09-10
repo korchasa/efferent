@@ -118,6 +118,23 @@ public protocol HealthWriter {
     /// has not been shown, so nothing can be written yet and nothing is refused
     /// either: the edits wait.
     func writeAccessUndecided() -> Bool
+    /// The days a record this app wrote under `id` is on, and nothing when
+    /// Health holds none.
+    ///
+    /// The question every approval turns on. A `put` over a record that is
+    /// there changes what Health says and a `delete` takes it away, so both
+    /// wait for the person; a `put` under an id Health holds nothing for only
+    /// adds something, and lands at once. `metric` narrows the question to the
+    /// one type an item names, and nil asks the whole catalogue, which is what
+    /// a removal has to do: it carries an id and nothing else.
+    ///
+    /// The days rather than a yes: a removal names no metric and no instant, so
+    /// the day it would take a record from is the only thing the screen can say
+    /// about it — and this is the last moment anything can ask.
+    ///
+    /// The `written` ledger cannot answer this. It keeps its row after an undo,
+    /// so it would call a fresh `put` a modification when Health holds nothing.
+    func holds(id: String, metric: String?) async throws -> Set<String>
     /// Put the sample, replacing what this app wrote under the same id, and
     /// answer the days that changed: the one it landed on, and the one the
     /// replaced sample left if that was another.
@@ -209,6 +226,23 @@ public struct HealthKitWriter: HealthWriter {
         var days = try await daysHeld(metric: metric, id: item.id)
         try await saving { try await store.save(sample) }
         days.insert(Day.of(start, in: calendar))
+        return days
+    }
+
+    public func holds(id: String, metric: String?) async throws -> Set<String> {
+        let asked: [WritableMetric]
+        if let metric {
+            // An unknown metric holds nothing, and the write path is where that
+            // is said with a word.
+            guard let named = WritableMetric.named(metric) else { return [] }
+            asked = [named]
+        } else {
+            asked = WritableMetric.all
+        }
+        var days: Set<String> = []
+        for metric in asked {
+            try await days.formUnion(daysHeld(metric: metric, id: id))
+        }
         return days
     }
 
