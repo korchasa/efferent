@@ -79,7 +79,9 @@ struct LogView: View {
                 }
             }
             .sheet(isPresented: $sharing) {
-                ShareSheet(text: LogStore.shared.read()) { _ in sharing = false }
+                ShareSheet(text: LogStore.shared.read(), filename: "efferent-log.txt") { _ in
+                    sharing = false
+                }
             }
             .alert("Start a fresh log?", isPresented: $clearing) {
                 Button("Clear", role: .destructive) {

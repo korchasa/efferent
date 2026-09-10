@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 /// The everyday screen: one dial in the middle of the shell, and a line under
 /// it.
@@ -629,16 +630,85 @@ struct SyncState {
 /// what happened, and that is the whole reason for the detour through UIKit.
 struct ShareSheet: UIViewControllerRepresentable {
     let text: String
+    /// What the text is called when it travels as a file, which is how AirDrop
+    /// takes it.
+    var filename = "efferent.txt"
     /// `true` when an activity finished, `false` when the sheet was dismissed.
     let done: (Bool) -> Void
 
     func makeUIViewController(context _: Context) -> UIActivityViewController {
-        let controller = UIActivityViewController(activityItems: [text], applicationActivities: nil)
-        controller.completionWithItemsHandler = { _, completed, _, _ in done(completed) }
+        let item = TextToShare(text, named: filename)
+        let controller = UIActivityViewController(activityItems: [item], applicationActivities: nil)
+        controller.completionWithItemsHandler = { _, completed, _, _ in
+            item.clean()
+            done(completed)
+        }
         return controller
     }
 
     func updateUIViewController(_: UIActivityViewController, context _: Context) {}
+}
+
+/// The text, with a type on it.
+///
+/// A bare string is guessed at by whoever receives it. The setup prompt begins
+/// "Instruction:", and an AirDropped string whose first word ends in a colon is
+/// read as a URL scheme: the receiving phone answered "There is no application
+/// set to open the URL Instruction:%0AConnect%20the…" and the prompt never
+/// arrived. So AirDrop is handed a text file, which is a thing with a type
+/// nobody has to guess at, and every other way of sending it is handed the text
+/// itself — a message, a note or the clipboard is meant to hold the prompt, not
+/// an attachment.
+private final class TextToShare: NSObject, UIActivityItemSource {
+    private let text: String
+    private let file: URL?
+
+    init(_ text: String, named filename: String) {
+        self.text = text
+        file = Self.write(text, named: filename)
+    }
+
+    func activityViewControllerPlaceholderItem(_: UIActivityViewController) -> Any {
+        text
+    }
+
+    func activityViewController(
+        _: UIActivityViewController, itemForActivityType type: UIActivity.ActivityType?
+    ) -> Any? {
+        guard type == .airDrop, let file else { return text }
+        return file
+    }
+
+    func activityViewController(
+        _: UIActivityViewController, dataTypeIdentifierForActivityType _: UIActivity.ActivityType?
+    ) -> String {
+        UTType.plainText.identifier
+    }
+
+    func activityViewController(
+        _: UIActivityViewController, subjectForActivityType _: UIActivity.ActivityType?
+    ) -> String {
+        "Efferent"
+    }
+
+    /// The file the AirDrop travels as. It holds the keys that open the
+    /// archive, so it is written where only this app can read it and taken away
+    /// the moment the sheet is finished with — which is after the transfer,
+    /// since that answer is what tells this app the prompt went somewhere.
+    private static func write(_ text: String, named filename: String) -> URL? {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+        do {
+            try Data(text.utf8).write(to: url, options: [.atomic, .completeFileProtection])
+            return url
+        } catch {
+            return nil
+        }
+    }
+
+    func clean() {
+        guard let file else { return }
+        try? FileManager.default.removeItem(at: file)
+    }
 }
 
 /// What the connect sheet shows: the prompt, and the two ways to hand it over.
@@ -669,7 +739,7 @@ struct ConnectContent: View {
                     Button("Send the prompt to your agent") { sharing = true }
                         .buttonStyle(ProminentButton())
                         .sheet(isPresented: $sharing) {
-                            ShareSheet(text: handoff.text) { shared in
+                            ShareSheet(text: handoff.text, filename: "efferent-setup.txt") { shared in
                                 sharing = false
                                 // Only a share that went through counts as
                                 // handed over. A cancelled one changes
