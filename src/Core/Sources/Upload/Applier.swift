@@ -92,6 +92,9 @@ public final class Applier {
     private let store: Store
     private let writer: any HealthWriter
     private let fetch: Fetch
+    /// Where this archive's days are cut, so the journal can say which day an
+    /// item landed on in the same words the archive uses.
+    private let calendar: Calendar
     private let now: () -> Date
     private let maxEdits: Int
     private let log = Log(category: "apply")
@@ -109,6 +112,7 @@ public final class Applier {
         store: Store,
         writer: any HealthWriter,
         fetch: @escaping Fetch,
+        calendar: Calendar = Day.calendar(),
         now: @escaping () -> Date = Date.init,
         maxEdits: Int = Applier.maxEditsPerRun
     ) {
@@ -119,6 +123,7 @@ public final class Applier {
         self.store = store
         self.writer = writer
         self.fetch = fetch
+        self.calendar = calendar
         self.now = now
         self.maxEdits = maxEdits
     }
@@ -248,9 +253,10 @@ public final class Applier {
         let result: Result
         switch try open(answer) {
         case let .items(items):
-            result = try await write(items)
+            result = try await write(items, of: name)
         case let .refused(code):
             log.debug("\(name): refused whole, \(code.rawValue)")
+            try store.recordUnopenedEdit(name, code: code, at: now())
             result = Result(applied: 0, refused: [.init(item: 0, code: code)], days: [])
         }
 
@@ -308,7 +314,7 @@ public final class Applier {
     /// The items, in order. A refusal is written down and the next item goes;
     /// anything else — a locked phone, a ledger that will not write — stops
     /// the run, and the edit is applied again next time.
-    private func write(_ items: [EditItem]) async throws -> Result {
+    private func write(_ items: [EditItem], of name: String) async throws -> Result {
         var applied = 0
         var refused: [Efferent.Outcome.Refusal] = []
         var days: Set<String> = []
@@ -318,13 +324,35 @@ public final class Applier {
                 case let .put(put):
                     let version = try store.nextVersion(for: put.id)
                     try days.formUnion(await writer.apply(put, version: version))
+                    // The day the sample landed on, which is the one the screen
+                    // names. The writer answers with that day and sometimes
+                    // with the one a replaced sample left, and those are two
+                    // different facts: the second is owed to the archive, not
+                    // to the person reading what their agent did.
+                    let landed = Day.of(
+                        Date(timeIntervalSince1970: TimeInterval(put.start)), in: calendar
+                    )
+                    try store.recordEdit(
+                        item, at: index, in: name, state: .applied, day: landed, at: now()
+                    )
                 case let .delete(id):
-                    try days.formUnion(await writer.remove(id: id))
+                    let left = try await writer.remove(id: id)
+                    days.formUnion(left)
                     try store.forgetWritten(id)
+                    // A deletion names no metric and no instant: the agent gave
+                    // an id, and the record was gone before anything could ask
+                    // it anything. The day it was in is all there is to say.
+                    try store.recordEdit(
+                        item, at: index, in: name, state: .deleted,
+                        day: left.sorted().first, at: now()
+                    )
                 }
                 applied += 1
             } catch let WriteRefused.code(code) {
                 refused.append(.init(item: index, code: code))
+                try store.recordEdit(
+                    item, at: index, in: name, state: .refused, day: nil, code: code, at: now()
+                )
             }
         }
         return Result(applied: applied, refused: refused, days: days)

@@ -36,6 +36,7 @@ buy nothing. What survives a relaunch is bookkeeping:
 - one row per day — whether it still has to go, and the fingerprint of what was sent last time;
 - one row per HealthKit record, holding only which day it is in;
 - one anchor per HealthKit sample type — where each reader stopped;
+- one row per item an agent changed — what it said, which day it landed on, and what became of it;
 - when a day was last accepted, how far back the first export has reached, and when the archive was
   last checked against all this.
 
@@ -291,6 +292,20 @@ the service did not accept stays in the queue and is applied again; that is what
 The phone applies edits when it is opened or wakes to send, which is minutes to hours and never at
 once. Write access is asked for the first time the app is opened after the update; until it has
 been, edits wait rather than fail.
+
+Everything an agent changes is written down on the phone, because nowhere else keeps it: the service
+is told counts and codes on purpose, and Health keeps a record without keeping who asked for it. An
+app that writes into Health silently is an app nobody should trust with Health, so the everyday
+screen shows a dark strip whenever a run has landed that nobody has looked at — how many records
+changed, and one way to take the whole run back out — and a row above the keys opens the list of
+everything an agent has ever done. Each line says the metric in the person's own word, the value and
+when it arrived; a refused one says why in a sentence rather than a code. A record still standing in
+Health can be taken back out from its own page or by swiping its row: the sample leaves Health, the
+day it was on is marked, and it goes to the archive again, so the archive stops showing it too. A
+record the agent removed offers no undo, because the old value was never kept — the agent hands over
+an id and the record is gone before anything can read it. The phone can also say a run has landed
+while the app is closed, in a notification that counts records and names neither a metric nor a
+value; it asks for permission only after an agent has actually changed something.
 
 ```bash
 deno task efferent write --file items.json   # seal, sign and hand the phone an edit

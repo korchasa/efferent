@@ -14,7 +14,8 @@ import GRDB
 ///              record's own contents are shadowed, and only its date;
 /// - `anchor` — where each HealthKit reader stopped, one row per sample type;
 /// - `meta`   — how far the first export has walked, and when the last day went;
-/// - `written` — the version each agent-given id was last written to Health at.
+/// - `written` — the version each agent-given id was last written to Health at;
+/// - `editLog` — what an agent changed, kept because nothing else keeps it.
 enum Database {
     static func migrator() -> DatabaseMigrator {
         var migrator = DatabaseMigrator()
@@ -94,6 +95,44 @@ enum Database {
                 table.column("version", .integer).notNull()
                 table.column("updatedAt", .double).notNull()
             }
+        }
+
+        // What an agent changed, in the phone's own words.
+        //
+        // The service is told counts and codes and nothing else, on purpose, so
+        // it cannot say what an edit contained — which leaves this the only
+        // place the contents survive. Two things read it: the screen, because
+        // an app that changes Health silently is an app nobody should trust
+        // with Health, and undo, which takes a record back out by its id.
+        //
+        // Keyed by (editName, item) rather than by the agent's id. An edit is
+        // applied again whenever a run dies between writing and answering, and
+        // the same id is also how an agent corrects a record it wrote before:
+        // both must land on one row, and the second must not stand beside the
+        // first.
+        migrator.registerMigration("v4.editLog") { db in
+            try db.create(table: "editLog") { table in
+                table.autoIncrementedPrimaryKey("id")
+                table.column("editName", .text).notNull()
+                table.column("item", .integer).notNull()
+                table.column("recordId", .text).notNull()
+                table.column("state", .text).notNull()
+                table.column("metric", .text)
+                table.column("startAt", .double)
+                table.column("endAt", .double)
+                table.column("value", .double)
+                table.column("unit", .text)
+                table.column("stage", .text)
+                table.column("day", .text)
+                table.column("code", .text)
+                table.column("appliedAt", .double).notNull()
+                table.column("undoneAt", .double)
+            }
+            try db.create(
+                index: "editLog_on_item", on: "editLog", columns: ["editName", "item"], unique: true
+            )
+            // The screen reads this newest first, and counts a stretch of it.
+            try db.create(index: "editLog_on_time", on: "editLog", columns: ["appliedAt"])
         }
 
         return migrator
@@ -180,4 +219,11 @@ enum MetaKey: String {
     /// this only saves the round trip; it is cleared with the archive because
     /// another archive is another service-side record.
     case editorRegisteredFor = "editor.bucket"
+    /// When the person last opened the list of an agent's edits, in seconds
+    /// since 1970.
+    ///
+    /// The dark strip on the everyday screen counts what has landed since. A
+    /// run nobody has looked at is news; the same run tomorrow is history, and
+    /// history belongs in the list rather than across the top of the screen.
+    case editsSeenAt = "edits.seenAt"
 }

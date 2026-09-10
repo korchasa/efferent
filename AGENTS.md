@@ -510,6 +510,39 @@ there are, and a key can be read without being pressed. Nothing may claim that H
 granted: Health does not say, so that screen offers where to look instead of an answer it cannot
 have.
 
+## What an agent changed
+
+An app that writes into Health without saying so is an app nobody should trust with Health, so
+everything an agent changes is on the screen and can be taken back out.
+
+- **The journal is the only copy there is.** The service is told counts and codes and nothing else,
+  and Health keeps a record without keeping who asked for it. `editLog` is where an edit's contents
+  survive; nothing about it reaches the wire, and it is cleared with the archive, because the ids in
+  it name records another archive's agent never wrote.
+- **The journal is keyed by the edit and the item's place in it, never by the agent's id.** An edit
+  is applied again whenever a run dies between writing and answering, and an agent corrects its own
+  record by reusing the id. Both must land on one row, and a re-applied item clears `undoneAt` with
+  it — the record is back in Health, whatever the person did last time.
+- **Undo is a removal, and a removal is a day owed.** Taking a record out of Health changes the day
+  it was on, so undo marks that day and sends it, and the archive stops showing the record too.
+  Nothing else in this app takes anything out of Health, which is why the row that does it is the
+  only one drawn in the alarm colour and the only one behind a confirmation.
+- **A deletion cannot be undone, and the screen says so instead of offering a button that fails.**
+  The agent hands over an id and the record is gone before anything could read its value, so there
+  is nothing to write back. A refused item offers no undo either: nothing was written.
+- **The strip counts a run nobody has looked at; the list holds the rest.** `edits.seenAt` is the
+  watermark, stamped when the list is opened. A run nobody has seen is news across the top of the
+  everyday screen; the same run tomorrow is history, and history belongs in the list.
+- **What leaves the phone counts records and names nothing.** The notification says how many records
+  changed and never a metric, a value or a day — it is drawn on a lock screen, which is the one
+  place this app's contents could be read by somebody who is not the owner. Permission is asked for
+  only after an agent has actually changed something: a phone whose agent never writes is never
+  asked.
+- **A wire name is never put in front of a person.** `dietaryCarbohydrates` is nobody's word for
+  lunch, so every writable metric carries the word a person uses beside the name it travels under,
+  and a metric added without one does not compile. The same holds for a refusal: each code has a
+  sentence about this phone's Health, not the word the wire carries.
+
 ## The log
 
 The app keeps its own account of what it did, in `Application Support/efferent/efferent.log`, and

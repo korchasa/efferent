@@ -28,7 +28,12 @@ struct EfferentApp: App {
         // delegate, so a request made there would never be made.
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
-            Task { @MainActor in await Services.shared.askForWriteAccessIfNeeded() }
+            Task { @MainActor in
+                await Services.shared.askForWriteAccessIfNeeded()
+                // Second, and only ever after the first: two system sheets at
+                // once is one question nobody reads.
+                await Services.shared.askForNoticesIfNeeded()
+            }
         }
     }
 }

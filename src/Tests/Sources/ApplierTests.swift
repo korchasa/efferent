@@ -106,7 +106,9 @@ final class ApplierTests: XCTestCase {
             )
         }
 
-        func applier(maxEdits: Int = Applier.maxEditsPerRun) -> Applier {
+        func applier(
+            maxEdits: Int = Applier.maxEditsPerRun, calendar: Calendar = ApplierTests.utc
+        ) -> Applier {
             Applier(
                 destination: destination,
                 identity: DeviceIdentity(),
@@ -115,6 +117,7 @@ final class ApplierTests: XCTestCase {
                 store: store,
                 writer: writer,
                 fetch: { [service] in try await service.fetch($0) },
+                calendar: calendar,
                 maxEdits: maxEdits
             )
         }
