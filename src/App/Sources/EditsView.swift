@@ -11,6 +11,7 @@ struct EditsView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var entries: [EditEntry]
+    @State private var reviewing = false
     /// On for the store screenshot: an image renderer draws a list, a scroll
     /// view and a navigation stack as nothing at all, so the same rows are
     /// printed straight onto the shell instead. The app itself is never flat —
@@ -36,7 +37,11 @@ struct EditsView: View {
     private var presented: some View {
         NavigationStack {
             Group {
-                if entries.isEmpty { nothing } else { journal }
+                if entries.isEmpty {
+                    nothing
+                } else {
+                    journal
+                }
             }
             .pageBackground()
             .navigationTitle("Agent edits")
@@ -51,6 +56,7 @@ struct EditsView: View {
                 EditDetailView(entry: entry, calendar: services.calendar) { undo(entry) }
             }
         }
+        .sheet(isPresented: $reviewing, onDismiss: reload) { EditReviewView() }
         .task {
             reload()
             // Opening the list is what makes a run old news: the dark strip on
@@ -65,6 +71,10 @@ struct EditsView: View {
             explanation
                 .padding(.top, 8)
                 .padding(.bottom, 6)
+            if services.edits.ever.waiting > 0 {
+                invitation
+                RowDivider()
+            }
             ForEach(lines) { line in
                 switch line {
                 case let .day(title):
@@ -99,6 +109,14 @@ struct EditsView: View {
                 .listRowSeparator(.hidden)
                 .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 6, trailing: 20))
 
+            if services.edits.ever.waiting > 0 {
+                Button { reviewing = true } label: { invitation }
+                    .buttonStyle(.plain)
+                    .listRowBackground(Palette.shell)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
+                    .listRowSeparatorTint(Palette.hairline)
+            }
+
             ForEach(lines) { line in
                 switch line {
                 case let .day(title):
@@ -126,6 +144,33 @@ struct EditsView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+    }
+
+    /// The way from the list into the one screen that answers the question. A
+    /// lit row, because an agent waiting on an answer is the one thing here that
+    /// somebody has to do something about.
+    private var invitation: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Legend("waiting", size: 11, colour: Palette.accent)
+                .frame(width: 74, alignment: .leading)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(EditWords.asking(services.edits.ever.waiting))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Palette.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Allow them or turn them down.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Palette.body)
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Palette.accent)
+                .padding(.top, 2)
+        }
+        .padding(.vertical, 16)
+        .contentShape(Rectangle())
     }
 
     private var nothing: some View {

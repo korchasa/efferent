@@ -36,7 +36,8 @@ buy nothing. What survives a relaunch is bookkeeping:
 - one row per day — whether it still has to go, and the fingerprint of what was sent last time;
 - one row per HealthKit record, holding only which day it is in;
 - one anchor per HealthKit sample type — where each reader stopped;
-- one row per item an agent changed — what it said, which day it landed on, and what became of it;
+- one row per item an agent changed or asked to change — what it said, which day it landed on, what
+  became of it, and whether the service has been told that yet;
 - when a day was last accepted, how far back the first export has reached, and when the archive was
   last checked against all this.
 
@@ -289,6 +290,15 @@ replaces the edit with its outcome, and the days the items touched are marked an
 so the entry shows up in the archive afterwards like anything logged by hand. An edit whose outcome
 the service did not accept stays in the queue and is applied again; that is what the version is for.
 
+An agent may add, but it may not change or remove without being asked. An item that would overwrite
+or take away a record standing in Health now is held rather than applied, and answered
+`awaitingApproval` at once — a held edit must not stall the queue, and an edit left unanswered would
+be fetched again forever. The item itself is kept on the phone, whole, so the person can decide next
+week as easily as this minute. When they answer, the phone sends a second outcome for the same edit:
+`applied` if they said yes, `declined` if they said no. An addition — a `put` under an id Health
+holds nothing for — lands at once as it always did, and a `delete` of something that is not there is
+`notFound` and bothers nobody.
+
 The phone applies edits when it is opened or wakes to send, which is minutes to hours and never at
 once. Write access is asked for the first time the app is opened after the update; until it has
 been, edits wait rather than fail.
@@ -297,7 +307,12 @@ Everything an agent changes is written down on the phone, because nowhere else k
 is told counts and codes on purpose, and Health keeps a record without keeping who asked for it. An
 app that writes into Health silently is an app nobody should trust with Health, so the everyday
 screen shows a dark strip whenever a run has landed that nobody has looked at — how many records
-changed, and one way to take the whole run back out — and a row above the keys opens the list of
+changed, and one way to take the whole run back out. While anything is waiting for a decision the
+same strip asks for it instead, and leads to one screen that shows everything waiting and carries
+two actions: allow them all, or turn them all down. There is no per-record answer, because the
+decision a person actually makes is about the run in front of them, and a screen that asked about
+each item separately would turn one answer into a chore nobody finishes — which ends with an agent
+waiting forever on a question that was read and left. A row above the keys opens the list of
 everything an agent has ever done. Each line says the metric in the person's own word, the value and
 when it arrived; a refused one says why in a sentence rather than a code. A record still standing in
 Health can be taken back out from its own page or by swiping its row: the sample leaves Health, the

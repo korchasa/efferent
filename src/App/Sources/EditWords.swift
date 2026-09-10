@@ -20,9 +20,11 @@ enum EditWords {
     /// was turned away, legend for what is no longer there.
     static func colour(_ state: EditEntry.State) -> Color {
         switch state {
-        case .applied: Palette.accent
+        // Waiting is drawn in the accent as well, because it is the one thing
+        // on these screens that is asking for something.
+        case .applied, .waiting: Palette.accent
         case .refused: Palette.alarm
-        case .deleted, .undone: Palette.legend
+        case .deleted, .undone, .declined: Palette.legend
         }
     }
 
@@ -31,9 +33,15 @@ enum EditWords {
     /// What a run did, for the strip across the top of the everyday screen.
     static func summary(_ tally: EditTally) -> String {
         var parts: [String] = []
-        if tally.applied > 0 { parts.append("changed \(records(tally.applied))") }
-        if tally.deleted > 0 { parts.append("removed \(records(tally.deleted))") }
-        if tally.refused > 0 { parts.append("had \(records(tally.refused)) refused") }
+        if tally.applied > 0 {
+            parts.append("changed \(records(tally.applied))")
+        }
+        if tally.deleted > 0 {
+            parts.append("removed \(records(tally.deleted))")
+        }
+        if tally.refused > 0 {
+            parts.append("had \(records(tally.refused)) refused")
+        }
         guard !parts.isEmpty else { return "Your agent changed nothing." }
         return "Your agent " + list(parts) + " in Health."
     }
@@ -42,12 +50,48 @@ enum EditWords {
     /// 1 refused".
     static func counted(_ tally: EditTally) -> String {
         var parts: [String] = []
-        if tally.applied > 0 { parts.append("\(tally.applied) applied") }
-        if tally.deleted > 0 { parts.append("\(tally.deleted) removed") }
-        if tally.refused > 0 { parts.append("\(tally.refused) refused") }
-        if tally.undone > 0 { parts.append("\(tally.undone) undone") }
+        // First, because it is the only one of them that wants an answer.
+        if tally.waiting > 0 {
+            parts.append("\(tally.waiting) waiting")
+        }
+        if tally.applied > 0 {
+            parts.append("\(tally.applied) applied")
+        }
+        if tally.deleted > 0 {
+            parts.append("\(tally.deleted) removed")
+        }
+        if tally.refused > 0 {
+            parts.append("\(tally.refused) refused")
+        }
+        if tally.declined > 0 {
+            parts.append("\(tally.declined) turned down")
+        }
+        if tally.undone > 0 {
+            parts.append("\(tally.undone) undone")
+        }
         return parts.isEmpty ? "no edits" : parts.joined(separator: ", ")
     }
+
+    // MARK: - The question
+
+    /// The ask across the top of the everyday screen, and the sentence at the
+    /// head of the screen that answers it.
+    ///
+    /// It says what the agent wants rather than what it did, because nothing
+    /// has happened yet: a record that is already in Health is not the agent's
+    /// to change on its own.
+    static func asking(_ count: Int) -> String {
+        count == 1
+            ? "Your agent wants to change a record that is already in Health."
+            : "Your agent wants to change \(count) records that are already in Health."
+    }
+
+    /// Why the decision is one decision. Said where the two actions are, so
+    /// nobody presses either one looking for a per-record answer.
+    static let askingExplained =
+        "Adding something new lands by itself. Changing or removing what is already in Health "
+            + "waits for you, and you answer for the lot in one go: either all of them go in, or "
+            + "none of them does and your agent is told so."
 
     static func records(_ count: Int) -> String {
         count == 1 ? "1 record" : "\(count) records"
@@ -69,7 +113,11 @@ enum EditWords {
             if entry.recordID.isEmpty {
                 return "An edit this phone could not read"
             }
-            return "A record your agent removed"
+            switch entry.state {
+            case .waiting: return "A record your agent wants to remove"
+            case .declined: return "A removal you turned down"
+            default: return "A record your agent removed"
+            }
         }
         let name = WritableMetric.named(metric)?.spoken ?? metric
         if let stage = entry.stage {
@@ -93,6 +141,16 @@ enum EditWords {
         case .deleted:
             guard let day = entry.day else { return "\(arrived) · removed a record" }
             return "\(arrived) · removed a record from \(spoken(day: day))"
+        case .declined:
+            return "\(arrived) · you turned this down"
+        case .waiting:
+            if let span = span(entry, in: calendar) {
+                return "\(arrived) · \(span)"
+            }
+            // A removal names no instant, so its day is all there is to say
+            // about what it would take away.
+            guard let day = entry.day else { return "\(arrived) · waiting for you" }
+            return "\(arrived) · a record from \(spoken(day: day))"
         case .applied:
             guard let span = span(entry, in: calendar) else { return arrived }
             return "\(arrived) · \(span)"
@@ -102,10 +160,14 @@ enum EditWords {
     /// "today", "yesterday", or the date itself.
     static func when(_ day: String, in calendar: Calendar) -> String {
         let today = Day.of(Date(), in: calendar)
-        if day == today { return "today" }
+        if day == today {
+            return "today"
+        }
         let yesterday = calendar.date(byAdding: .day, value: -1, to: Date())
             .map { Day.of($0, in: calendar) }
-        if day == yesterday { return "yesterday" }
+        if day == yesterday {
+            return "yesterday"
+        }
         return spoken(day: day)
     }
 
@@ -132,7 +194,13 @@ enum EditWords {
             fields.append(Field(name: "to", value: stamp(end, in: calendar)))
         }
         if let code = entry.code {
-            fields.append(Field(name: "refused", value: reason(code)))
+            switch entry.state {
+            // The same column, and not the word "refused": nothing has been
+            // turned away here, and nothing has been written either.
+            case .waiting: fields.append(Field(name: "your answer", value: "not given yet"))
+            case .declined: fields.append(Field(name: "your answer", value: "no"))
+            default: fields.append(Field(name: "refused", value: reason(code)))
+            }
         }
         fields.append(Field(name: "written", value: stamp(entry.at, in: calendar)))
         if let undoneAt = entry.undoneAt {
@@ -169,6 +237,13 @@ enum EditWords {
             let moment = entry.undoneAt.map { stamp($0, in: calendar) } ?? "earlier"
             return "You took this record out of Health on \(moment). Your agent can write it "
                 + "again."
+        case .waiting:
+            return "Nothing has changed in Health yet. This would alter or remove a record that "
+                + "is there now, so it waits for you — and the answer covers everything waiting "
+                + "at once, on the screen before this one."
+        case .declined:
+            return "You turned this down, so Health was never touched. Your agent has been told, "
+                + "and it can ask again."
         }
     }
 
@@ -194,6 +269,11 @@ enum EditWords {
         case .badSignature: "not signed by your agent's key"
         case .cannotOpen: "this phone could not open it"
         case .malformed: "the edit did not make sense"
+        // The two that are not a refusal. They are in the same set because the
+        // wire has one field for "what became of this item", and an agent reads
+        // them the same way — except that these two can change.
+        case .awaitingApproval: "waiting for you to allow it"
+        case .declined: "you did not allow it"
         }
     }
 
@@ -215,7 +295,9 @@ enum EditWords {
         guard entry.stage != nil, let start = entry.start, let end = entry.end else { return nil }
         let minutes = Int((end.timeIntervalSince(start) / 60).rounded())
         guard minutes > 0 else { return nil }
-        if minutes < 60 { return "\(minutes) min" }
+        if minutes < 60 {
+            return "\(minutes) min"
+        }
         let rest = minutes % 60
         return rest == 0 ? "\(minutes / 60) h" : "\(minutes / 60) h \(rest) min"
     }

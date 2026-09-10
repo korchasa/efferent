@@ -18,6 +18,13 @@ public struct EditEntry: Equatable, Hashable, Sendable, Identifiable {
         case deleted
         /// A record the agent wrote and the person took back out.
         case undone
+        /// A change or a removal the agent asked for and Health has not seen:
+        /// it would alter or take away a record that stands there now, and that
+        /// is the person's to allow. The item is kept here, whole, because the
+        /// service has already been answered and the queue has moved on.
+        case waiting
+        /// One the person turned down. Health was never touched.
+        case declined
     }
 
     public let id: Int64
@@ -86,6 +93,26 @@ public struct EditEntry: Equatable, Hashable, Sendable, Identifiable {
     public var canBeUndone: Bool {
         state == .applied && !recordID.isEmpty
     }
+
+    /// The item this row came from.
+    ///
+    /// What makes a held item survive a relaunch: the journal carries every
+    /// field a `put` has, so nothing of the edit needs to stay in the service's
+    /// queue while the person decides. A row with no id is an edit nobody could
+    /// open, and there is no item in it to rebuild.
+    public var asItem: EditItem? {
+        guard !recordID.isEmpty else { return nil }
+        guard let metric, let start, let end else { return .delete(id: recordID) }
+        return .put(.init(
+            id: recordID,
+            metric: metric,
+            start: Int64(start.timeIntervalSince1970),
+            end: Int64(end.timeIntervalSince1970),
+            value: value,
+            unit: unit,
+            stage: stage
+        ))
+    }
 }
 
 /// How many items of each kind, over some stretch of time.
@@ -94,21 +121,48 @@ public struct EditTally: Equatable, Sendable {
     public var refused = 0
     public var deleted = 0
     public var undone = 0
+    public var waiting = 0
+    public var declined = 0
 
-    public init(applied: Int = 0, refused: Int = 0, deleted: Int = 0, undone: Int = 0) {
+    public init(
+        applied: Int = 0,
+        refused: Int = 0,
+        deleted: Int = 0,
+        undone: Int = 0,
+        waiting: Int = 0,
+        declined: Int = 0
+    ) {
         self.applied = applied
         self.refused = refused
         self.deleted = deleted
         self.undone = undone
+        self.waiting = waiting
+        self.declined = declined
     }
 
     /// Everything the agent did, undone items included: they were done once.
-    public var total: Int { applied + refused + deleted + undone }
+    /// What is waiting is left out on purpose — it is a question rather than
+    /// something that happened, and the screen asks it instead of counting it.
+    public var total: Int {
+        applied + refused + deleted + undone + declined
+    }
+
+    /// Whether the journal has anything at all to show for this stretch.
+    public var anything: Bool {
+        total + waiting > 0
+    }
+
     /// What is in Health because of the agent right now.
-    public var standing: Int { applied }
+    public var standing: Int {
+        applied
+    }
 }
 
 /// The three answers the screen asks the journal for, in one read.
+///
+/// How much is waiting has no answer of its own here: it is `ever.waiting`,
+/// because no watermark applies to it. A question does not stop being a
+/// question by having been looked at.
 public struct EditSummary: Equatable, Sendable {
     /// Since the person last opened the list. What the dark strip counts.
     public var unseen = EditTally()

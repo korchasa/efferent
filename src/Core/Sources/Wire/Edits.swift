@@ -158,7 +158,12 @@ public enum EditBatch {
 }
 
 /// The words the phone may answer with. The same set as `OUTCOME_CODES`.
-public enum OutcomeCode: String, Codable, Sendable {
+///
+/// Two of them are not final. `awaitingApproval` is what the phone answers for
+/// an item it is holding until its owner has looked at it, and `declined` is
+/// what it answers once they have said no. They are the reason an outcome can
+/// be sent twice for one edit.
+public enum OutcomeCode: String, Codable, Sendable, CaseIterable {
     case unknownMetric
     case badUnit
     case badRange
@@ -168,6 +173,8 @@ public enum OutcomeCode: String, Codable, Sendable {
     case badSignature
     case cannotOpen
     case malformed
+    case awaitingApproval
+    case declined
 }
 
 /// What the phone tells the service about one edit: how many items landed and

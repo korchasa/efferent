@@ -170,15 +170,73 @@ final class EditWordsTests: XCTestCase {
     }
 
     func testEveryRefusalHasASentenceAndNoneOfThemIsTheWireWord() {
-        for code in [
-            OutcomeCode.unknownMetric, .badUnit, .badRange, .unauthorized, .notFound,
-            .healthRefused, .badSignature, .cannotOpen, .malformed,
-        ] {
+        // Every one of them, from the closed set itself: a code added to the wire
+        // without a sentence would reach a person as the wire word.
+        for code in OutcomeCode.allCases {
             let said = EditWords.reason(code)
             XCTAssertFalse(said.isEmpty, "\(code) has nothing to say")
             XCTAssertNotEqual(said, code.rawValue, "\(code) shows the wire word")
             XCTAssertTrue(said.contains(" "), "\(code) is a word rather than a sentence")
         }
+    }
+
+    // MARK: - What is waiting
+
+    func testAWaitingChangeSaysWhatItWouldDoAndThatNothingHasHappened() {
+        let waiting = made(state: .waiting, code: .awaitingApproval)
+        XCTAssertEqual(EditWords.title(waiting), "Energy · 520 kcal")
+        XCTAssertEqual(EditWords.detail(waiting, in: Self.utc), "13:16 · for 8 Sep 2025, 13:00 – 13:15")
+        XCTAssertTrue(EditWords.note(waiting, in: Self.utc).hasPrefix("Nothing has changed in Health yet"))
+        // Not the word "refused": nothing was turned away, and nothing written.
+        XCTAssertTrue(
+            EditWords.fields(waiting, in: Self.utc)
+                .contains { $0.name == "your answer" && $0.value == "not given yet" }
+        )
+        XCTAssertFalse(EditWords.fields(waiting, in: Self.utc).contains { $0.name == "refused" })
+        XCTAssertFalse(waiting.canBeUndone, "its own page offers nothing to press")
+    }
+
+    func testAWaitingRemovalSaysItIsOneRatherThanThatItHappened() {
+        let waiting = made(
+            state: .waiting, metric: nil, start: nil, end: nil, value: nil, unit: nil,
+            day: nil, code: .awaitingApproval
+        )
+        XCTAssertEqual(EditWords.title(waiting), "A record your agent wants to remove")
+        // The day is the only thing that can be said about a removal, and the
+        // phone asked Health for it while the record was still there.
+        XCTAssertEqual(
+            EditWords.detail(
+                made(
+                    state: .waiting, metric: nil, start: nil, end: nil, value: nil, unit: nil,
+                    day: "2025-09-08", code: .awaitingApproval
+                ),
+                in: Self.utc
+            ),
+            "13:16 · a record from 8 Sep 2025"
+        )
+        XCTAssertEqual(EditWords.detail(waiting, in: Self.utc), "13:16 · waiting for you")
+    }
+
+    func testOneTurnedDownSaysHealthWasNeverTouched() {
+        let no = made(state: .declined, code: .declined)
+        XCTAssertEqual(EditWords.detail(no, in: Self.utc), "13:16 · you turned this down")
+        XCTAssertTrue(EditWords.note(no, in: Self.utc).hasPrefix("You turned this down"))
+        XCTAssertTrue(
+            EditWords.fields(no, in: Self.utc)
+                .contains { $0.name == "your answer" && $0.value == "no" }
+        )
+        XCTAssertFalse(no.canBeUndone)
+    }
+
+    func testTheQuestionIsCountedAndExplainedAsOneDecision() {
+        XCTAssertEqual(
+            EditWords.asking(1), "Your agent wants to change a record that is already in Health."
+        )
+        XCTAssertEqual(
+            EditWords.asking(3), "Your agent wants to change 3 records that are already in Health."
+        )
+        XCTAssertEqual(EditWords.counted(EditTally(applied: 2, waiting: 1)), "1 waiting, 2 applied")
+        XCTAssertTrue(EditWords.askingExplained.contains("all of them"))
     }
 
     func testTheAlertSaysBothThingsRemovingItDoes() {

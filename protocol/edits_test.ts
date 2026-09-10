@@ -234,6 +234,13 @@ Deno.test("an outcome carries counts and codes and nothing else", () => {
   assertThrows(() => validateOutcome({ applied: 1, refused: [], note: "x" }), Error, "note");
   assert(OUTCOME_CODES.includes("unauthorized"));
   assert(OUTCOME_CODES.includes("badSignature"));
+  // The two words that are not the last word: an item that changes or removes
+  // what the phone already holds waits for its owner, and the phone answers
+  // again for the same edit once they have decided.
+  assert(OUTCOME_CODES.includes("awaitingApproval"));
+  assert(OUTCOME_CODES.includes("declined"));
+  validateOutcome({ applied: 0, refused: [{ item: 0, code: "awaitingApproval" }] });
+  validateOutcome({ applied: 1, refused: [{ item: 1, code: "declined" }] });
 });
 
 // MARK: - Signatures

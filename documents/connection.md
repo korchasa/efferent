@@ -130,6 +130,10 @@ checkout, Deno, a local MCP server or a gateway restart.
   editor signature itself, open it with the reading private key, write the items into Health under
   `efferent:<id>` sync identifiers with phone-kept versions, report an outcome of counts and codes,
   and mark the touched days so they are re-uploaded whole.
+- Hold, rather than apply, any item that would change or remove a record standing in Health now, ask
+  the owner about the run as a whole, and keep the item on the phone until they answer. The agent is
+  told `awaitingApproval` at once so the queue keeps moving, and told again — `applied` or
+  `declined` — once they have decided.
 
 ### Cloudflare service and remote MCP server
 
@@ -138,7 +142,9 @@ checkout, Deno, a local MCP server or a gateway restart.
 - Keep the existing upload signature boundary, and refuse an edit that is not signed by the
   registered editor key.
 - Hold sealed edits until the phone answers for them, hand each back only to the phone's writer
-  key, and replace it with the outcome the phone reports.
+  key, and replace it with the outcome the phone reports. Accept a second outcome for an edit whose
+  ciphertext is already gone, because an item the owner has yet to decide about is answered once
+  while it waits and once when they answer.
 - Never accept a reading key or an editor key through configuration, authorization or tool
   arguments.
 - Never return plaintext or answer a question about the contents of a day or an edit.

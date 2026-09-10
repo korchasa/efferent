@@ -76,7 +76,14 @@ export interface DeleteItem {
 
 export type EditItem = PutItem | DeleteItem;
 
-/** The words the phone may answer with. A word outside this set is `malformed`. */
+/** The words the phone may answer with. A word outside this set is `malformed`.
+ *
+ * Two of them are not final. `awaitingApproval` says the phone is holding the
+ * item until its owner has looked at it — anything that would change or remove
+ * a record already in Health waits for that — and `declined` says they said no.
+ * An outcome carrying `awaitingApproval` is therefore the one kind that is
+ * later replaced: the phone answers again for the same edit once the question
+ * has been settled. */
 export const OUTCOME_CODES = [
   "unknownMetric",
   "badUnit",
@@ -87,6 +94,8 @@ export const OUTCOME_CODES = [
   "badSignature",
   "cannotOpen",
   "malformed",
+  "awaitingApproval",
+  "declined",
 ] as const;
 export type OutcomeCode = typeof OUTCOME_CODES[number];
 

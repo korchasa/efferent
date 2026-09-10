@@ -64,6 +64,11 @@ that type was declined on the phone, notFound for a delete of an id never writte
 when Health itself said no. The days an edit touched are re-uploaded, so the written entries appear
 in the archive afterwards like anything logged by hand.
 
+A new entry lands by itself. Replacing or removing one that already stands in Health does not: that
+item comes back \`awaitingApproval\` and waits for the person holding the phone. Once they decide, the
+phone answers again for the same edit — \`applied\` if they said yes, \`declined\` if they said no — so
+read the edit again later instead of sending it a second time.
+
 \`\`\`python
 ${PYTHON_HPKE_REFERENCE}\`\`\`
 
