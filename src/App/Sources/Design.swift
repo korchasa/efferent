@@ -196,6 +196,58 @@ struct QuietButton: ButtonStyle {
     }
 }
 
+/// A key that runs the width of the shell, for a rare thing that has something
+/// to say about itself.
+///
+/// The same panel, hairline and radius as the keys in the row below it, because
+/// that is what makes it read as something to press. Drawn as a bare row with no
+/// edges it read as a line of status instead, and the one way into everything an
+/// agent has ever done looked like a caption about today.
+struct WideKeyButton: View {
+    let label: String
+    let symbol: String
+    /// What it has to say about itself, printed small on the right.
+    var detail: String?
+    /// A lamp before the name, as the brand row lights when sending is alive.
+    var lit = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 9) {
+                Image(systemName: symbol)
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(Palette.ink)
+                if lit {
+                    Circle()
+                        .fill(Palette.accent)
+                        .frame(width: 7, height: 7)
+                }
+                Legend(label, size: 9, colour: Palette.ink)
+                Spacer(minLength: 8)
+                if let detail {
+                    Legend(detail, size: 9)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Palette.tick)
+            }
+            .padding(.horizontal, 14)
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .background(Palette.panel, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .strokeBorder(Palette.hairline, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+}
+
 /// One key in the row along the bottom: the symbol on the key, the name of the
 /// thing printed underneath it.
 ///

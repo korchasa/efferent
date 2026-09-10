@@ -141,10 +141,11 @@ struct HomeView: View {
     /// person does daily is the dial itself, so nothing else belongs here.
     private var keys: some View {
         VStack(spacing: 0) {
-            if services.edits.ever.anything {
-                editsRow
-            }
             RowDivider()
+            if services.edits.ever.anything {
+                editsKey
+                    .padding(.top, 14)
+            }
             HStack(alignment: .top, spacing: 8) {
                 KeyButton(label: "reach back", symbol: "clock.arrow.circlepath") {
                     reachSelection = .everything
@@ -245,30 +246,19 @@ struct HomeView: View {
         .padding(.top, 12)
     }
 
-    /// The way into the list, once anything has ever been written. A lamp and a
-    /// legend, the way the brand row says what sending is doing.
-    private var editsRow: some View {
-        Button { readingEdits = true } label: {
-            VStack(spacing: 0) {
-                RowDivider()
-                HStack(spacing: 9) {
-                    Circle()
-                        .fill(
-                            services.edits.unseen.total > 0 || services.edits.ever.waiting > 0
-                                ? Palette.accent : Palette.legend
-                        )
-                        .frame(width: 7, height: 7)
-                    Legend(countedEdits, size: 9, colour: Palette.ink)
-                    Spacer(minLength: 8)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Palette.tick)
-                }
-                .padding(.vertical, 13)
-                .contentShape(Rectangle())
-            }
-        }
-        .buttonStyle(.plain)
+    /// The way into everything an agent has ever done, once anything has been.
+    ///
+    /// A key rather than a row: it is named for where it goes and drawn with the
+    /// panel and hairline every other key has. Before, it was a bare line
+    /// carrying a tally, which read as a caption about today — a person looking
+    /// for what happened last week found nothing on this screen offering it.
+    private var editsKey: some View {
+        WideKeyButton(
+            label: "agent edits",
+            symbol: "list.bullet.rectangle",
+            detail: countedEdits,
+            lit: services.edits.unseen.total > 0 || services.edits.ever.waiting > 0
+        ) { readingEdits = true }
     }
 
     /// Today's tally while there is one, and the whole journal's when there is
