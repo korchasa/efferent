@@ -512,6 +512,15 @@ share that reported completion or a copy to the clipboard, which is why the shee
 `UIActivityViewController` and not `ShareLink`: `ShareLink` never reports the outcome, so a cancelled
 share would count as an archive handed over.
 
+**What is shared is text with a type on it, and AirDrop gets a file.** A bare string is guessed at by
+whoever receives it: the prompt begins "Instruction:", and an AirDropped string whose first word ends
+in a colon is read as a URL scheme — the receiving phone answered "There is no application set to
+open the URL Instruction:%0AConnect%20the…" and the prompt never arrived. `TextToShare` declares
+`public.plain-text` and hands AirDrop a text file in the temporary directory instead, which is taken
+away again as soon as the sheet reports back, because it holds the keys that open the archive. Every
+other activity still gets the string: a message, a note or the clipboard is meant to hold the prompt
+itself, not an attachment.
+
 "Start syncing" starts it, and the walkthrough then waits. Sending runs whether or not anybody is
 looking, so the last screen could simply move on — but the one thing a person wants after pressing
 "start" is to see that it started, so the screen shows the archive being made and then the count, and
