@@ -55,5 +55,28 @@
   ],
   "observability": {
     "enabled": true
+  },
+  // A second, separate service for the dev copy of the app (bundle id ending
+  // in `.dev`, installed next to the store build). Its own host, its own
+  // bucket and its own APP_ID secret, so nothing a development build does can
+  // land beside the archive the phone relies on. Wrangler inherits nothing
+  // that binds (routes, buckets, rate limits, secrets), so they are repeated;
+  // the rate-limit namespaces are per account, hence different ids.
+  // Deploy with `wrangler deploy --env dev`; the Worker is named efferent-dev.
+  "env": {
+    "dev": {
+      "routes": [
+        { "pattern": "api-dev.efferentapp.com/*", "zone_name": "efferentapp.com" }
+      ],
+      "r2_buckets": [
+        { "binding": "BLOBS", "bucket_name": "efferent-dev" }
+      ],
+      "ratelimits": [
+        { "name": "CLAIMS", "namespace_id": "2001", "simple": { "limit": 5, "period": 60 } },
+        { "name": "WRITES", "namespace_id": "2002", "simple": { "limit": 300, "period": 60 } },
+        { "name": "EDITS", "namespace_id": "2003", "simple": { "limit": 60, "period": 60 } }
+      ],
+      "observability": { "enabled": true }
+    }
   }
 }
