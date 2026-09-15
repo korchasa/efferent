@@ -65,6 +65,13 @@ description = "the local mirror: decrypted days and the reading key itself"
 # name the working-directory fallback cannot reach, and it holds the same
 # decrypted days as the live one. `.gitignore` matches the same shape.
 #
+# `.wrangler/` is matched wherever it sits rather than at the two places it
+# happened to sit first. Every Worker config in this repository gets its own
+# directory of build output beside it, and a running `wrangler dev` writes a
+# bundle there that inlines Apple's root certificate — which the stock
+# `generic-api-key` rule reads as a key. The maintenance Worker added a third
+# such directory and turned the scan red on a file git has never seen.
+#
 # `build/` is here for the same reason. It holds the checked-out sources of
 # every Swift package the app depends on, and their own test fixtures read as
 # keys: a build before a check turned up eleven of them, none in this project's
@@ -72,8 +79,7 @@ description = "the local mirror: decrypted days and the reading key itself"
 # learn to skip.
 paths = [
   '''^\.efferent''',
-  '''^\.wrangler/''',
-  '''^server/\.wrangler/''',
+  '''(^|/)\.wrangler/''',
   '''^build/''',
 ]
 
