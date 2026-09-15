@@ -813,7 +813,9 @@ const TOOLS: Tool[] = [
     title: "What became of the edits",
     description: [
       "The edits sent to the phone and what it did with each: `pending` until the phone has",
-      "looked, then `applied`, `partial` or `failed` with counts. For anything refused, the",
+      "looked, then `applied`; `awaiting` while its owner is being asked, `declined` if they",
+      "said no, `failed` if the phone could not do it, and `partial` when some of it landed.",
+      "For anything refused, the",
       "phone's word for why is listed per item — badRange for an end in the future, badUnit",
       "for a unit the metric does not take, unauthorized when Health access to that type was",
       "declined on the phone, notFound for a delete of an id never written, healthRefused when",
