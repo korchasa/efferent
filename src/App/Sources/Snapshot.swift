@@ -83,8 +83,16 @@ enum Snapshot {
         let destination = try Destination(
             endpoint: deployment.serviceURL, readingPublicKey: reading.publicKey.rawRepresentation
         )
+        // With an editor key, because a phone that has registered one is the
+        // ordinary case and the instruction in the prompt names it. Without it
+        // the rendered prompt tells the agent to keep a key it cannot see.
+        let editor = Curve25519.Signing.PrivateKey()
         let handoff = ConnectionHandoff(
-            deployment: deployment, destination: destination, privateKey: reading.rawRepresentation
+            deployment: deployment,
+            destination: destination,
+            privateKey: reading.rawRepresentation,
+            editorPrivateKey: editor.rawRepresentation,
+            editorPublicKey: editor.publicKey.rawRepresentation
         )
         let stats = Stats(
             pendingDays: 1284, stuckDays: 0, sentDays: 2638,
