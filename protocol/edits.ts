@@ -104,6 +104,66 @@ export interface Outcome {
   refused: { item: number; code: OutcomeCode }[];
 }
 
+/** The words that describe what became of a whole edit.
+ *
+ * `pending` is the absence of an outcome — the phone has not looked yet — and
+ * every other word is worked out from one. */
+export const EDIT_STATUSES = [
+  "pending",
+  "applied",
+  "partial",
+  "awaiting",
+  "declined",
+  "failed",
+] as const;
+export type EditStatus = typeof EDIT_STATUSES[number];
+
+/** An outcome's refusals, split by what each one means.
+ *
+ * A refusal is not one thing. `awaitingApproval` says a person is being asked,
+ * `declined` says they answered no, and every other code says the phone could
+ * not do it. Counting them together is what let a question be reported as a
+ * failure. */
+export interface OutcomeTally {
+  applied: number;
+  /** Every refusal, waiting and declined included. */
+  refused: number;
+  waiting: number;
+  declined: number;
+}
+
+export function tallyOutcome(outcome: Outcome): OutcomeTally {
+  let waiting = 0;
+  let declined = 0;
+  for (const refusal of outcome.refused) {
+    if (refusal.code === "awaitingApproval") waiting += 1;
+    else if (refusal.code === "declined") declined += 1;
+  }
+  return { applied: outcome.applied, refused: outcome.refused.length, waiting, declined };
+}
+
+/**
+ * What to call an edit, given what became of its items.
+ *
+ * Something the phone could not do outranks everything else, because that is
+ * the only kind an agent can act on. Then a question still owed, because the
+ * edit is not over until it is answered. A decision is reported as itself: a
+ * person saying no is an answer, and calling it a failure tells an agent to try
+ * again at the one thing it must not repeat.
+ *
+ *     nothing refused                     applied
+ *     something the phone could not do    failed, or partial beside work that landed
+ *     a question still waiting            awaiting
+ *     everything else declined            declined, or partial beside work that landed
+ */
+export function outcomeStatus(tally: OutcomeTally): EditStatus {
+  if (tally.refused === 0) return "applied";
+  const couldNot = tally.refused - tally.waiting - tally.declined;
+  if (couldNot > 0) return tally.applied > 0 ? "partial" : "failed";
+  if (tally.waiting > 0) return "awaiting";
+  return tally.applied > 0 ? "partial" : "declined";
+}
+
 const PUT_KEYS = ["op", "id", "metric", "start", "end", "value", "unit", "stage"];
 const DELETE_KEYS = ["op", "id"];
 

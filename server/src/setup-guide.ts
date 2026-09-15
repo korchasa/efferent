@@ -46,9 +46,15 @@ The same script writes, when the handoff carries an editor key. Put the items in
 \`python efferent_hpke.py --handoff <file> --write <items.json>\`. The script seals the items to the
 phone's own reading key, signs them with the editor key and hands the sealed edit to the service,
 which stores it unopened and answers with a name. The phone opens the edit, checks the signature
-itself, writes the samples into Health and reports what it did; \`--edits\` lists every edit with
-\`pending\`, \`applied\`, \`partial\` or \`failed\` and the counts. The phone looks when it is opened or
-wakes to send — minutes to hours, never at once.
+itself, writes the samples into Health and reports what it did; \`--edits\` lists every edit with its
+status and counts. The phone looks when it is opened or wakes to send — minutes to hours, never at
+once.
+
+A status is \`pending\` until the phone looks, then \`applied\`. Adding something new lands by itself;
+anything that would change or remove a record already in Health is held and shown to the person, and
+the edit reads \`awaiting\` until they answer — then \`applied\` or \`declined\`. \`failed\` means the
+phone could not do it, and \`partial\` that some of it landed. Never resend an edit that is
+\`awaiting\` or \`declined\`: one is a question already asked, the other an answer already given.
 
 An item is \`{"op":"put","id":...,"metric":...,"start":...,"end":...,"value":...,"unit":...}\` for a
 quantity, the same with \`"stage"\` instead of value and unit for sleep, or \`{"op":"delete","id":...}\`.

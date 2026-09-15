@@ -17,6 +17,7 @@ import { expand } from "../protocol/day.ts";
 import {
   editAssociatedData,
   type EditItem,
+  type EditStatus,
   type Outcome,
   type OutcomeCode,
   packEdits,
@@ -62,9 +63,13 @@ export interface EditEntry {
   name: string;
   bytes: number;
   at: string;
-  status: "pending" | "applied" | "partial" | "failed";
+  status: EditStatus;
   applied?: number;
   refused?: number;
+  /** Refusals that are a question or an answer rather than a fault. Absent on
+   * an outcome the service stored before it counted them apart. */
+  waiting?: number;
+  declined?: number;
   /** Present when this profile submitted the edit. */
   items?: SubmittedItem[];
   /** Present when the phone refused something: which item, which word, and the

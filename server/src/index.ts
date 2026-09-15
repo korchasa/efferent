@@ -73,7 +73,13 @@ import {
   verifyMessage,
   verifyUpload,
 } from "../../protocol/signing.ts";
-import { type Outcome, validateOutcome } from "../../protocol/edits.ts";
+import {
+  type EditStatus,
+  type Outcome,
+  outcomeStatus,
+  tallyOutcome,
+  validateOutcome,
+} from "../../protocol/edits.ts";
 import { AttestationError, verifyAttestation } from "../../protocol/attestation.ts";
 import { SETUP_GUIDE } from "./setup-guide.ts";
 
@@ -341,7 +347,11 @@ function createRemoteServer(env: Env, bucket: string, origin: string): McpServer
       title: "List submitted edits",
       description:
         "List the edits submitted to this archive by name, size, submission time and status: " +
-        "pending until the phone applies one, then applied, partial or failed with the counts. " +
+        "pending until the phone looks, then applied, or awaiting while the person is being asked " +
+        "about an item that would change or remove a record already in Health, declined if they " +
+        "said no, failed if the phone could not do it, and partial when some of it landed. " +
+        "awaiting and declined are answers rather than faults — never resend an edit over either; " +
+        "an awaiting one is answered again by the phone once the person has decided. " +
         "Edits are submitted with the local reference code — sealed to the reading key and " +
         "signed with the editor key — and this server never sees their contents. " +
         "`after` is a paging key, not a watermark; follow next until it is null.",
@@ -812,9 +822,13 @@ type EditEntry = {
   name: string;
   bytes: number;
   at: string;
-  status: "pending" | "applied" | "partial" | "failed";
+  status: EditStatus;
   applied?: number;
   refused?: number;
+  /** Refusals that are a question or an answer rather than a fault. Absent on
+   * an outcome written before they were counted apart. */
+  waiting?: number;
+  declined?: number;
 };
 
 /**
@@ -878,13 +892,21 @@ function outcomeEntry(object: ListedObject): EditEntry {
   const metadata = object.customMetadata ?? {};
   const applied = Number(metadata.applied ?? 0);
   const refused = Number(metadata.refused ?? 0);
+  // Absent on an outcome stored before refusals were counted apart, which then
+  // reads exactly as it did then: a question in one of those still looks like a
+  // failure. They are replaced by the phone's next answer, and there is no
+  // second copy of an outcome's codes to work them out from.
+  const waiting = Number(metadata.waiting ?? 0);
+  const declined = Number(metadata.declined ?? 0);
   return {
     name: object.name,
     bytes: Number(metadata.bytes ?? 0),
     at: metadata.at ?? object.uploaded.toISOString(),
-    status: refused === 0 ? "applied" : applied === 0 ? "failed" : "partial",
+    status: outcomeStatus({ applied, refused, waiting, declined }),
     applied,
     refused,
+    waiting,
+    declined,
   };
 }
 
@@ -1009,10 +1031,17 @@ async function putOutcome(
   }
 
   const record = { applied: outcome.applied, refused: outcome.refused, bytes, at };
+  // The counts go beside the object because a listing of hundreds must not read
+  // one body per entry. Waiting and declined are counted apart from the rest:
+  // without them a question a person has not answered yet is indistinguishable
+  // from a write the phone could not make, and it was reported as a failure.
+  const tally = tallyOutcome(outcome);
   await env.BLOBS.put(outcomeKey(bucket, name), JSON.stringify(record), {
     customMetadata: {
-      applied: String(outcome.applied),
-      refused: String(outcome.refused.length),
+      applied: String(tally.applied),
+      refused: String(tally.refused),
+      waiting: String(tally.waiting),
+      declined: String(tally.declined),
       bytes: String(bytes),
       at,
     },

@@ -329,10 +329,17 @@ async function edits(options: Record<string, string>): Promise<void> {
     return;
   }
   for (const entry of page.edits) {
-    const counts = entry.status === "pending"
-      ? ""
-      : `  ${entry.applied} applied, ${entry.refused} refused`;
-    console.log(`${entry.name}  ${entry.status.padEnd(7)}  ${entry.at}${counts}`);
+    // A refusal is not one thing, so the line says which kind. An edit
+    // "0 applied, 1 refused" where the refusal is a question reads as a
+    // failure, and that is exactly what it is not.
+    const parts: string[] = [];
+    if (entry.applied) parts.push(`${entry.applied} applied`);
+    if (entry.waiting) parts.push(`${entry.waiting} waiting for you`);
+    if (entry.declined) parts.push(`${entry.declined} declined`);
+    const couldNot = (entry.refused ?? 0) - (entry.waiting ?? 0) - (entry.declined ?? 0);
+    if (couldNot > 0) parts.push(`${couldNot} refused`);
+    const counts = entry.status === "pending" || parts.length === 0 ? "" : `  ${parts.join(", ")}`;
+    console.log(`${entry.name}  ${entry.status.padEnd(8)}  ${entry.at}${counts}`);
     for (const item of entry.items ?? []) {
       console.log(
         `    ${item.op.padEnd(6)} ${item.id}${item.metric ? `  ${item.metric} ${item.day}` : ""}`,

@@ -14,7 +14,10 @@ import {
   type EditItem,
   MAX_ITEMS_PER_EDIT,
   OUTCOME_CODES,
+  type OutcomeCode,
+  outcomeStatus,
   packEdits,
+  tallyOutcome,
   unpackEdits,
   validateItems,
   validateOutcome,
@@ -279,4 +282,44 @@ Deno.test("a message signed by the editor verifies, and nothing else does", asyn
   assert(!await verifyMessage(new Uint8Array(32), new Uint8Array(64), message), "small order");
   assert(!await verifyMessage(editor.publicRaw, signature.subarray(1), message), "wrong length");
   assertEquals(base64url(signature).length, 86);
+});
+
+Deno.test("a question is not a failure, and neither is an answer", () => {
+  const status = (applied: number, codes: string[]) =>
+    outcomeStatus(tallyOutcome({
+      applied,
+      refused: codes.map((code, item) => ({ item, code: code as OutcomeCode })),
+    }));
+
+  assertEquals(status(2, []), "applied");
+  assertEquals(
+    status(0, ["awaitingApproval"]),
+    "awaiting",
+    "an edit held for the person read as a failure, which is what the agent then reported",
+  );
+  assertEquals(status(0, ["declined"]), "declined", "the person answering no is not a fault");
+  assertEquals(status(0, ["badUnit"]), "failed");
+  assertEquals(status(1, ["badUnit"]), "partial");
+  assertEquals(status(1, ["awaitingApproval"]), "awaiting", "something is still owed an answer");
+  assertEquals(status(1, ["declined"]), "partial");
+  assertEquals(
+    status(0, ["awaitingApproval", "badRange"]),
+    "failed",
+    "a fault outranks a question: it is the part the agent can act on",
+  );
+  assertEquals(status(0, ["declined", "awaitingApproval"]), "awaiting");
+});
+
+Deno.test("the tally splits refusals by what they mean", () => {
+  assertEquals(
+    tallyOutcome({
+      applied: 1,
+      refused: [
+        { item: 1, code: "awaitingApproval" },
+        { item: 2, code: "declined" },
+        { item: 3, code: "notFound" },
+      ],
+    }),
+    { applied: 1, refused: 3, waiting: 1, declined: 1 },
+  );
 });
