@@ -402,6 +402,12 @@ weigh a mebibyte and a request five, a day must be a date between 1900 and tomor
 be handed 512 MB and the service 100 GB in total, and claims and uploads are counted per caller. For
 scale, an eleven-year archive of one person is 37 MB.
 
+Both of those tallies count bytes ever handed over and never come down, and the service says nothing
+before the end of one, where every upload is answered `507`. `deno task ceilings` is the cheap look
+at the service-wide one; `server/maintenance` is the whole answer, including per archive. That same
+tool is what removes an archive when its owner asks — the service has no delete route on purpose, so
+it runs on the machine of whoever is answering and is never deployed.
+
 ## Commands
 
 ```bash
@@ -417,11 +423,13 @@ deno task check
   gitleaks`). Part of `check`, and the only thing GitHub runs on a push.
 - `generate` — regenerate the Xcode project from `Project.swift`.
 - `icons` — re-render the app icons from `documents/icon.svg`.
-- `screenshots <directory>` — the three store screenshots at 1290 × 2796, drawn offscreen by the app itself
+- `screenshots <directory>` — the six store screenshots at 1290 × 2796, drawn offscreen by the app itself
   (`--snapshot <directory>`) from made-up figures and a key invented on the spot. No phone, no Health, no network.
 - `server:types` — regenerate the Worker bindings and runtime types from `server/wrangler.jsonc`.
 - `server:dev` / `server:deploy` — the bucket service and remote MCP, locally or on
   Cloudflare.
+- `ceilings` — how much of the service-wide ceiling has been handed over, read straight out of R2.
+  Exits non-zero past the mark (`--warn <percent>`, 80 by default), so a scheduler can act on it.
 - `interop` — check that Swift and TypeScript agree on request bytes, HPKE and the phone handoff
   key, and that the phone opens and verifies an edit the reader sealed and signed.
 - `interop:python` — with PyHPKE installed in the selected Python, prove that the exact source

@@ -34,7 +34,8 @@
     "interop": "deno run -A scripts/interop.ts",
     "interop:python": "deno run -A scripts/python-interop.ts",
     "icons": "deno run -A scripts/icons.ts",
-    "screenshots": "deno run -A scripts/screenshots.ts"
+    "screenshots": "deno run -A scripts/screenshots.ts",
+    "ceilings": "deno run -A scripts/ceilings.ts"
   },
   "fmt": {
     "include": [
