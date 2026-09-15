@@ -3,9 +3,10 @@ import UIKit
 
 /// First launch, from an empty app to one that is sending.
 ///
-/// Three screens and a pause: what this is, what it reads, and how far back to
-/// go. The archive is made in the pause — that is not a decision anybody can
-/// make wrongly, so it is told rather than asked. Handing the archive to an
+/// Four screens and a pause: what this is, what it reads, what it may tell you
+/// about, and how far back to go. The archive is made in the pause — that is
+/// not a decision anybody can make wrongly, so it is told rather than asked.
+/// Handing the archive to an
 /// agent is not part of the walkthrough: it needs a decision about somebody
 /// else's software, it can be done at any time, and a setup that ends on it
 /// leaves the phone waiting on a step nobody has to take today. The everyday
@@ -13,7 +14,7 @@ import UIKit
 struct SetupView: View {
     @EnvironmentObject private var services: Services
 
-    private enum Step { case welcome, access, range, preparing }
+    private enum Step { case welcome, access, notices, range, preparing }
 
     @State private var step: Step = .welcome
     @State private var earliest: String?
@@ -25,6 +26,7 @@ struct SetupView: View {
             switch step {
             case .welcome: welcome
             case .access: access
+            case .notices: notices
             case .range: range
             case .preparing: preparing
             }
@@ -71,7 +73,7 @@ struct SetupView: View {
             VStack(spacing: 10) {
                 Button("Begin setup") { step = .access }
                     .buttonStyle(ProminentButton())
-                Legend("3 steps · about a minute", size: 9)
+                Legend("4 steps · about a minute", size: 9)
                     .frame(maxWidth: .infinity)
             }
         }
@@ -136,11 +138,11 @@ struct SetupView: View {
                 Button("Ask Health now") {
                     Task {
                         await services.requestHealthAccess()
-                        step = .range
+                        step = .notices
                     }
                 }
                 .buttonStyle(ProminentButton())
-                Button("Not now") { step = .range }
+                Button("Not now") { step = .notices }
                     .buttonStyle(QuietButton())
             }
         }
@@ -167,12 +169,67 @@ struct SetupView: View {
         }
     }
 
+    // MARK: - What it may tell you about
+
+    /// The one thing this app ever puts on a lock screen, offered rather than
+    /// sprung.
+    ///
+    /// Asking here is asking about something that has not happened yet, which
+    /// is why "Not now" walks on without showing the system sheet at all: the
+    /// permission stays undetermined, and the everyday screen puts the same
+    /// question again the first time an agent actually writes. Only the filled
+    /// button shows the sheet, because that sheet can be answered once.
+    private var notices: some View {
+        stepLayout(
+            step: 3,
+            back: { step = .access },
+            title: "Notices",
+            blurb: "An agent you connect may write into Health — a meal, a nap, a weight. "
+                + "Efferent can tell you when that happens. It is the only thing this app "
+                + "ever puts on your lock screen."
+        ) {
+            VStack(spacing: 0) {
+                numbered(
+                    "01", "Only what an agent writes",
+                    "Sending your own history says nothing. An export runs in silence, "
+                        + "however many days it carries."
+                )
+                numbered(
+                    "02", "A count, never a reading",
+                    "The notice says how many records changed and stops there — no metric, "
+                        + "no value, no day. A lock screen is read by whoever holds the phone."
+                )
+                numbered(
+                    "03", "Nothing until an agent is connected",
+                    "No agent, no notices. You can allow this now and decide about an agent "
+                        + "any day."
+                )
+            }
+        } actions: {
+            VStack(spacing: 12) {
+                note("Not now is not an answer. Skip this and Efferent asks again the first "
+                    + "time an agent writes something into Health.")
+                VStack(spacing: 6) {
+                    Button("Allow notices") {
+                        Task {
+                            await services.askForNotices()
+                            step = .range
+                        }
+                    }
+                    .buttonStyle(ProminentButton())
+                    Button("Not now") { step = .range }
+                        .buttonStyle(QuietButton())
+                }
+            }
+        }
+    }
+
     // MARK: - How far back
 
     private var range: some View {
         stepLayout(
-            step: 3,
-            back: { step = .access },
+            step: 4,
+            back: { step = .notices },
             title: "How far back?",
             blurb: "Efferent takes every day from the one you choose up to today. You can reach "
                 + "further back later."
@@ -249,7 +306,7 @@ struct SetupView: View {
     /// send is a screen nobody can act on.
     private var preparing: some View {
         VStack(spacing: 0) {
-            stepHeader(step: 3, back: nil)
+            stepHeader(step: 4, back: nil)
                 .padding(.horizontal, 20)
 
             Spacer(minLength: 0)
@@ -334,7 +391,7 @@ struct SetupView: View {
                 .font(.system(size: 14, weight: .medium, design: .monospaced))
                 .foregroundStyle(Palette.ink)
             Spacer(minLength: 8)
-            StepBar(step: step, total: 3)
+            StepBar(step: step, total: 4)
         }
         .frame(height: 34)
     }

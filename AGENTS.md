@@ -497,11 +497,16 @@ supporting dark mode is worse than not supporting it: the system turns its own t
 it on a light background, which is a screen of invisible words. Every colour lives in `Design.swift`
 as a literal, and nothing may read a system colour that changes underneath it.
 
-The walkthrough is three steps and ends at the archive: what this is, what it reads, how far back to
-go. Handing the archive to an agent is not one of them. It needs a decision about somebody else's
-software, it can be done any day, and a walkthrough that ends on it leaves the phone waiting on a
-step nobody has to take today. A step whose archive was never created does not walk on either — an
-everyday screen with nowhere to send is a screen nobody can act on.
+The walkthrough is four steps and ends at the archive: what this is, what it reads, what it may tell
+you about, and how far back to go. Handing the archive to an agent is not one of them. It needs a
+decision about somebody else's software, it can be done any day, and a walkthrough that ends on it
+leaves the phone waiting on a step nobody has to take today. A step whose archive was never created
+does not walk on either — an everyday screen with nowhere to send is a screen nobody can act on.
+
+Notices are a step because walking past one costs nothing. The step's "Not now" never shows the
+system sheet, so nobody decides anything by pressing it, and the screen says so in as many words —
+which is what separates it from the handoff, where every way on is a decision about software this
+app does not own.
 
 The everyday screen asks for the handoff instead, and keeps asking. It opens the sheet by itself once,
 straight out of the walkthrough, and while the text has never gone anywhere the ask is a lit key
@@ -575,9 +580,14 @@ everything an agent changes is on the screen and can be taken back out.
   chore nobody finishes, and an agent would wait forever on a question that was read and left.
 - **What leaves the phone counts records and names nothing.** The notification says how many records
   changed and never a metric, a value or a day — it is drawn on a lock screen, which is the one
-  place this app's contents could be read by somebody who is not the owner. Permission is asked for
-  only after an agent has actually changed something: a phone whose agent never writes is never
-  asked.
+  place this app's contents could be read by somebody who is not the owner. Permission is put twice
+  and refused only once: the walkthrough offers it, and "Not now" there walks on without showing the
+  system sheet at all, so the permission is still undetermined and the everyday screen asks again the
+  first time an agent actually writes. The walkthrough can only ask about a thing that has not
+  happened, and a person who says no to that says it for good — the second ask is the one about
+  something they have just seen. The system sheet is shown once either way, because iOS answers a
+  second request with whatever was said the first time and draws nothing, which is why every caller
+  goes through `Services.askForNotices` and its `notDetermined` guard.
 - **A wire name is never put in front of a person.** `dietaryCarbohydrates` is nobody's word for
   lunch, so every writable metric carries the word a person uses beside the name it travels under,
   and a metric added without one does not compile. The same holds for a refusal: each code has a
