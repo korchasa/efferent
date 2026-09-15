@@ -215,6 +215,36 @@ final class HealthTests: XCTestCase {
         XCTAssertFalse(HealthReader.isLocked(other))
     }
 
+    /// Walking past the Health step leaves the question unanswered, and the
+    /// screen that follows asks Health how far back it goes. That refusal is
+    /// the state the person chose, so it must not reach them as a red
+    /// paragraph carrying an error domain and a code.
+    func testHealthRefusingBecauseNobodyAnsweredIsRecognised() {
+        let unanswered = NSError(
+            domain: HKError.errorDomain,
+            code: HKError.Code.errorAuthorizationNotDetermined.rawValue,
+            userInfo: [NSLocalizedDescriptionKey: "Authorization not determined"]
+        )
+
+        XCTAssertTrue(HealthReader.hasNotBeenAsked(unanswered))
+    }
+
+    /// A refusal the person did choose to give, and anything else, stay faults.
+    func testAnotherRefusalIsNotMistakenForAnUnansweredOne() {
+        let denied = NSError(
+            domain: HKError.errorDomain, code: HKError.Code.errorAuthorizationDenied.rawValue
+        )
+        let locked = NSError(
+            domain: HKError.errorDomain,
+            code: HKError.Code.errorDatabaseInaccessible.rawValue
+        )
+        let other = NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut)
+
+        XCTAssertFalse(HealthReader.hasNotBeenAsked(denied))
+        XCTAssertFalse(HealthReader.hasNotBeenAsked(locked))
+        XCTAssertFalse(HealthReader.hasNotBeenAsked(other))
+    }
+
     func testTheAppAsksToReadEveryMetricItCollects() {
         let requested = HealthReader.readTypes
 
