@@ -695,17 +695,27 @@ final class Services: ObservableObject {
         }
     }
 
-    /// Ask about notices, but only once an agent has actually written
-    /// something.
+    /// Put the system's own permission sheet up, once.
     ///
-    /// Asking on a first launch is asking about a thing that has never
-    /// happened, and a person who says no there says it for good. After the
-    /// first edit the question is about something they have just seen.
-    func askForNoticesIfNeeded() async {
-        guard !demonstration, agentConnected else { return }
-        guard edits.ever.anything else { return }
+    /// Guarded on `notDetermined` because iOS answers a second request with
+    /// whatever was said the first time and draws nothing — so a caller that
+    /// did not check would believe it had asked.
+    func askForNotices() async {
+        guard !demonstration else { return }
         guard await Notices.status() == .notDetermined else { return }
         await Notices.ask()
+    }
+
+    /// Ask about notices once an agent has actually written something.
+    ///
+    /// The walkthrough offers the question too, and this is what makes walking
+    /// past it cost nothing: its "Not now" never shows the system sheet, so the
+    /// permission is still undetermined and the question can be put again here
+    /// — this time about something that has just happened rather than about a
+    /// thing that never has.
+    func askForNoticesIfNeeded() async {
+        guard agentConnected, edits.ever.anything else { return }
+        await askForNotices()
     }
 
     /// The first day Health has anything about, for the screen that offers a

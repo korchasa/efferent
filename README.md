@@ -320,7 +320,9 @@ day it was on is marked, and it goes to the archive again, so the archive stops 
 record the agent removed offers no undo, because the old value was never kept — the agent hands over
 an id and the record is gone before anything can read it. The phone can also say a run has landed
 while the app is closed, in a notification that counts records and names neither a metric nor a
-value; it asks for permission only after an agent has actually changed something.
+value. The walkthrough offers that permission and takes "not now" for an answer without asking the
+system anything, so a phone that walked past it is asked once more — the first time an agent actually
+writes something.
 
 ```bash
 deno task efferent write --file items.json   # seal, sign and hand the phone an edit
