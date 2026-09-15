@@ -72,6 +72,20 @@ public struct HealthReader {
             && error.code == HKError.Code.errorDatabaseInaccessible.rawValue
     }
 
+    /// Whether an error is Health saying nobody has answered yet.
+    ///
+    /// The walkthrough lets a person walk past the Health question, and the
+    /// screen that follows asks Health how far back it goes. Health refuses,
+    /// because it has not been asked — which is the state the person just
+    /// chose, not a fault. Reported as a failure it becomes a red paragraph
+    /// carrying an Objective-C error domain and a code, under a screen that
+    /// already says in plain words that Health has nothing to read yet.
+    public static func hasNotBeenAsked(_ error: Error) -> Bool {
+        let error = error as NSError
+        return error.domain == HKError.errorDomain
+            && error.code == HKError.Code.errorAuthorizationNotDetermined.rawValue
+    }
+
     /// Every type the app asks to read.
     public static var readTypes: Set<HKObjectType> {
         var types = Set<HKObjectType>()

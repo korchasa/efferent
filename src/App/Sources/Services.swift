@@ -720,13 +720,20 @@ final class Services: ObservableObject {
 
     /// The first day Health has anything about, for the screen that offers a
     /// starting point. Nil when Health has nothing, or when it will not say.
+    ///
+    /// Being refused because nobody has answered Health yet is not a failure
+    /// and is not reported as one: walking past the Health step is a choice the
+    /// walkthrough offers, and this screen already says in plain words that
+    /// Health has nothing to read yet.
     func firstDayInHealth() async -> String? {
         do {
             let day = try await health.firstDay()
             lastError = nil
             return day
         } catch {
-            lastError = "Could not work out how far back Health goes. (\(error))"
+            lastError = HealthReader.hasNotBeenAsked(error)
+                ? nil
+                : "Could not work out how far back Health goes. (\(error))"
             return nil
         }
     }
