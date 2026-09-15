@@ -154,13 +154,26 @@ enum Database {
     /// `completeUntilFirstUserAuthentication`. Without it a write from a
     /// background HealthKit delivery would fail whenever the phone happens to be
     /// locked — which is most of the time this app runs.
+    ///
+    /// It is also kept out of the device backup, because `editLog` holds the
+    /// metric, the value and the instants of everything an agent wrote — health
+    /// data, in plain columns, which App Store rule 5.1.3 says may not be put in
+    /// iCloud. A backup is exactly that. What that costs is a phone restored
+    /// from a backup: it comes back with its keys, because those live in the
+    /// Keychain, and with no ledger, so the archive check finds the days
+    /// missing and sends them again, and the journal of what an agent changed
+    /// starts empty. Both are recoverable; health data in somebody's iCloud is
+    /// not.
     static func open(at url: URL) throws -> DatabaseQueue {
-        let directory = url.deletingLastPathComponent()
+        var directory = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try FileManager.default.setAttributes(
             [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
             ofItemAtPath: directory.path
         )
+        var backup = URLResourceValues()
+        backup.isExcludedFromBackup = true
+        try directory.setResourceValues(backup)
 
         let queue = try DatabaseQueue(path: url.path)
         try migrator().migrate(queue)

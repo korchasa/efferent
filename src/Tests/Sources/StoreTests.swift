@@ -424,4 +424,19 @@ final class StoreTests: XCTestCase {
             "a day sent before sizes were written down was suspected anyway"
         )
     }
+
+    /// `editLog` keeps the metric, the value and the instants of everything an
+    /// agent wrote, so the directory holding it must not travel to iCloud in a
+    /// device backup — rule 5.1.3. Nothing on a phone shows whether that flag
+    /// is set, so the test is the only place it is ever checked.
+    func testTheStoreDirectoryIsKeptOutOfTheBackup() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("efferent-backup-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        _ = try Store(url: directory.appendingPathComponent("days.sqlite"))
+
+        let values = try directory.resourceValues(forKeys: [.isExcludedFromBackupKey])
+        XCTAssertEqual(values.isExcludedFromBackup, true, "health data would go into the device backup")
+    }
 }
