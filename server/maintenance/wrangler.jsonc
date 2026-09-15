@@ -1,0 +1,35 @@
+{
+  // The maintenance Worker. **It is never deployed.**
+  //
+  // It exists so that the two jobs nobody can do from the outside — answering a
+  // deletion request, and looking at what the archive store actually holds —
+  // have one written-down tool instead of a scratch file rebuilt from memory
+  // each time. Wrangler has no way to list or delete R2 objects, and the
+  // service itself deliberately has no delete route: a public endpoint that
+  // removes somebody's archive is a liability, and the promise in the privacy
+  // policy is answered by a person reading an issue, not by a stranger's HTTP
+  // request.
+  //
+  // So it runs locally against the real bucket and nowhere else:
+  //
+  //   npx wrangler dev --remote --config server/maintenance/wrangler.jsonc --port 8799
+  //
+  // `--remote` is what binds it to the live bucket; without it the binding is a
+  // local simulation and every answer is about nothing. Authentication is the
+  // wrangler login of whoever runs it, which is why there is no key in here and
+  // no route below: the only way to reach it is to be the person who started
+  // it, on their own machine.
+  //
+  // `workers_dev` and the absent `routes` are both deliberate. A deploy of this
+  // file would put an unauthenticated delete endpoint on the public internet.
+  "name": "efferent-maintenance",
+  "main": "index.ts",
+  "compatibility_date": "2026-08-28",
+  "workers_dev": false,
+  "r2_buckets": [
+    {
+      "binding": "BLOBS",
+      "bucket_name": "efferent"
+    }
+  ]
+}
