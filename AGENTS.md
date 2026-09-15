@@ -646,6 +646,13 @@ broken, which is exactly what happened once the columnar format let a launch cle
 
 ## Other traps
 
+- **`deno task check` scans the working directory, so another session's build artifacts can fail
+  it.** The secret scan is a filesystem walk, not a git one, and `.gitignore` does not exempt
+  anything from it. A `wrangler dev` running out of `server/maintenance/` leaves a bundled worker
+  under `.wrangler/tmp/` with the secrets it was given baked in, and the scan reports a leak in a
+  file that can never be committed. Find the process before deleting anything — the bundle belongs
+  to a live server, and removing it breaks whoever is running it. `deno task test` covers everything
+  the app itself needs and does not scan.
 - Keychain accessibility is `afterFirstUnlock`. Under `whenUnlocked` every background upload fails
   silently, because the phone is locked when they run.
 - Background uploads must be file-based. The in-memory `uploadTask(with:from:)` is rejected by
