@@ -78,12 +78,11 @@ export type EditItem = PutItem | DeleteItem;
 
 /** The words the phone may answer with. A word outside this set is `malformed`.
  *
- * Two of them are not final. `awaitingApproval` says the phone is holding the
- * item until its owner has looked at it — anything that would change or remove
- * a record already in Health waits for that — and `declined` says they said no.
- * An outcome carrying `awaitingApproval` is therefore the one kind that is
- * later replaced: the phone answers again for the same edit once the question
- * has been settled. */
+ * Two of them are history. `awaitingApproval` and `declined` come from a phone
+ * that held a change back until its owner had looked at it. No phone does that
+ * any more — every item lands, and the owner takes back what they did not want
+ * — but outcomes carrying those words are already stored, and a reader has to
+ * go on understanding them. */
 export const OUTCOME_CODES = [
   "unknownMetric",
   "badUnit",
@@ -120,10 +119,10 @@ export type EditStatus = typeof EDIT_STATUSES[number];
 
 /** An outcome's refusals, split by what each one means.
  *
- * A refusal is not one thing. `awaitingApproval` says a person is being asked,
- * `declined` says they answered no, and every other code says the phone could
- * not do it. Counting them together is what let a question be reported as a
- * failure. */
+ * A refusal is not one thing. `awaitingApproval` said a person was being asked
+ * and `declined` said they answered no — both from a phone that asked — while
+ * every other code says the phone could not do it. Counting them together is
+ * what let a question be reported as a failure. */
 export interface OutcomeTally {
   applied: number;
   /** Every refusal, waiting and declined included. */

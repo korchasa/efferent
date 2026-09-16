@@ -21,7 +21,8 @@ final class EditWordsTests: XCTestCase {
         stage: String? = nil,
         day: String? = "2025-09-08",
         code: OutcomeCode? = nil,
-        undoneAt: Double? = nil
+        undoneAt: Double? = nil,
+        displaced: [DisplacedRecord] = []
     ) -> EditEntry {
         EditEntry(
             id: 1,
@@ -38,7 +39,21 @@ final class EditWordsTests: XCTestCase {
             day: day,
             code: code,
             at: Date(timeIntervalSince1970: 1_757_337_360),
-            undoneAt: undoneAt.map { Date(timeIntervalSince1970: $0) }
+            undoneAt: undoneAt.map { Date(timeIntervalSince1970: $0) },
+            displaced: displaced
+        )
+    }
+
+    /// A record of the same shape `made()` describes, as the thing an item
+    /// pushed out of Health.
+    private func pushedOut(value: Double = 410) -> DisplacedRecord {
+        DisplacedRecord(
+            metric: "dietaryEnergy",
+            start: Date(timeIntervalSince1970: 1_757_336_400),
+            end: Date(timeIntervalSince1970: 1_757_337_300),
+            value: value,
+            unit: "kcal",
+            day: "2025-09-08"
         )
     }
 
@@ -180,30 +195,31 @@ final class EditWordsTests: XCTestCase {
         }
     }
 
-    // MARK: - What is waiting
+    // MARK: - Rows an older build left behind
 
-    func testAWaitingChangeSaysWhatItWouldDoAndThatNothingHasHappened() {
+    /// Nothing waits for an answer now, so such a row is history: it says that
+    /// Health was never touched, that no answer was ever given, and it offers
+    /// nothing to press.
+    func testAnItemLeftWaitingSaysNothingEverHappenedToIt() {
         let waiting = made(state: .waiting, code: .awaitingApproval)
         XCTAssertEqual(EditWords.title(waiting), "Energy · 520 kcal")
         XCTAssertEqual(EditWords.detail(waiting, in: Self.utc), "13:16 · for 8 Sep 2025, 13:00 – 13:15")
-        XCTAssertTrue(EditWords.note(waiting, in: Self.utc).hasPrefix("Nothing has changed in Health yet"))
+        XCTAssertTrue(EditWords.note(waiting, in: Self.utc).hasPrefix("An older version of this app"))
         // Not the word "refused": nothing was turned away, and nothing written.
         XCTAssertTrue(
             EditWords.fields(waiting, in: Self.utc)
-                .contains { $0.name == "your answer" && $0.value == "not given yet" }
+                .contains { $0.name == "your answer" && $0.value == "never given" }
         )
         XCTAssertFalse(EditWords.fields(waiting, in: Self.utc).contains { $0.name == "refused" })
         XCTAssertFalse(waiting.canBeUndone, "its own page offers nothing to press")
     }
 
-    func testAWaitingRemovalSaysItIsOneRatherThanThatItHappened() {
+    func testARemovalLeftWaitingReadsInThePastTense() {
         let waiting = made(
             state: .waiting, metric: nil, start: nil, end: nil, value: nil, unit: nil,
             day: nil, code: .awaitingApproval
         )
-        XCTAssertEqual(EditWords.title(waiting), "A record your agent wants to remove")
-        // The day is the only thing that can be said about a removal, and the
-        // phone asked Health for it while the record was still there.
+        XCTAssertEqual(EditWords.title(waiting), "A record your agent wanted to remove")
         XCTAssertEqual(
             EditWords.detail(
                 made(
@@ -214,7 +230,7 @@ final class EditWordsTests: XCTestCase {
             ),
             "13:16 · a record from 8 Sep 2025"
         )
-        XCTAssertEqual(EditWords.detail(waiting, in: Self.utc), "13:16 · waiting for you")
+        XCTAssertEqual(EditWords.detail(waiting, in: Self.utc), "13:16 · never written")
     }
 
     func testOneTurnedDownSaysHealthWasNeverTouched() {
@@ -228,21 +244,56 @@ final class EditWordsTests: XCTestCase {
         XCTAssertFalse(no.canBeUndone)
     }
 
-    func testTheQuestionIsCountedAndExplainedAsOneDecision() {
+    func testARowThatWasNeverAnsweredIsCountedApartFromTheRest() {
         XCTAssertEqual(
-            EditWords.asking(1), "Your agent wants to change a record that is already in Health."
+            EditWords.counted(EditTally(applied: 2, waiting: 1)), "1 never answered, 2 applied"
         )
-        XCTAssertEqual(
-            EditWords.asking(3), "Your agent wants to change 3 records that are already in Health."
-        )
-        XCTAssertEqual(EditWords.counted(EditTally(applied: 2, waiting: 1)), "1 waiting, 2 applied")
-        XCTAssertTrue(EditWords.askingExplained.contains("all of them"))
     }
 
-    func testTheAlertSaysBothThingsRemovingItDoes() {
+    // MARK: - Taking one back
+
+    /// An addition pushed nothing out, so taking it back is a removal, and both
+    /// the key and the alert say so.
+    func testTakingBackAnAdditionIsARemovalAndSaysSo() {
+        let added = made()
+        XCTAssertFalse(EditWords.restores(added))
+        XCTAssertEqual(EditWords.undoWord(added), "Undo")
+        XCTAssertEqual(EditWords.undoAction(added), "Remove from Health")
+        XCTAssertEqual(EditWords.undoQuestion(added), "Remove this record?")
         XCTAssertEqual(
-            EditWords.consequence(made()),
+            EditWords.consequence(added),
             "The energy record leaves Health, and 8 Sep 2025 goes to the archive again."
+        )
+        XCTAssertTrue(EditWords.note(added, in: Self.utc).hasPrefix("Removing it takes the record"))
+    }
+
+    /// A change pushed a record out, so taking it back puts that record where
+    /// it was — which is a different thing, and must not be called removing.
+    func testTakingBackAChangePutsTheOldRecordBackAndSaysSo() {
+        let changed = made(displaced: [pushedOut()])
+        XCTAssertTrue(EditWords.restores(changed))
+        XCTAssertEqual(EditWords.undoWord(changed), "Put back")
+        XCTAssertEqual(EditWords.undoAction(changed), "Put back what was there")
+        XCTAssertEqual(EditWords.undoQuestion(changed), "Put the record back?")
+        XCTAssertEqual(
+            EditWords.consequence(changed),
+            "Health goes back to the energy record that was there before, and 8 Sep 2025 goes to "
+                + "the archive again."
+        )
+        XCTAssertTrue(EditWords.note(changed, in: Self.utc).hasPrefix("Putting it back writes"))
+    }
+
+    /// A removal that kept what it took out can be put back; one an older build
+    /// wrote down cannot, and the page says so instead of offering a key.
+    func testARemovalCanBePutBackOnlyIfSomethingWasKept() {
+        let kept = made(state: .deleted, displaced: [pushedOut()])
+        XCTAssertTrue(kept.canBeUndone)
+        XCTAssertTrue(EditWords.note(kept, in: Self.utc).hasPrefix("Putting it back writes the record"))
+
+        let nothingKept = made(state: .deleted)
+        XCTAssertFalse(nothingKept.canBeUndone)
+        XCTAssertTrue(
+            EditWords.note(nothingKept, in: Self.utc).hasPrefix("This was removed by a version")
         )
     }
 

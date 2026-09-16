@@ -70,10 +70,11 @@ that type was declined on the phone, notFound for a delete of an id never writte
 when Health itself said no. The days an edit touched are re-uploaded, so the written entries appear
 in the archive afterwards like anything logged by hand.
 
-A new entry lands by itself. Replacing or removing one that already stands in Health does not: that
-item comes back \`awaitingApproval\` and waits for the person holding the phone. Once they decide, the
-phone answers again for the same edit — \`applied\` if they said yes, \`declined\` if they said no — so
-read the edit again later instead of sending it a second time.
+Every item lands, replacements and removals included, and nothing waits for the person holding the
+phone. What makes that safe is the limit above: you can only ever reach entries this app wrote for
+you. The phone keeps what each change pushed out and shows its owner what you did, so anything they
+did not want is put back by them afterwards. An edit's outcome is told once and never revised.
+\`awaitingApproval\` and \`declined\` appear only on edits answered by an older phone.
 
 \`\`\`python
 ${PYTHON_HPKE_REFERENCE}\`\`\`

@@ -130,10 +130,11 @@ checkout, Deno, a local MCP server or a gateway restart.
   editor signature itself, open it with the reading private key, write the items into Health under
   `efferent:<id>` sync identifiers with phone-kept versions, report an outcome of counts and codes,
   and mark the touched days so they are re-uploaded whole.
-- Hold, rather than apply, any item that would change or remove a record standing in Health now, ask
-  the owner about the run as a whole, and keep the item on the phone until they answer. The agent is
-  told `awaitingApproval` at once so the queue keeps moving, and told again — `applied` or
-  `declined` — once they have decided.
+- Keep what each item pushed out of Health — the record a replacement took the place of, the record
+  a removal took away — read at the moment of the change, because nothing can read it afterwards.
+  That is what lets the owner put Health back: an addition is removed again, a replacement and a
+  removal write the kept record back under the same id. Nothing is held for an answer first; an
+  agent reaches only the records this app wrote for it.
 
 ### Cloudflare service and remote MCP server
 

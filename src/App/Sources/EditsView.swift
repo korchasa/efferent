@@ -121,7 +121,7 @@ struct EditsView: View {
                         // accident; the button has to be pressed.
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             if entry.canBeUndone {
-                                Button("Undo") { undo(entry) }
+                                Button(EditWords.undoWord(entry)) { undo(entry) }
                                     .tint(Palette.alarm)
                             }
                         }
@@ -246,12 +246,12 @@ struct EditDetailView: View {
         .pageBackground()
         .navigationTitle("Edit")
         .navigationBarTitleDisplayMode(.inline)
-        .alert("Remove this record?", isPresented: $confirming) {
-            Button("Remove", role: .destructive) {
+        .alert(EditWords.undoQuestion(entry), isPresented: $confirming) {
+            Button(EditWords.undoConfirmation(entry), role: .destructive) {
                 remove()
                 dismiss()
             }
-            Button("Keep", role: .cancel) {}
+            Button("Leave it", role: .cancel) {}
         } message: {
             Text(EditWords.consequence(entry))
         }
@@ -291,14 +291,16 @@ struct EditDetailView: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    /// The one row that destroys something, or the sentence that says why there
-    /// is none. A deletion never gets a button: the value it removed was never
-    /// kept, so a button here could only fail.
+    /// The one row that changes Health, or the sentence that says why there is
+    /// none. What the key says depends on what the item pushed out: an addition
+    /// is taken away again, while a change and a removal put back the record
+    /// that was there. A removal an older build wrote down kept nothing, so it
+    /// gets the sentence instead of a key that could only fail.
     @ViewBuilder private var way: some View {
         if entry.canBeUndone {
             VStack(spacing: 0) {
                 RowDivider()
-                Button("Remove from Health") { confirming = true }
+                Button(EditWords.undoAction(entry)) { confirming = true }
                     .buttonStyle(DangerButton())
             }
             .padding(.horizontal, 20)
