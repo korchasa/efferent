@@ -254,29 +254,27 @@ This file is the rulebook.
 - **An outcome carries indexes and codes only.** The service and whoever lists the queue learn how
   many items landed and a word per refusal — never a metric, never a value, never a day. Anything
   more in the outcome would say what was in the edit, which the seal exists to keep.
-- **An agent may add, but it may not change or remove without being asked.** An item that would
-  overwrite or take away a record standing in Health *now* waits for the person; a `put` under an id
-  Health holds nothing for is an addition and lands at once. Health itself is asked, through
-  `HealthWriter.holds(id:metric:)` — the `written` ledger keeps its row after an undo, so it would
-  call a fresh `put` a change when Health holds nothing. The version is drawn only when the item is
-  actually written: `Store.nextVersion` climbs on every call, and one spent on an item nobody
-  approved is gone.
-- **A held item is answered at once and kept here.** It is answered `awaitingApproval`, because an
-  edit left unanswered in the queue is fetched again on every launch, forever, in front of
-  everything behind it. What makes that safe is the journal: `EditEntry` carries every field a `put`
-  has, so the item survives without the service holding anything. Nothing about the wait reaches the
-  wire beyond that one word.
-- **An outcome can be revised, and is owed until it lands.** The service accepts a second outcome
-  for the same edit — when `e/` is gone it recovers `bytes` and `at` from the earlier `o/` — so a
-  decision made offline is not lost: `editLog.owed` says the service has not been told what a row
-  now says, and the next run pays it before it reads the queue. A revision is rebuilt from *all* of
-  that edit's rows, never from the item that changed: an outcome replaces the one before it, and a
-  difference would tell the agent its other items had never happened.
-- **A decision already made is never reopened.** An edit handed over a second time must not ask a
-  question the person has answered — that would also overwrite their answer with one nobody gave —
-  so `Applier` reads the edit's own rows first: a declined item is answered `declined` again, and an
-  item this very edit already applied is written again without asking, because the record standing
-  under that id is the one it put there.
+- **Every item lands, and every item can be taken back.** Nothing waits for an answer. What makes
+  that safe is reach: an agent's records carry this app's own sync identifier, `HealthWriter` looks
+  for no others, and HealthKit will not let one app delete another's — so the worst a change can
+  spoil is the agent's own past work. Asking first was the older rule, and it bought a decision on
+  every correction an agent made to a record it had written itself.
+- **What a change pushes out is read before it lands, and kept.** `HealthWriter.apply` and
+  `.remove` answer with a `Written`: the days they changed, and the `DisplacedRecord`s they took
+  out of Health. That reading is the last one possible — after the save the old sample is gone and
+  no query finds it — and the journal is where it survives, as JSON in `editLog.displaced`. A row
+  with nothing there displaced nothing, which is what an addition does.
+- **Undo writes the displaced record back under the same id, with a fresh version.** Not a
+  removal: a replacement undone by removing would leave nothing where something stood, and a
+  deletion could not be undone at all. `Store.nextVersion` climbs and never goes back, because
+  HealthKit keeps the newest sync version it has seen — a restore written under a version it has
+  already passed is ignored in silence, which reads as an undo that did nothing. The `written`
+  ledger is therefore left alone on that path and forgotten only when the record is being taken
+  away for good.
+- **A decision an older build recorded is never reopened.** Nothing produces a `declined` or
+  `waiting` row any more, but a phone updated from a build that asked may hold one. `Applier` reads
+  the edit's own rows before writing: a declined item is answered `declined` again rather than
+  written after all, which would overwrite an answer nobody can give a second time.
 - **The pause holds edits as it holds days.** A paused phone neither sends nor applies; the queue
   waits and nothing is lost. Write access not yet asked for is the same shape: the applier answers
   `notAsked` and touches nothing until the sheet has been shown.
@@ -560,24 +558,17 @@ everything an agent changes is on the screen and can be taken back out.
   is applied again whenever a run dies between writing and answering, and an agent corrects its own
   record by reusing the id. Both must land on one row, and a re-applied item clears `undoneAt` with
   it — the record is back in Health, whatever the person did last time.
-- **Undo is a removal, and a removal is a day owed.** Taking a record out of Health changes the day
-  it was on, so undo marks that day and sends it, and the archive stops showing the record too.
-  Nothing else in this app takes anything out of Health, which is why the row that does it is the
-  only one drawn in the alarm colour and the only one behind a confirmation.
-- **A deletion cannot be undone, and the screen says so instead of offering a button that fails.**
-  The agent hands over an id and the record is gone before anything could read its value, so there
-  is nothing to write back. A refused item offers no undo either: nothing was written.
+- **Undo is a day owed, whichever shape it takes.** Putting Health back changes the day the record
+  was on, so undo marks that day and sends it, and the archive follows. It is the only place in this
+  app that changes Health at a person's own hand, which is why the row is drawn in the alarm colour
+  and stands behind a confirmation. What the key says depends on what was displaced: an addition is
+  removed, a change and a removal put back the record that was there.
+- **A removal an older build wrote down cannot be undone, and the screen says so instead of
+  offering a button that fails.** Those rows kept nothing of what they took out. A refused item
+  offers no undo either: nothing was written.
 - **The strip counts a run nobody has looked at; the list holds the rest.** `edits.seenAt` is the
   watermark, stamped when the list is opened. A run nobody has seen is news across the top of the
   everyday screen; the same run tomorrow is history, and history belongs in the list.
-- **A question is not news, so no watermark applies to it.** What is waiting is counted as
-  `ever.waiting` and asked across the top of the everyday screen until it is answered — looking at
-  it changes nothing, because only an answer does. It is left out of `EditTally.total` for the same
-  reason: it is not something the agent did.
-- **The answer covers the whole run, and there is no per-record answer.** One screen shows
-  everything waiting and carries two actions, allow them all or turn them all down; a record's own
-  page says it is waiting and offers no button. A per-record decision would turn one answer into a
-  chore nobody finishes, and an agent would wait forever on a question that was read and left.
 - **What leaves the phone counts records and names nothing.** The notification says how many records
   changed and never a metric, a value or a day — it is drawn on a lock screen, which is the one
   place this app's contents could be read by somebody who is not the owner. Permission is put twice

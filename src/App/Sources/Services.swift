@@ -168,6 +168,9 @@ final class Services: ObservableObject {
         let state: EditEntry.State
         var day: String?
         var code: OutcomeCode?
+        /// What it pushed out of Health, as the real thing carries it — which
+        /// is what decides whether its page offers to put a record back.
+        var displaced: [DisplacedRecord] = []
         let at: Date
     }
 
@@ -185,7 +188,7 @@ final class Services: ObservableObject {
                     // An undone row is an applied one somebody took back, so it
                     // is written the way the app writes it and then undone.
                     state: edit.state == .undone ? .applied : edit.state,
-                    day: edit.day, code: edit.code, at: edit.at
+                    day: edit.day, code: edit.code, displaced: edit.displaced, at: edit.at
                 )
             }
             let written = try store.recentEdits()

@@ -290,14 +290,17 @@ replaces the edit with its outcome, and the days the items touched are marked an
 so the entry shows up in the archive afterwards like anything logged by hand. An edit whose outcome
 the service did not accept stays in the queue and is applied again; that is what the version is for.
 
-An agent may add, but it may not change or remove without being asked. An item that would overwrite
-or take away a record standing in Health now is held rather than applied, and answered
-`awaitingApproval` at once — a held edit must not stall the queue, and an edit left unanswered would
-be fetched again forever. The item itself is kept on the phone, whole, so the person can decide next
-week as easily as this minute. When they answer, the phone sends a second outcome for the same edit:
-`applied` if they said yes, `declined` if they said no. An addition — a `put` under an id Health
-holds nothing for — lands at once as it always did, and a `delete` of something that is not there is
-`notFound` and bothers nobody.
+Every item lands, and every item can be taken back. An agent reaches only the records this app
+itself wrote: they carry its own sync identifier, and HealthKit will not let one app delete
+another's, so nothing an agent sends can touch the watch's sleep or another app's readings. What a
+change pushes out of Health is read in the same breath — the last moment anything can read it — and
+kept on the phone, which is what lets the owner put it back: an addition is removed again, while a
+change and a removal write the displaced record back where it was. A `delete` of something that is
+not there is `notFound` and bothers nobody.
+
+Two words in the outcome vocabulary are history. `awaitingApproval` and `declined` come from a phone
+that held a change back until its owner had answered; nothing does that now, and they survive only
+so that outcomes already stored go on reading correctly.
 
 The phone applies edits when it is opened or wakes to send, which is minutes to hours and never at
 once. Write access is asked for the first time the app is opened after the update; until it has

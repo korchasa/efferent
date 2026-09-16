@@ -164,9 +164,20 @@ enum Snapshot {
                 )),
                 state: .refused, code: .unauthorized, at: at(before, 21.7)
             ),
+            // A removal that kept what it took away, which is what every
+            // removal does now: its page offers to put the record back.
             .init(
                 item: .delete(id: "agent:meal:0"),
-                state: .deleted, day: yesterday, at: at(before, 9.1)
+                state: .deleted, day: yesterday,
+                displaced: [DisplacedRecord(
+                    metric: "dietaryEnergy",
+                    start: at(before, 8.5),
+                    end: at(before, 8.75),
+                    value: 340,
+                    unit: "kcal",
+                    day: yesterday
+                )],
+                at: at(before, 9.1)
             ),
         ]
     }

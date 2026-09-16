@@ -20,11 +20,11 @@ enum EditWords {
     /// was turned away, legend for what is no longer there.
     static func colour(_ state: EditEntry.State) -> Color {
         switch state {
-        // Waiting is drawn in the accent as well, because it is the one thing
-        // on these screens that is asking for something.
-        case .applied, .waiting: Palette.accent
+        case .applied: Palette.accent
         case .refused: Palette.alarm
-        case .deleted, .undone, .declined: Palette.legend
+        // Waiting is among them now: an older version of the app held items
+        // back for an answer, and those rows are history like the rest.
+        case .deleted, .undone, .declined, .waiting: Palette.legend
         }
     }
 
@@ -50,9 +50,8 @@ enum EditWords {
     /// 1 refused".
     static func counted(_ tally: EditTally) -> String {
         var parts: [String] = []
-        // First, because it is the only one of them that wants an answer.
         if tally.waiting > 0 {
-            parts.append("\(tally.waiting) waiting")
+            parts.append("\(tally.waiting) never answered")
         }
         if tally.applied > 0 {
             parts.append("\(tally.applied) applied")
@@ -73,25 +72,6 @@ enum EditWords {
     }
 
     // MARK: - The question
-
-    /// The ask across the top of the everyday screen, and the sentence at the
-    /// head of the screen that answers it.
-    ///
-    /// It says what the agent wants rather than what it did, because nothing
-    /// has happened yet: a record that is already in Health is not the agent's
-    /// to change on its own.
-    static func asking(_ count: Int) -> String {
-        count == 1
-            ? "Your agent wants to change a record that is already in Health."
-            : "Your agent wants to change \(count) records that are already in Health."
-    }
-
-    /// Why the decision is one decision. Said where the two actions are, so
-    /// nobody presses either one looking for a per-record answer.
-    static let askingExplained =
-        "Adding something new lands by itself. Changing or removing what is already in Health "
-            + "waits for you, and you answer for the lot in one go: either all of them go in, or "
-            + "none of them does and your agent is told so."
 
     static func records(_ count: Int) -> String {
         count == 1 ? "1 record" : "\(count) records"
@@ -114,7 +94,7 @@ enum EditWords {
                 return "An edit this phone could not read"
             }
             switch entry.state {
-            case .waiting: return "A record your agent wants to remove"
+            case .waiting: return "A record your agent wanted to remove"
             case .declined: return "A removal you turned down"
             default: return "A record your agent removed"
             }
@@ -149,7 +129,7 @@ enum EditWords {
             }
             // A removal names no instant, so its day is all there is to say
             // about what it would take away.
-            guard let day = entry.day else { return "\(arrived) · waiting for you" }
+            guard let day = entry.day else { return "\(arrived) · never written" }
             return "\(arrived) · a record from \(spoken(day: day))"
         case .applied:
             guard let span = span(entry, in: calendar) else { return arrived }
@@ -197,7 +177,7 @@ enum EditWords {
             switch entry.state {
             // The same column, and not the word "refused": nothing has been
             // turned away here, and nothing has been written either.
-            case .waiting: fields.append(Field(name: "your answer", value: "not given yet"))
+            case .waiting: fields.append(Field(name: "your answer", value: "never given"))
             case .declined: fields.append(Field(name: "your answer", value: "no"))
             default: fields.append(Field(name: "refused", value: reason(code)))
             }
@@ -217,12 +197,15 @@ enum EditWords {
         return fields
     }
 
-    /// The sentence under the fields: what removing it would do, or why there
-    /// is nothing to remove.
+    /// The sentence under the fields: what taking it back would do, or why
+    /// there is nothing to take back.
     static func note(_ entry: EditEntry, in calendar: Calendar) -> String {
+        let day = entry.day.map(spoken(day:)) ?? "the day it is on"
         switch entry.state {
+        case .applied where restores(entry):
+            return "Putting it back writes the record that was there before into Health again, "
+                + "and sends \(day) to the archive, so the archive stops showing this one."
         case .applied where entry.canBeUndone:
-            let day = entry.day.map(spoken(day:)) ?? "the day it is on"
             return "Removing it takes the record out of Health and sends \(day) to the archive "
                 + "again, so the archive stops showing it too."
         case .applied:
@@ -230,28 +213,65 @@ enum EditWords {
         case .refused:
             return "Nothing was written, so there is nothing to take back. Your agent can send it "
                 + "again once the reason is gone."
+        case .deleted where restores(entry):
+            return "Putting it back writes the record into Health again and sends \(day) to the "
+                + "archive, so the archive shows it once more."
         case .deleted:
-            return "The old value was never kept, so nothing can be written back. Ask your agent "
-                + "to write the record again if it should be there."
+            return "This was removed by a version of the app that kept nothing of what it took "
+                + "out, so there is nothing to write back. Ask your agent to write the record "
+                + "again if it should be there."
         case .undone:
             let moment = entry.undoneAt.map { stamp($0, in: calendar) } ?? "earlier"
-            return "You took this record out of Health on \(moment). Your agent can write it "
+            return "You put Health back the way it was on \(moment). Your agent can write it "
                 + "again."
         case .waiting:
-            return "Nothing has changed in Health yet. This would alter or remove a record that "
-                + "is there now, so it waits for you — and the answer covers everything waiting "
-                + "at once, on the screen before this one."
+            return "An older version of this app held changes back for your answer, and this one "
+                + "was never answered. Health was never touched. Your agent can send it again, "
+                + "and it will go straight in."
         case .declined:
             return "You turned this down, so Health was never touched. Your agent has been told, "
                 + "and it can ask again."
         }
     }
 
+    // MARK: - Taking one back
+
+    /// Whether taking this one back puts a record there rather than removing
+    /// one. An addition displaced nothing, so undoing it is a removal; a change
+    /// and a removal both have a record waiting in the journal.
+    static func restores(_ entry: EditEntry) -> Bool {
+        !entry.displaced.isEmpty
+    }
+
+    /// The row in the list, where there is room for two words.
+    static func undoWord(_ entry: EditEntry) -> String {
+        restores(entry) ? "Put back" : "Undo"
+    }
+
+    /// The key at the foot of a record's own page.
+    static func undoAction(_ entry: EditEntry) -> String {
+        restores(entry) ? "Put back what was there" : "Remove from Health"
+    }
+
+    /// What the alert asks, and the word on the key that answers it.
+    static func undoQuestion(_ entry: EditEntry) -> String {
+        restores(entry) ? "Put the record back?" : "Remove this record?"
+    }
+
+    static func undoConfirmation(_ entry: EditEntry) -> String {
+        restores(entry) ? "Put back" : "Remove"
+    }
+
     /// What the alert says will happen, in the same words as the note.
     static func consequence(_ entry: EditEntry) -> String {
         let what = entry.metric.flatMap { WritableMetric.named($0)?.spoken.lowercased() } ?? "record"
         let day = entry.day.map(spoken(day:)) ?? "the day it is on"
-        return "The \(what) record leaves Health, and \(day) goes to the archive again."
+        guard restores(entry) else {
+            return "The \(what) record leaves Health, and \(day) goes to the archive again."
+        }
+        let before = entry.displaced.first.flatMap { WritableMetric.named($0.metric)?.spoken.lowercased() }
+        return "Health goes back to the \(before ?? what) record that was there before, and "
+            + "\(day) goes to the archive again."
     }
 
     // MARK: - Words for the codes
