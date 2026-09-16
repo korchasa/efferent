@@ -99,10 +99,9 @@ enum Snapshot {
     }
 
     /// A day and a half of an agent's work, with one of each thing that can
-    /// become of an item: written, taken back out, refused, a record the agent
-    /// removed, and two it is waiting to be allowed to change. The instants are
-    /// relative, so the list groups them under "today" and "yesterday" whenever
-    /// the screenshots happen to be taken.
+    /// become of an item: written, taken back out, refused, and a record the
+    /// agent removed. The instants are relative, so the list groups them under
+    /// "today" and "yesterday" whenever the screenshots happen to be taken.
     private static func run() -> [Services.DemoEdit] {
         let calendar = Day.calendar()
         let morning = calendar.startOfDay(for: Date())
@@ -134,11 +133,35 @@ enum Snapshot {
             ),
             .init(
                 item: .put(.init(
+                    id: "agent:meal:4", metric: "dietaryFat",
+                    start: seconds(at(morning, 13)), end: seconds(at(morning, 13.25)),
+                    value: 18, unit: "g", stage: nil
+                )),
+                state: .applied, day: today, at: at(morning, 13.4)
+            ),
+            .init(
+                item: .put(.init(
+                    id: "agent:water:3", metric: "dietaryWater",
+                    start: seconds(at(morning, 16)), end: seconds(at(morning, 16)),
+                    value: 300, unit: "mL", stage: nil
+                )),
+                state: .applied, day: today, at: at(morning, 16.1)
+            ),
+            .init(
+                item: .put(.init(
                     id: "agent:sleep:1", metric: "sleep",
                     start: seconds(at(before, 23.5)), end: seconds(at(morning, 6.6)),
                     value: nil, unit: nil, stage: "asleepCore"
                 )),
                 state: .applied, day: yesterday, at: at(morning, 8.2)
+            ),
+            .init(
+                item: .put(.init(
+                    id: "agent:water:2", metric: "dietaryWater",
+                    start: seconds(at(morning, 11.5)), end: seconds(at(morning, 11.5)),
+                    value: 500, unit: "mL", stage: nil
+                )),
+                state: .applied, day: today, at: at(morning, 11.6)
             ),
             .init(
                 item: .put(.init(
