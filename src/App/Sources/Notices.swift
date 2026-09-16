@@ -33,12 +33,12 @@ enum Notices {
     }
 
     /// Say what a run did, if there is anybody to say it to.
-    static func tell(applied: Int, refused: Int, waiting: Int = 0) async {
-        guard applied + refused + waiting > 0 else { return }
+    static func tell(applied: Int, refused: Int) async {
+        guard applied + refused > 0 else { return }
         guard await status() == .authorized else { return }
         let content = UNMutableNotificationContent()
         content.title = "Efferent"
-        content.body = sentence(applied: applied, refused: refused, waiting: waiting)
+        content.body = sentence(applied: applied, refused: refused)
         content.sound = .default
         do {
             try await UNUserNotificationCenter.current().add(
@@ -53,15 +53,11 @@ enum Notices {
     /// what an agent wrote is nobody's business but the owner's. A count is the
     /// most it ever says.
     ///
-    /// Anything waiting is said first and on its own, because it is the only
-    /// notice this app puts up that asks for something. What else the same run
-    /// did is on the screen, and a notice that tried to say both would bury the
-    /// part a person has to act on.
-    static func sentence(applied: Int, refused: Int, waiting: Int = 0) -> String {
-        if waiting > 0 {
-            return "Your agent wants to change \(records(waiting)) already in Health. "
-                + "Open Efferent to allow it or turn it down."
-        }
+    /// It tells rather than asks. Nothing an agent sends waits for an answer
+    /// any more, so the one thing this notice is for is letting somebody who is
+    /// not looking at the phone know that their Health changed — and, if they
+    /// did not want it, open the app and take it back.
+    static func sentence(applied: Int, refused: Int) -> String {
         if refused == 0 {
             return "Your agent changed \(records(applied)) in Health."
         }

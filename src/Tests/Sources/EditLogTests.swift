@@ -243,32 +243,33 @@ final class EditLogTests: XCTestCase {
         XCTAssertEqual(entry.recordID, "")
     }
 
-    // MARK: - What is waiting
+    // MARK: - Rows an older build left behind
 
-    func testAHeldItemKeepsEveryFieldAndRebuildsIntoTheItemItCameFrom() throws {
+    /// Nothing waits for an answer any more, but a phone updated from a build
+    /// that asked may still hold a row that does. It has to keep reading as
+    /// what it was, and it must not look like something that can be taken back.
+    func testAHeldItemStillReadsAsOneAndRebuildsIntoTheItemItCameFrom() throws {
         let store = try Store.inMemory()
         try store.recordEdit(
             lunch(), at: 0, in: "1757336400000-abcdefgh", state: .waiting, day: "2025-09-08",
             code: .awaitingApproval, at: Self.noon
         )
 
-        let entry = try XCTUnwrap(store.waitingEdits().first)
+        let entry = try XCTUnwrap(store.recentEdits().first)
         XCTAssertEqual(entry.state, .waiting)
         XCTAssertEqual(entry.code, .awaitingApproval)
-        XCTAssertFalse(entry.canBeUndone, "nothing has been written")
-        // This is what lets the person decide next week: the edit is long gone
-        // from the service's queue, and the journal is all there is.
+        XCTAssertFalse(entry.canBeUndone, "nothing was ever written")
         XCTAssertEqual(entry.asItem, lunch())
     }
 
-    func testARemovalWaitingRebuildsAsARemoval() throws {
+    func testARemovalThatWasWaitingRebuildsAsARemoval() throws {
         let store = try Store.inMemory()
         try store.recordEdit(
             .delete(id: "agent:meal:1"), at: 0, in: "a", state: .waiting, day: nil,
             code: .awaitingApproval, at: Self.noon
         )
 
-        let entry = try XCTUnwrap(store.waitingEdits().first)
+        let entry = try XCTUnwrap(store.recentEdits().first)
         XCTAssertEqual(entry.asItem, .delete(id: "agent:meal:1"))
     }
 
@@ -296,25 +297,65 @@ final class EditLogTests: XCTestCase {
         XCTAssertTrue(summary.ever.anything)
     }
 
-    func testADecisionIsOwedUntilTheServiceHasBeenTold() throws {
-        let store = try Store.inMemory()
-        try store.recordEdit(
-            lunch(), at: 0, in: "a", state: .waiting, day: "2025-09-08",
-            code: .awaitingApproval, at: Self.noon
-        )
-        XCTAssertEqual(try store.owedEdits(), [], "the outcome that said 'waiting' landed")
+    // MARK: - What an item pushed out
 
-        try store.declineWaiting()
+    /// The whole of what undo puts back, and the reason a change may land
+    /// without anybody being asked first.
+    func testWhatAnItemPushedOutComesBackWithTheRow() throws {
+        let store = try Store.inMemory()
+        let meal = DisplacedRecord(
+            metric: "dietaryEnergy",
+            start: Self.noon,
+            end: Self.noon.addingTimeInterval(900),
+            value: 520,
+            unit: "kcal",
+            day: "2025-09-08"
+        )
+        try store.recordEdit(
+            lunch(), at: 0, in: "a", state: .applied, day: "2025-09-08",
+            displaced: [meal], at: Self.noon
+        )
 
         let entry = try XCTUnwrap(store.recentEdits().first)
-        XCTAssertEqual(entry.state, .declined)
-        XCTAssertEqual(entry.code, .declined)
-        XCTAssertEqual(entry.at, Self.noon, "a refusal is not news, so it keeps its place")
-        XCTAssertEqual(try store.owedEdits(), ["a"])
+        XCTAssertEqual(entry.displaced, [meal])
+        XCTAssertEqual(entry.displaced.first?.asPut(id: entry.recordID).value, 520)
+        XCTAssertTrue(entry.canBeUndone)
+    }
 
-        try store.markEditTold("a")
-        XCTAssertEqual(try store.owedEdits(), [])
-        XCTAssertTrue(try store.waitingEdits().isEmpty)
+    /// A deletion an older build wrote down kept nothing, so there is nothing
+    /// to put back, and the screen must not offer a button that empties a day.
+    func testADeletionWithNothingKeptCannotBeUndone() throws {
+        let store = try Store.inMemory()
+        try store.recordEdit(
+            .delete(id: "agent:meal:1"), at: 0, in: "a", state: .deleted, day: "2025-09-08",
+            at: Self.noon
+        )
+
+        let entry = try XCTUnwrap(store.recentEdits().first)
+        XCTAssertTrue(entry.displaced.isEmpty)
+        XCTAssertFalse(entry.canBeUndone)
+    }
+
+    /// A deletion that kept what it removed can be undone: writing that record
+    /// back under the same id is the whole of it.
+    func testADeletionThatKeptWhatItRemovedCanBeUndone() throws {
+        let store = try Store.inMemory()
+        try store.recordEdit(
+            .delete(id: "agent:meal:1"), at: 0, in: "a", state: .deleted, day: "2025-09-08",
+            displaced: [DisplacedRecord(
+                metric: "dietaryEnergy",
+                start: Self.noon,
+                end: Self.noon.addingTimeInterval(900),
+                value: 520,
+                unit: "kcal",
+                day: "2025-09-08"
+            )],
+            at: Self.noon
+        )
+
+        let entry = try XCTUnwrap(store.recentEdits().first)
+        XCTAssertTrue(entry.canBeUndone)
+        XCTAssertEqual(entry.displaced.first?.asPut(id: "agent:meal:1").metric, "dietaryEnergy")
     }
 
     func testAnEditComesBackWholeSoAnOutcomeCanBeRebuilt() throws {

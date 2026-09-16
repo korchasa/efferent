@@ -554,65 +554,13 @@ final class Services: ObservableObject {
             // one nobody is looking at. The screen learns the same fact from
             // the journal the next time it refreshes.
             await Notices.tell(
-                applied: applied.items - applied.refused - applied.waiting,
-                refused: applied.refused,
-                waiting: applied.waiting
+                applied: applied.items - applied.refused,
+                refused: applied.refused
             )
         } catch where HealthReader.isLocked(error) {
             log.debug("the phone is locked, so no edit could be applied; they wait")
         } catch {
             log.error("applying edits failed: \(String(describing: error))")
-        }
-    }
-
-    // MARK: - The person's answer to what is waiting
-
-    /// Yes to everything waiting.
-    ///
-    /// One gesture for the whole run, because that is the decision a person
-    /// actually makes: these items arrived together and they are about the same
-    /// few records. What goes into Health is owed to the archive, so the days it
-    /// touched are marked and sent straight away.
-    func approveWaiting() async {
-        guard let applier = applierIfPaired() else { return }
-        do {
-            let days = try await applier.approveWaiting()
-            if !days.isEmpty {
-                let marked = try store.markDirty(days)
-                log.info("approved edits changed \(days.count) days, \(marked) newly waiting")
-            }
-            lastError = nil
-        } catch where HealthReader.isLocked(error) {
-            lastError = "Unlock the phone and try again — Health is sealed while it is locked."
-        } catch {
-            log.error("approving edits failed: \(String(describing: error))")
-            lastError = "Those records could not be written into Health. (\(error))"
-        }
-        refreshStats()
-        await sendNow()
-    }
-
-    /// No to everything waiting. Health is never touched — nothing was written
-    /// — so there is no day to send; the agent is simply told.
-    func declineWaiting() async {
-        guard let applier = applierIfPaired() else { return }
-        do {
-            try await applier.declineWaiting()
-            lastError = nil
-        } catch {
-            log.error("declining edits failed: \(String(describing: error))")
-            lastError = "That decision could not be written down. (\(error))"
-        }
-        refreshStats()
-    }
-
-    /// What the agent is waiting on an answer about, oldest first.
-    func waitingEdits() -> [EditEntry] {
-        do {
-            return try store.waitingEdits()
-        } catch {
-            lastError = String(describing: error)
-            return []
         }
     }
 
@@ -639,12 +587,12 @@ final class Services: ObservableObject {
         }
     }
 
-    /// Take a record the agent wrote back out of Health.
+    /// Put Health back the way it was before this item.
     ///
-    /// The same operation the agent's own `delete` performs, for the same
-    /// reason it is possible at all: an app may remove what it wrote itself. A
-    /// record already gone is not a failure — the journal simply catches up
-    /// with Health, which is the one that decides.
+    /// Possible at all because an app may change and remove what it wrote
+    /// itself, which is also the limit on what an agent could do in the first
+    /// place. A record already gone is not a failure — the journal simply
+    /// catches up with Health, which is the one that decides.
     func undo(_ entry: EditEntry) async {
         await takeOut(entry)
         refreshStats()
@@ -658,8 +606,9 @@ final class Services: ObservableObject {
     ///
     /// The whole run at once, because that is what the strip on the everyday
     /// screen is about: a batch that has just arrived and is not wanted. A
-    /// refusal has nothing to take back and a deletion cannot be taken back, so
-    /// both are passed over rather than reported as failures.
+    /// refusal has nothing to take back, and neither has a deletion an older
+    /// build wrote down without keeping what it removed; both are passed over
+    /// rather than reported as failures.
     func undoRecentRun() async {
         let seen = (try? store.editsSeenAt()) ?? .distantPast
         for entry in recentEdits() where entry.canBeUndone && entry.at > seen {
@@ -672,8 +621,7 @@ final class Services: ObservableObject {
     private func takeOut(_ entry: EditEntry) async {
         guard entry.canBeUndone else { return }
         do {
-            let days = try await healthWriter.remove(id: entry.recordID)
-            try store.forgetWritten(entry.recordID)
+            let days = try await put(entry)
             try store.markEditUndone(entry.id)
             let marked = try store.markDirty(days)
             log.info(
@@ -693,6 +641,39 @@ final class Services: ObservableObject {
             log.error("undoing an edit failed: \(String(describing: error))")
             lastError = "That record could not be taken out of Health. (\(error))"
         }
+    }
+
+    /// Put Health back the way it was before this item, and answer the days
+    /// that changed.
+    ///
+    /// Two shapes, and which one it is depends on whether the item pushed
+    /// anything out. An addition is taken out again — there was nothing under
+    /// that id before it, so removing it is the whole of putting it back. A
+    /// replacement or a removal has a record waiting in the journal, and
+    /// writing that record under the same id is what restores it: a `put`
+    /// replaces what this app holds under an id, so the agent's version is
+    /// displaced by the one it displaced, in a single step.
+    ///
+    /// The version is drawn fresh and the `written` ledger is left alone on the
+    /// restoring path. HealthKit keeps the newest version it has seen for a
+    /// sync identifier, so a restore written under a version it has already
+    /// passed would be quietly ignored — which would read as an undo that did
+    /// nothing at all.
+    private func put(_ entry: EditEntry) async throws -> Set<String> {
+        guard !entry.displaced.isEmpty else {
+            let written = try await healthWriter.remove(id: entry.recordID)
+            try store.forgetWritten(entry.recordID)
+            return written.days
+        }
+        var days: Set<String> = []
+        for record in entry.displaced {
+            let version = try store.nextVersion(for: entry.recordID)
+            let written = try await healthWriter.apply(
+                record.asPut(id: entry.recordID), version: version
+            )
+            days.formUnion(written.days)
+        }
+        return days
     }
 
     /// Put the system's own permission sheet up, once.

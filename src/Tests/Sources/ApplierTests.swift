@@ -74,28 +74,39 @@ final class ApplierTests: XCTestCase {
             undecided
         }
 
-        func holds(id: String, metric: String?) async throws -> Set<String> {
-            guard let held = samples[id] else { return [] }
-            // A put asks about its own type only, as the real writer does: the
-            // same id under another metric is a record of its own.
-            guard metric == nil || held.put.metric == metric else { return [] }
-            return [Day.of(
-                Date(timeIntervalSince1970: TimeInterval(held.put.start)), in: ApplierTests.utc
-            )]
-        }
-
-        func apply(_ item: EditItem.Put, version: Int) async throws -> Set<String> {
+        func apply(_ item: EditItem.Put, version: Int) async throws -> Written {
             writes += 1
             if let code = refuse[item.id] {
                 throw WriteRefused.code(code)
             }
+            // What stood under that id, before the new sample takes its place.
+            let displaced = samples[item.id].map { [Self.record($0.put)] } ?? []
             samples[item.id] = (item, version)
-            return [Day.of(Date(timeIntervalSince1970: TimeInterval(item.start)), in: ApplierTests.utc)]
+            var days = Set(displaced.map(\.day))
+            days.insert(Self.day(item.start))
+            return Written(days: days, displaced: displaced)
         }
 
-        func remove(id: String) async throws -> Set<String> {
+        func remove(id: String) async throws -> Written {
             guard let held = samples.removeValue(forKey: id) else { throw WriteRefused.code(.notFound) }
-            return [Day.of(Date(timeIntervalSince1970: TimeInterval(held.put.start)), in: ApplierTests.utc)]
+            let gone = Self.record(held.put)
+            return Written(days: [gone.day], displaced: [gone])
+        }
+
+        static func record(_ put: EditItem.Put) -> DisplacedRecord {
+            DisplacedRecord(
+                metric: put.metric,
+                start: Date(timeIntervalSince1970: TimeInterval(put.start)),
+                end: Date(timeIntervalSince1970: TimeInterval(put.end)),
+                value: put.value,
+                unit: put.unit,
+                stage: put.stage,
+                day: day(put.start)
+            )
+        }
+
+        static func day(_ seconds: Int64) -> String {
+            Day.of(Date(timeIntervalSince1970: TimeInterval(seconds)), in: ApplierTests.utc)
         }
     }
 
@@ -187,7 +198,6 @@ final class ApplierTests: XCTestCase {
         XCTAssertEqual(outcome.edits, 2)
         XCTAssertEqual(outcome.items, 3)
         XCTAssertEqual(outcome.refused, 0)
-        XCTAssertEqual(outcome.waiting, 0, "three records Health had nothing under: all additions")
         XCTAssertEqual(outcome.days, ["2025-09-07", "2025-09-06"])
         XCTAssertNil(outcome.stoppedBy)
         XCTAssertEqual(world.service.fetched, [first, second], "listing order")
@@ -282,9 +292,10 @@ final class ApplierTests: XCTestCase {
 
     // MARK: - What an agent may not do on its own
 
-    /// Health holding the breakfast and the night, and a second edit that would
-    /// change one and remove the other. Returns the name of that second edit.
-    private func held(_ world: inout World) async throws -> String {
+    /// Health holding the breakfast and the night, and a second edit that
+    /// changes one and takes the other away. Returns the name of that second
+    /// edit.
+    private func changing(_ world: inout World) async throws -> String {
         try world.submit(Self.breakfast + "," + Self.sleep)
         _ = try applied(await world.applier().run())
         return try world.submit(
@@ -298,108 +309,77 @@ final class ApplierTests: XCTestCase {
         return refused.compactMap { $0["code"] as? String }
     }
 
-    func testAChangeAndARemovalWaitForThePersonAndTheQueueMovesOn() async throws {
+    /// Nothing waits for an answer. An agent reaches only what this app wrote,
+    /// and what a change pushes out is kept so it can be put back.
+    func testAChangeAndARemovalLandAtOnceAndKeepWhatTheyPushedOut() async throws {
         var world = try World()
-        let name = try await held(&world)
+        let name = try await changing(&world)
 
         let outcome = try applied(await world.applier().run())
 
-        XCTAssertEqual(outcome.waiting, 2)
-        XCTAssertEqual(outcome.refused, 0, "a question is not a refusal")
-        XCTAssertTrue(outcome.days.isEmpty, "nothing was written, so no day is owed")
-        XCTAssertTrue(world.service.queue.isEmpty, "answered at once: a held edit must not stall the queue")
-        XCTAssertEqual(world.writer.samples["agent:meal:1"]?.put.value, 520, "Health is as it was")
-        XCTAssertNotNil(world.writer.samples["agent:sleep:1"])
-        XCTAssertEqual(try codes(world, of: name), ["awaitingApproval", "awaitingApproval"])
-        XCTAssertEqual(world.service.outcomes[name]?["applied"] as? Int, 0)
-
-        let waiting = try world.store.waitingEdits()
-        XCTAssertEqual(waiting.count, 2)
-        XCTAssertEqual(waiting.first?.value, 610, "the item is kept whole, to be applied later")
-        XCTAssertEqual(waiting.first?.day, "2025-09-07")
-        XCTAssertFalse(waiting.contains { $0.canBeUndone }, "nothing to take back out yet")
-    }
-
-    func testTheVersionIsNotDrawnForAnItemThatWasOnlyHeld() async throws {
-        var world = try World()
-        _ = try await held(&world)
-        _ = try applied(await world.applier().run())
-
-        // Drawn once for the breakfast that landed, and not again for the change
-        // that is waiting: a version that climbed while nothing was written would
-        // be spent for good.
-        XCTAssertEqual(try world.store.nextVersion(for: "agent:meal:1"), 2)
-    }
-
-    func testApprovingWritesEverythingWaitingAndRevisesTheOutcome() async throws {
-        var world = try World()
-        let name = try await held(&world)
-        _ = try applied(await world.applier().run())
-
-        let days = try await world.applier().approveWaiting()
-
-        XCTAssertEqual(days, ["2025-09-07", "2025-09-06"], "both days are owed to the archive")
-        XCTAssertEqual(world.writer.samples["agent:meal:1"]?.put.value, 610)
-        XCTAssertNil(world.writer.samples["agent:sleep:1"], "the removal went through")
-        // The whole edit, not the difference: an outcome replaces the one before
-        // it, and an agent must not read its other items as never having landed.
+        XCTAssertEqual(outcome.items, 2)
+        XCTAssertEqual(outcome.refused, 0)
+        XCTAssertEqual(outcome.days, ["2025-09-07", "2025-09-06"])
+        XCTAssertTrue(world.service.queue.isEmpty)
         XCTAssertEqual(world.service.outcomes[name]?["applied"] as? Int, 2)
         XCTAssertEqual(try codes(world, of: name), [])
-        XCTAssertTrue(try world.store.waitingEdits().isEmpty)
-        XCTAssertTrue(try world.store.owedEdits().isEmpty, "the service has been told")
+        XCTAssertEqual(world.writer.samples["agent:meal:1"]?.put.value, 610, "the change went in")
+        XCTAssertNil(world.writer.samples["agent:sleep:1"], "the removal went through")
+
+        let rows = try world.store.edits(of: name)
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows.first?.displaced.first?.metric, "dietaryEnergy")
+        XCTAssertEqual(rows.first?.displaced.first?.value, 520, "the meal it replaced")
+        XCTAssertEqual(rows.first?.displaced.first?.day, "2025-09-07")
+        XCTAssertEqual(rows.last?.displaced.first?.stage, "asleepCore", "the night it took away")
+        XCTAssertTrue(rows.allSatisfy(\.canBeUndone), "both can be put back")
     }
 
-    func testDecliningNeverTouchesHealthAndSaysSo() async throws {
+    /// An addition pushed nothing out, so there is nothing to keep: undo takes
+    /// the record away again, which is the whole of putting Health back.
+    func testAnAdditionPushesNothingOutAndKeepsNothing() async throws {
         var world = try World()
-        let name = try await held(&world)
+        try world.submit(Self.breakfast)
         _ = try applied(await world.applier().run())
-        let writes = world.writer.writes
 
-        try await world.applier().declineWaiting()
-
-        XCTAssertEqual(world.writer.writes, writes, "Health was never asked")
-        XCTAssertEqual(world.writer.samples["agent:meal:1"]?.put.value, 520)
-        XCTAssertEqual(try codes(world, of: name), ["declined", "declined"])
-        XCTAssertEqual(world.service.outcomes[name]?["applied"] as? Int, 0)
-        XCTAssertEqual(try world.store.recentEdits().filter { $0.state == .declined }.count, 2)
-        XCTAssertTrue(try world.store.waitingEdits().isEmpty)
+        let row = try XCTUnwrap(world.store.recentEdits().first)
+        XCTAssertEqual(row.state, .applied)
+        XCTAssertTrue(row.displaced.isEmpty)
+        XCTAssertTrue(row.canBeUndone)
     }
 
-    func testADecisionMadeWithNoNetworkIsToldOnTheNextRun() async throws {
+    /// The version climbs on a change. HealthKit keeps the newest version it
+    /// has seen for a sync identifier, so one that did not climb would leave
+    /// the old sample standing and the write would vanish without a word.
+    func testAChangeDrawsAFreshVersion() async throws {
         var world = try World()
-        let name = try await held(&world)
+        _ = try await changing(&world)
         _ = try applied(await world.applier().run())
 
-        world.service.outcomeStatus = 500
-        try await world.applier().declineWaiting()
-        XCTAssertEqual(try world.store.owedEdits(), [name], "the answer is owed, not lost")
-        XCTAssertEqual(try codes(world, of: name), ["awaitingApproval", "awaitingApproval"])
-
-        world.service.outcomeStatus = 200
-        _ = try await world.applier().run()
-
-        XCTAssertEqual(try codes(world, of: name), ["declined", "declined"])
-        XCTAssertTrue(try world.store.owedEdits().isEmpty)
+        XCTAssertEqual(world.writer.samples["agent:meal:1"]?.version, 2)
+        XCTAssertEqual(try world.store.nextVersion(for: "agent:meal:1"), 3)
     }
 
-    func testAnEditFetchedAgainDoesNotReopenADecisionAlreadyMade() async throws {
+    /// A row an older build wrote when a change still waited for an answer and
+    /// the person said no. Nothing produces one any more, and a phone carrying
+    /// one must not write the item after all: that would overwrite an answer
+    /// nobody could give again.
+    func testAnItemDeclinedByAnOlderBuildIsStillDeclined() async throws {
         var world = try World()
-        let name = try await held(&world)
-        let again = try XCTUnwrap(world.service.queue.first { $0.name == name })
-        _ = try applied(await world.applier().run())
-        try await world.applier().declineWaiting()
+        let name = try world.submit(Self.breakfast)
+        try world.store.recordEdit(
+            .put(.init(
+                id: "agent:meal:1", metric: "dietaryEnergy", start: 1_757_228_400,
+                end: 1_757_229_300, value: 520, unit: "kcal", stage: nil
+            )),
+            at: 0, in: name, state: .declined, day: nil, code: .declined
+        )
 
-        // The same edit handed over a second time. A phone that asked again here
-        // would ask a question the person has answered, and overwrite their
-        // answer with a new one nobody gave.
-        world.service.queue.append(again)
         let outcome = try applied(await world.applier().run())
 
-        XCTAssertEqual(outcome.waiting, 0, "nobody was asked twice")
-        XCTAssertEqual(outcome.refused, 2)
-        XCTAssertEqual(world.writer.samples["agent:meal:1"]?.put.value, 520, "Health is still as it was")
-        XCTAssertEqual(try codes(world, of: name), ["declined", "declined"])
-        XCTAssertEqual(try world.store.recentEdits().filter { $0.state == .declined }.count, 2)
+        XCTAssertEqual(outcome.refused, 1)
+        XCTAssertNil(world.writer.samples["agent:meal:1"], "Health was never asked")
+        XCTAssertEqual(try codes(world, of: name), ["declined"])
     }
 
     // MARK: - Guards

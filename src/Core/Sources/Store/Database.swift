@@ -145,6 +145,32 @@ enum Database {
             }
         }
 
+        // What an item pushed out of Health, so undo can put it back rather
+        // than only take the agent's record out. Health hands a displaced
+        // record over at the moment of the change and never again.
+        //
+        // JSON rather than a parallel set of columns: an id is the agent's to
+        // choose, nothing stops it naming records under two metrics, and a
+        // removal searches every writable metric for it. Null on every row
+        // written before this, which is why undo of a deletion asks whether
+        // there is anything to put back instead of assuming there is.
+        migrator.registerMigration("v6.editLog.displaced") { db in
+            try db.alter(table: "editLog") { table in
+                table.add(column: "displaced", .text)
+            }
+        }
+
+        // `owed` went with the question it existed for. It marked a row whose
+        // decision the service had not heard yet, and the only thing that made
+        // a decision was the screen that asked whether an agent's change could
+        // go into Health. Nothing asks now, so nothing is ever owed: an edit's
+        // outcome is told once, when it is applied, and never revised.
+        migrator.registerMigration("v7.editLog.owed.goes") { db in
+            try db.alter(table: "editLog") { table in
+                table.drop(column: "owed")
+            }
+        }
+
         return migrator
     }
 
