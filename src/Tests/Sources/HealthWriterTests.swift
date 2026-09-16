@@ -110,9 +110,10 @@ final class HealthWriterTests: XCTestCase {
 
     func testAQuantityIsSavedWithItsSyncIdentifierAndVersion() async throws {
         let store = FakeStore()
-        let days = try await writer(store).apply(meal(), version: 3)
+        let written = try await writer(store).apply(meal(), version: 3)
 
-        XCTAssertEqual(days, ["2025-09-07"])
+        XCTAssertEqual(written.days, ["2025-09-07"])
+        XCTAssertTrue(written.displaced.isEmpty, "nothing stood under that id")
         let sample = try XCTUnwrap(store.saved.first as? HKQuantitySample)
         XCTAssertEqual(sample.quantityType, HKQuantityType(.dietaryEnergyConsumed))
         XCTAssertEqual(sample.quantity.doubleValue(for: .kilocalorie()), 520)
@@ -124,12 +125,12 @@ final class HealthWriterTests: XCTestCase {
 
     func testASleepStageIsSavedAsACategorySample() async throws {
         let store = FakeStore()
-        let days = try await writer(store).apply(
+        let written = try await writer(store).apply(
             meal(id: "agent:sleep:1", metric: "sleep", start: 1_757_196_000, end: 1_757_221_200,
                  value: nil, unit: nil, stage: "asleepCore"),
             version: 1
         )
-        XCTAssertEqual(days, ["2025-09-06"])
+        XCTAssertEqual(written.days, ["2025-09-06"])
         let sample = try XCTUnwrap(store.saved.first as? HKCategorySample)
         XCTAssertEqual(sample.categoryType, HKCategoryType(.sleepAnalysis))
         XCTAssertEqual(sample.value, HKCategoryValueSleepAnalysis.asleepCore.rawValue)
@@ -139,10 +140,10 @@ final class HealthWriterTests: XCTestCase {
         let store = FakeStore()
         let writer = writer(store)
         _ = try await writer.apply(meal(), version: 1)
-        let days = try await writer.apply(
+        let written = try await writer.apply(
             meal(start: 1_757_228_400 - 86400, end: 1_757_229_300 - 86400), version: 2
         )
-        XCTAssertEqual(days, ["2025-09-06", "2025-09-07"])
+        XCTAssertEqual(written.days, ["2025-09-06", "2025-09-07"])
         XCTAssertEqual(store.saved.count, 1, "the fake replaced it, as HealthKit does")
         XCTAssertEqual(store.saved.first?.metadata?[HKMetadataKeySyncVersion] as? Int, 2)
     }
@@ -225,8 +226,8 @@ final class HealthWriterTests: XCTestCase {
         _ = try await writer.apply(meal(), version: 1)
         _ = try await writer.apply(meal(id: "agent:meal:2", start: 1_757_100_000, end: 1_757_100_100), version: 1)
 
-        let days = try await writer.remove(id: "agent:meal:1")
-        XCTAssertEqual(days, ["2025-09-07"])
+        let written = try await writer.remove(id: "agent:meal:1")
+        XCTAssertEqual(written.days, ["2025-09-07"])
         XCTAssertEqual(store.saved.count, 1)
         XCTAssertEqual(store.deleted.count, 1)
 

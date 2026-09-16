@@ -26,7 +26,6 @@ struct HomeView: View {
     @State private var reachSelection: RangeSelection = .everything
     @State private var readingLog = false
     @State private var readingEdits = false
-    @State private var reviewing = false
     /// Taps on the name so far. The log is not a feature of this app, so it has
     /// no key of its own: five taps on the name open it, and putting the app
     /// down forgets them.
@@ -90,7 +89,6 @@ struct HomeView: View {
         }
         .sheet(isPresented: $readingLog) { LogView() }
         .sheet(isPresented: $readingEdits) { EditsView() }
-        .sheet(isPresented: $reviewing) { EditReviewView() }
         .sheet(isPresented: $connecting) { connectSheet }
         .sheet(isPresented: $reachingBack) { reachBackSheet }
         .sheet(isPresented: $explainingAccess) { accessSheet }
@@ -178,12 +176,7 @@ struct HomeView: View {
     /// Opening the list is what ends it — the same run tomorrow is history, and
     /// history belongs in the list.
     @ViewBuilder private var agentNotice: some View {
-        // The question comes first and stays until it is answered. A run nobody
-        // has looked at is news with a shelf life; an agent waiting on an answer
-        // is not news at all — it is something only this person can end.
-        if services.edits.ever.waiting > 0 {
-            ask
-        } else if services.edits.unseen.total > 0 {
+        if services.edits.unseen.total > 0 {
             DarkPanel(padding: 0) {
                 Button { readingEdits = true } label: {
                     VStack(alignment: .leading, spacing: 10) {
@@ -216,37 +209,6 @@ struct HomeView: View {
         }
     }
 
-    /// The ask, on the same dark surface the news uses and in its place: both
-    /// are about a run that has just landed, and only one of them can be true of
-    /// the same run.
-    private var ask: some View {
-        DarkPanel(padding: 0) {
-            Button { reviewing = true } label: {
-                VStack(alignment: .leading, spacing: 10) {
-                    Legend("agent edits · waiting for you", size: 9, colour: Palette.accent)
-                    Text(EditWords.asking(services.edits.ever.waiting))
-                        .font(.system(size: 15))
-                        .foregroundStyle(.white)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            Palette.body.frame(height: 1)
-            Button { reviewing = true } label: {
-                Legend("review", size: 11, colour: Palette.accent)
-                    .frame(maxWidth: .infinity, minHeight: 46)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.top, 12)
-    }
-
     /// The way into everything an agent has ever done, once anything has been.
     ///
     /// A key rather than a row: it is named for where it goes and drawn with the
@@ -258,7 +220,7 @@ struct HomeView: View {
             label: "agent edits",
             symbol: "list.bullet.rectangle",
             detail: countedEdits,
-            lit: services.edits.unseen.total > 0 || services.edits.ever.waiting > 0
+            lit: services.edits.unseen.total > 0
         ) { readingEdits = true }
     }
 

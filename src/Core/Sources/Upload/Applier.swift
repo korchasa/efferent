@@ -22,12 +22,16 @@ import os
 /// the uploader reads those days out of Health whole and sends them like any
 /// other. The archive keeps holding what Health says, not what was asked for.
 ///
-/// **An agent may add, but it may not change or remove on its own.** An item
-/// that would overwrite or take away a record standing in Health now is held
-/// instead of applied, answered `awaitingApproval` so the queue moves on, and
-/// kept whole in the journal until the person says yes or no. Their answer is
-/// sent as a second outcome for the same edit, which the service takes: an
-/// outcome is how an edit ends, and revising one is how a question is answered.
+/// **Every item lands, and every item can be taken back.** An agent reaches
+/// only the records this app itself wrote — they carry its own sync identifier,
+/// and HealthKit will not let one app delete another's — so nothing an agent
+/// sends can touch the watch's sleep or another app's data. What a change
+/// pushes out of Health is read in the same breath and kept in the journal, and
+/// undo puts it back. Asking first was the older rule; it guarded the agent's
+/// own past work against the agent, and cost a decision for every correction.
+///
+/// Rows a build before that still holds in `waiting` can be answered as they
+/// always could; nothing new ever joins them.
 ///
 /// **A bad edit is answered, not left.** One the phone cannot verify, open or
 /// read is answered with a single refusal and leaves the queue like any other:
@@ -49,10 +53,6 @@ public final class Applier {
         public var edits = 0
         public var items = 0
         public var refused = 0
-        /// Items held for the person to allow or turn down. Counted apart from
-        /// the refusals they travel with on the wire: a refusal is over, and
-        /// this is a question somebody has to answer.
-        public var waiting = 0
         /// The days Health changed on, to be marked and rebuilt.
         public var days: Set<String> = []
         /// Why the run stopped before the queue was empty, when it did. The
@@ -172,12 +172,6 @@ public final class Applier {
         // item by item as unauthorized, and it is not — nobody has been asked.
         guard !writer.writeAccessUndecided() else { return .notAsked }
 
-        // A decision made while the phone had no network is owed to the
-        // service, and this is where it gets paid. Before the queue rather
-        // than after it: the answer is already true, and a run that stops on
-        // something else must not take it down with it.
-        await tell()
-
         let waiting = try await pending()
         guard !waiting.isEmpty else { return .nothingWaiting }
 
@@ -196,7 +190,7 @@ public final class Applier {
         }
         log.info(
             "applied \(applied.edits) edits, \(applied.items) items, \(applied.refused) refused, "
-                + "\(applied.waiting) waiting for the person, \(applied.days.count) days to rebuild, "
+                + "\(applied.days.count) days to rebuild, "
                 + "in \(Uploader.milliseconds(since: started)) ms"
         )
         return .applied(applied)
@@ -280,14 +274,9 @@ public final class Applier {
 
         applied.days.formUnion(result.days)
         try await report(name, Efferent.Outcome(applied: result.applied, refused: result.refused))
-        // The service has the whole truth about this edit now, so nothing of it
-        // is owed — including a decision made offline that this run carried.
-        try store.markEditTold(name)
-        let held = result.refused.filter { $0.code == .awaitingApproval }.count
         applied.edits += 1
         applied.items += result.applied + result.refused.count
-        applied.refused += result.refused.count - held
-        applied.waiting += held
+        applied.refused += result.refused.count
         log.debug(
             "\(name): \(answer.body.count) bytes, \(result.applied) applied"
                 + (result.refused.isEmpty
@@ -356,31 +345,18 @@ public final class Applier {
                 refused.append(.init(item: index, code: .declined))
                 continue
             }
-            let again = before[index] == .applied || before[index] == .deleted
             do {
-                // Adding something new lands at once. Changing or removing what
-                // Health holds now is the person's to allow, so it is held and
-                // the agent is told it is waiting — the queue must keep moving,
-                // and an edit left unanswered is fetched again forever.
-                let standing = again ? [] : try await changesWhatHealthHolds(item)
-                if !standing.isEmpty {
-                    refused.append(.init(item: index, code: .awaitingApproval))
-                    // The day a removal would take a record from is the only
-                    // thing the screen can say about it, and this is the last
-                    // moment anything can ask: after the record goes, nothing
-                    // can be asked about it at all.
-                    try store.recordEdit(
-                        item, at: index, in: name, state: .waiting,
-                        day: landingDay(item) ?? standing.sorted().first,
-                        code: .awaitingApproval, at: now()
-                    )
-                    continue
-                }
+                // Every item lands at once. An agent can only ever reach the
+                // records this app itself wrote — they carry its own sync
+                // identifier, and HealthKit refuses to let one app delete
+                // another's — so what a change can spoil is the agent's own
+                // past work. What makes that safe to allow is that the writer
+                // hands back whatever it pushed out, and undo puts it back.
                 let landed = try await land(item)
-                days.formUnion(landed.days)
+                days.formUnion(landed.written.days)
                 try store.recordEdit(
                     item, at: index, in: name, state: Self.state(of: item), day: landed.day,
-                    at: now()
+                    displaced: landed.written.displaced, at: now()
                 )
                 applied += 1
             } catch let WriteRefused.code(code) {
@@ -393,43 +369,27 @@ public final class Applier {
         return Result(applied: applied, refused: refused, days: days)
     }
 
-    /// The days of the record this item would alter or take away, and nothing
-    /// when there is no such record — the one thing an agent may not do by
-    /// itself, and the days it is about.
-    ///
-    /// Health is asked, never the ledger: `forgetWritten` keeps its row after an
-    /// undo, so the ledger would call a fresh `put` a change when Health holds
-    /// nothing under that id.
-    private func changesWhatHealthHolds(_ item: EditItem) async throws -> Set<String> {
-        switch item {
-        case let .put(put): try await writer.holds(id: put.id, metric: put.metric)
-        // A removal carries an id and nothing else, so the whole catalogue is
-        // asked. Nothing there is `notFound` when it is applied, as before.
-        case let .delete(id): try await writer.holds(id: id, metric: nil)
-        }
-    }
-
     /// Write one item into Health, without writing anything down: the two
     /// callers record it differently — a first run says when it arrived, a
     /// decision says the service is owed a new answer.
-    private func land(_ item: EditItem) async throws -> (day: String?, days: Set<String>) {
+    private func land(_ item: EditItem) async throws -> (day: String?, written: Written) {
         switch item {
         case let .put(put):
             let version = try store.nextVersion(for: put.id)
-            let days = try await writer.apply(put, version: version)
+            let written = try await writer.apply(put, version: version)
             // The day the sample landed on, which is the one the screen names.
             // The writer answers with that day and sometimes with the one a
             // replaced sample left, and those are two different facts: the
             // second is owed to the archive, not to the person reading what
             // their agent did.
-            return (landingDay(item), days)
+            return (landingDay(item), written)
         case let .delete(id):
-            let left = try await writer.remove(id: id)
+            let written = try await writer.remove(id: id)
             try store.forgetWritten(id)
-            // A deletion names no metric and no instant: the agent gave an id,
-            // and the record was gone before anything could ask it anything.
-            // The day it was in is all there is to say.
-            return (left.sorted().first, left)
+            // A deletion names no metric and no instant: the agent gave an id.
+            // The day it was in is all there is to say about where it went —
+            // what it held travels separately, as the record undo puts back.
+            return (written.days.sorted().first, written)
         }
     }
 
@@ -444,93 +404,6 @@ public final class Applier {
         case .put: .applied
         case .delete: .deleted
         }
-    }
-
-    // MARK: - The person's answer
-
-    /// Yes to everything waiting.
-    ///
-    /// Answers the days Health changed on, which the caller marks and sends,
-    /// exactly as it does for a run: a record written is a day owed. The pass
-    /// lock is deliberately not taken — every step here is idempotent, and a
-    /// tap that answered "busy" would look like a tap that did nothing.
-    public func approveWaiting() async throws -> Set<String> {
-        var days: Set<String> = []
-        var decided = 0
-        for entry in try store.waitingEdits() {
-            guard let item = entry.asItem else { continue }
-            do {
-                let landed = try await land(item)
-                days.formUnion(landed.days)
-                try store.recordEdit(
-                    item, at: entry.item, in: entry.editName, state: Self.state(of: item),
-                    day: landed.day, owed: true, at: now()
-                )
-            } catch let WriteRefused.code(code) {
-                // The person said yes and Health said no. That word goes back in
-                // place of the one that was waiting.
-                try store.recordEdit(
-                    item, at: entry.item, in: entry.editName, state: .refused, day: nil,
-                    code: code, owed: true, at: now()
-                )
-            }
-            decided += 1
-        }
-        log.info("approved \(decided) held items, \(days.count) days to rebuild")
-        await tell()
-        return days
-    }
-
-    /// No to everything waiting. Health is never touched: nothing was written.
-    public func declineWaiting() async throws {
-        try store.declineWaiting()
-        log.info("declined what was waiting")
-        await tell()
-    }
-
-    /// Tell the service what it has not been told. A failure leaves the rows
-    /// owed and stops: the answer is safe here, and the next run pays it.
-    private func tell() async {
-        let owed: [String]
-        do {
-            owed = try store.owedEdits()
-        } catch {
-            log.error("could not read what is owed: \(error)")
-            return
-        }
-        guard !owed.isEmpty else { return }
-        for name in owed {
-            do {
-                try await report(name, outcome(of: name))
-                try store.markEditTold(name)
-            } catch {
-                log.error("could not revise the outcome of \(name): \(error)")
-                return
-            }
-        }
-        log.info("revised \(owed.count) outcomes")
-    }
-
-    /// One edit's outcome, rebuilt from the journal.
-    ///
-    /// The whole edit rather than the part that changed: an outcome replaces the
-    /// one before it, so a revision that named only the item just decided would
-    /// tell the agent its other items had never happened.
-    private func outcome(of name: String) throws -> Efferent.Outcome {
-        var applied = 0
-        var refused: [Efferent.Outcome.Refusal] = []
-        for entry in try store.edits(of: name) {
-            switch entry.state {
-            // Undone counts as applied, because it was: what the person did with
-            // the record afterwards is theirs, and the outcome is about what the
-            // edit did.
-            case .applied, .deleted, .undone:
-                applied += 1
-            case .refused, .waiting, .declined:
-                refused.append(.init(item: entry.item, code: entry.code ?? .malformed))
-            }
-        }
-        return Efferent.Outcome(applied: applied, refused: refused)
     }
 
     /// Tell the service what became of the edit. The service replaces the edit

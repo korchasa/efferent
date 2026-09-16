@@ -74,6 +74,62 @@ public struct WritableMetric: Sendable {
     }
 }
 
+/// A record this app had written that an edit displaced — replaced by a
+/// new value, or removed outright.
+///
+/// Kept because Health hands it over once and never again: a removed record
+/// is gone before anything could ask about it, and a replaced one goes the
+/// instant the new sample lands. Without it the only thing undo could do
+/// was take the agent's record out, which leaves nothing where something
+/// stood, and a deletion could not be undone at all.
+///
+/// A list rather than one record, because an id is the agent's to choose:
+/// nothing stops it reusing one across metrics, and a removal searches
+/// every writable metric for it.
+public struct DisplacedRecord: Codable, Equatable, Hashable, Sendable {
+    public let metric: String
+    public let start: Date
+    public let end: Date
+    public let value: Double?
+    public let unit: String?
+    public let stage: String?
+    /// The day it was on, worked out when it was displaced. Written down
+    /// rather than derived later: day boundaries are pinned per install,
+    /// and a record put back years on must return to the day it left.
+    public let day: String
+
+    public init(
+        metric: String,
+        start: Date,
+        end: Date,
+        value: Double? = nil,
+        unit: String? = nil,
+        stage: String? = nil,
+        day: String
+    ) {
+        self.metric = metric
+        self.start = start
+        self.end = end
+        self.value = value
+        self.unit = unit
+        self.stage = stage
+        self.day = day
+    }
+
+    /// The write that puts it back where it was.
+    public func asPut(id: String) -> EditItem.Put {
+        .init(
+            id: id,
+            metric: metric,
+            start: Int64(start.timeIntervalSince1970),
+            end: Int64(end.timeIntervalSince1970),
+            value: value,
+            unit: unit,
+            stage: stage
+        )
+    }
+}
+
 /// Why an item was not written, in a word the outcome can carry.
 public enum WriteRefused: Error, Equatable {
     case code(OutcomeCode)
@@ -118,29 +174,30 @@ public protocol HealthWriter {
     /// has not been shown, so nothing can be written yet and nothing is refused
     /// either: the edits wait.
     func writeAccessUndecided() -> Bool
-    /// The days a record this app wrote under `id` is on, and nothing when
-    /// Health holds none.
+    /// Put the sample, replacing what this app wrote under the same id.
     ///
-    /// The question every approval turns on. A `put` over a record that is
-    /// there changes what Health says and a `delete` takes it away, so both
-    /// wait for the person; a `put` under an id Health holds nothing for only
-    /// adds something, and lands at once. `metric` narrows the question to the
-    /// one type an item names, and nil asks the whole catalogue, which is what
-    /// a removal has to do: it carries an id and nothing else.
-    ///
-    /// The days rather than a yes: a removal names no metric and no instant, so
-    /// the day it would take a record from is the only thing the screen can say
-    /// about it — and this is the last moment anything can ask.
-    ///
-    /// The `written` ledger cannot answer this. It keeps its row after an undo,
-    /// so it would call a fresh `put` a modification when Health holds nothing.
-    func holds(id: String, metric: String?) async throws -> Set<String>
-    /// Put the sample, replacing what this app wrote under the same id, and
-    /// answer the days that changed: the one it landed on, and the one the
-    /// replaced sample left if that was another.
-    func apply(_ item: EditItem.Put, version: Int) async throws -> Set<String>
-    /// Remove what this app wrote under `id`, answering the days it was in.
-    func remove(id: String) async throws -> Set<String>
+    /// Answers the days that changed — the one it landed on, and the one a
+    /// replaced sample left if that was another — together with the record it
+    /// replaced, if it replaced one. That record is read in the same breath
+    /// because this is the last moment anything can: once the new sample lands,
+    /// what stood there is gone and no query can find it again.
+    func apply(_ item: EditItem.Put, version: Int) async throws -> Written
+    /// Remove what this app wrote under `id`, answering the days it was in and
+    /// the records it took out, so they can be put back.
+    func remove(id: String) async throws -> Written
+}
+
+/// What a write did.
+public struct Written: Equatable, Sendable {
+    /// The days in the archive it changed, which are the days now owed.
+    public let days: Set<String>
+    /// What it pushed out of Health, empty when it pushed nothing out.
+    public let displaced: [DisplacedRecord]
+
+    public init(days: Set<String>, displaced: [DisplacedRecord] = []) {
+        self.days = days
+        self.displaced = displaced
+    }
 }
 
 /// The real one.
@@ -172,7 +229,7 @@ public struct HealthKitWriter: HealthWriter {
         WritableMetric.all.contains { store.authorizationStatus(for: $0.type) == .notDetermined }
     }
 
-    public func apply(_ item: EditItem.Put, version: Int) async throws -> Set<String> {
+    public func apply(_ item: EditItem.Put, version: Int) async throws -> Written {
         guard let metric = WritableMetric.named(item.metric) else {
             throw WriteRefused.code(.unknownMetric)
         }
@@ -220,35 +277,23 @@ public struct HealthKitWriter: HealthWriter {
             throw WriteRefused.code(.unknownMetric)
         }
 
-        // The day the replaced sample was in, before it goes: a meal moved to
-        // another day leaves that day changed too, and after the save nothing
-        // could ask where it had been.
-        var days = try await daysHeld(metric: metric, id: item.id)
+        // What the new sample pushes out, read before it lands. This is the
+        // last moment anything can: after the save, what stood there is gone
+        // and no query can find it or the day it was in — a meal moved to
+        // another day leaves that day changed too.
+        let displaced = try await standing(metric: metric, id: item.id)
         try await saving { try await store.save(sample) }
+        var days = Set(displaced.map(\.day))
         days.insert(Day.of(start, in: calendar))
-        return days
+        return Written(days: days, displaced: displaced)
     }
 
-    public func holds(id: String, metric: String?) async throws -> Set<String> {
-        let asked: [WritableMetric]
-        if let metric {
-            // An unknown metric holds nothing, and the write path is where that
-            // is said with a word.
-            guard let named = WritableMetric.named(metric) else { return [] }
-            asked = [named]
-        } else {
-            asked = WritableMetric.all
-        }
+    public func remove(id: String) async throws -> Written {
         var days: Set<String> = []
-        for metric in asked {
-            try await days.formUnion(daysHeld(metric: metric, id: id))
-        }
-        return days
-    }
-
-    public func remove(id: String) async throws -> Set<String> {
-        var days: Set<String> = []
+        var displaced: [DisplacedRecord] = []
         var found: [HKSample] = []
+        // Every writable metric, because a removal carries an id and nothing
+        // else: the agent names no type and no instant.
         for metric in WritableMetric.all {
             let samples = try await saving {
                 try await store.samples(of: metric.type, syncIdentifier: Self.syncIdentifier(id))
@@ -256,18 +301,52 @@ public struct HealthKitWriter: HealthWriter {
             for sample in samples {
                 days.insert(Day.of(sample.startDate, in: calendar))
             }
+            displaced += samples.compactMap { Self.record($0, metric: metric, calendar: calendar) }
             found += samples
         }
         guard !found.isEmpty else { throw WriteRefused.code(.notFound) }
         try await saving { try await store.delete(found) }
-        return days
+        return Written(days: days, displaced: displaced)
     }
 
-    private func daysHeld(metric: WritableMetric, id: String) async throws -> Set<String> {
+    /// What this app holds under `id` for `metric`, in the shape that puts it
+    /// back. Health can answer only while the records are still there.
+    private func standing(metric: WritableMetric, id: String) async throws -> [DisplacedRecord] {
         let held = try await saving {
             try await store.samples(of: metric.type, syncIdentifier: Self.syncIdentifier(id))
         }
-        return Set(held.map { Day.of($0.startDate, in: calendar) })
+        return held.compactMap { Self.record($0, metric: metric, calendar: calendar) }
+    }
+
+    /// One sample as the journal keeps it.
+    ///
+    /// Nil for a sample whose shape the catalogue cannot describe. It is not a
+    /// case that should arise — the sync identifier names this app's own writes
+    /// — and a record nobody can name is one undo must not offer to put back.
+    private static func record(
+        _ sample: HKSample, metric: WritableMetric, calendar: Calendar
+    ) -> DisplacedRecord? {
+        let day = Day.of(sample.startDate, in: calendar)
+        if let unit = metric.unit, let quantity = sample as? HKQuantitySample {
+            return DisplacedRecord(
+                metric: metric.name,
+                start: sample.startDate,
+                end: sample.endDate,
+                value: quantity.quantity.doubleValue(for: unit),
+                unit: unit.unitString,
+                day: day
+            )
+        }
+        if metric.unit == nil, let category = sample as? HKCategorySample {
+            return DisplacedRecord(
+                metric: metric.name,
+                start: sample.startDate,
+                end: sample.endDate,
+                stage: sleepStageName(category.value),
+                day: day
+            )
+        }
+        return nil
     }
 
     /// `efferent:<id>` — the agent's handle, in a namespace of this app's own,

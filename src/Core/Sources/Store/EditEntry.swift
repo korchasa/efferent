@@ -51,6 +51,10 @@ public struct EditEntry: Equatable, Hashable, Sendable, Identifiable {
     /// When this phone applied it.
     public let at: Date
     public let undoneAt: Date?
+    /// What this item pushed out of Health, and what undo puts back. Empty when
+    /// it pushed nothing out — an addition — and empty on every row written
+    /// before the journal started keeping this.
+    public let displaced: [DisplacedRecord]
 
     public init(
         id: Int64,
@@ -67,7 +71,8 @@ public struct EditEntry: Equatable, Hashable, Sendable, Identifiable {
         day: String? = nil,
         code: OutcomeCode? = nil,
         at: Date,
-        undoneAt: Date? = nil
+        undoneAt: Date? = nil,
+        displaced: [DisplacedRecord] = []
     ) {
         self.id = id
         self.editName = editName
@@ -84,14 +89,22 @@ public struct EditEntry: Equatable, Hashable, Sendable, Identifiable {
         self.code = code
         self.at = at
         self.undoneAt = undoneAt
+        self.displaced = displaced
     }
 
-    /// Whether taking this one back out of Health is a thing that can be done.
+    /// Whether this one can be taken back.
     ///
-    /// Only a record still in Health can be. A deletion cannot: the value it
-    /// removed was never kept, so there is nothing to write back.
+    /// An addition is taken back by removing it. A replacement and a removal
+    /// are taken back by putting `displaced` where it was. A row from before
+    /// the journal kept that — every deletion build 18 wrote — has nothing to
+    /// put back and says so rather than offering a button that empties a day.
     public var canBeUndone: Bool {
-        state == .applied && !recordID.isEmpty
+        guard !recordID.isEmpty else { return false }
+        switch state {
+        case .applied: return true
+        case .deleted: return !displaced.isEmpty
+        default: return false
+        }
     }
 
     /// The item this row came from.
