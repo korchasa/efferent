@@ -222,7 +222,8 @@ if (postTo) {
     );
   }
 
-  const listing = await (await fetch(`${postTo}/b/${bucket}/days`)).json();
+  const listing = await (await fetch(`${postTo}/b/${bucket}/days`))
+    .json() as { days: readonly string[] };
   expect(listing.days.length >= 2, `the service listed ${listing.days.length} days back`);
 }
 
