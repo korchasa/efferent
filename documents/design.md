@@ -190,11 +190,30 @@ anything coming, and if not, why. `EditWords.delivery` writes it and nothing els
 the design: a pause first, because it is why there was no look at all and it is a decision rather
 than a fault; then an unanswered Health question, because it stops the queue being read and a bare
 "not checked yet" would send the person hunting for a fault in their agent; then what stopped the
-last run; then, when nothing did, when that run happened. Only the two that are wrong — the
-unanswered question and a run that failed — are drawn in the alarm colour. A locked phone is neither
-wrong nor finished: the queue was read, and the line says how many items go in at the next unlock.
-Before this, a delivery that stopped left its only trace in the log, which is a place nobody
-looks.
+last run; then what the phone's own settings have taken away; then, when nothing has, when that run
+happened. Only the two that are wrong — the unanswered question and a run that failed — are drawn in
+the alarm colour. A locked phone is neither wrong nor finished: the queue was read, and the line says
+how many items go in at the next unlock. Before this, a delivery that stopped left its only trace in
+the log, which is a place nobody looks.
+
+**The two layers the phone can take away.** `EditWords.Reach` is how far an edit gets without
+somebody opening the app, and `Services.reach` is the phone's answer. `nothingInTheBackground` is
+background app refresh switched off or restricted in the system settings, which removes the catch-up
+task and silent wakes together; `noWake` is Apple refusing to say how to reach this phone, or the
+archive never being told the token it gave. Both are read from the everyday screen's own two-second
+ticker as well as at launch, because a person changes them while this app is not running. Neither is
+raised in the alarm colour: they are settings outside the app, nothing is broken, and an edit still
+arrives — later. They sit below what stopped the last run, which is about this moment, and above the
+last-checked time, which is about to stop moving for exactly this reason: a still clock with no cause
+beside it is what STATE-2 exists to prevent.
+
+A refusal is written down and a silence never is. Registration is asked for on every launch and Apple
+answers on its own time, so `wakeRefused` is set only when something failed — a phone that has simply
+not been answered yet must not be called refused.
+
+The fifth condition STATE-2 names, an archive that was never made, cannot reach this line: `finishSetup`
+refuses without a destination and `disconnect` takes `setupComplete` away again, so a phone with
+nowhere to send is on the walkthrough and not on the everyday screen at all.
 
 **The notice question moves earlier.** Connecting an agent asks about notices. Today the question
 waits until an agent has already written something, which guarantees the first edit is silent.

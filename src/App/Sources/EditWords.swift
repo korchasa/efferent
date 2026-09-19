@@ -372,6 +372,26 @@ enum EditWords {
         case failed
     }
 
+    /// How far an edit can get without the person opening the app.
+    ///
+    /// Two layers carry it there — the archive ringing this phone, and the
+    /// catch-up task the system runs on its own — and both can be switched off
+    /// outside this app. Neither stops an edit arriving; they decide how late
+    /// it arrives, which is why neither is drawn as a fault.
+    enum Reach: Equatable, Sendable {
+        /// The archive can ring this phone, and the system runs the catch-up
+        /// task.
+        case whole
+        /// Nothing can ring this phone: Apple would not say how to reach it, or
+        /// the archive was never told. The catch-up task still runs, so an edit
+        /// arrives within hours instead of within seconds.
+        case noWake
+        /// The system runs nothing for this app while it is out of sight, so
+        /// both layers are gone at once and an edit waits for the next time
+        /// somebody opens it.
+        case nothingInTheBackground
+    }
+
     /// The one line under the dial about the queue.
     struct DeliveryLine: Equatable {
         let text: String
@@ -392,6 +412,7 @@ enum EditWords {
         paused: Bool,
         healthUndecided: Bool,
         stopped: DeliveryStop?,
+        reach: Reach,
         checked: Date?,
         now: Date = Date()
     ) -> DeliveryLine {
@@ -420,6 +441,22 @@ enum EditWords {
         case .failed:
             return DeliveryLine(text: "the last look at the archive did not finish", isFault: true)
         case nil:
+            break
+        }
+        // After what stopped the last look, because that is about this moment
+        // and these two are about every moment. Before the time, because a
+        // phone nothing can reach is exactly the phone whose last-checked time
+        // is about to stop moving, and the time alone would leave the person
+        // hunting for the cause. Faint rather than raised: both are settings
+        // outside this app, and an edit still arrives — later.
+        switch reach {
+        case .nothingInTheBackground:
+            return DeliveryLine(
+                text: "background app refresh is off, so edits are late", isFault: false
+            )
+        case .noWake:
+            return DeliveryLine(text: "nothing can wake this phone, so edits are late", isFault: false)
+        case .whole:
             break
         }
         guard let checked else {

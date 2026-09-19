@@ -211,8 +211,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         didFailToRegisterForRemoteNotificationsWithError error: Error
     ) {
         // Worth a line: from here on the phone finds edits only when something
-        // else wakes it, which looks from the outside like a slow service.
+        // else wakes it, which looks from the outside like a slow service. And
+        // worth saying on the screen too, which is the only place a person
+        // would ever meet it.
         log.error("apple would not say how to reach this phone: \(String(describing: error))")
+        Task { @MainActor in
+            Services.shared.recordWakeRefused()
+        }
     }
 
     /// The service says something is waiting.

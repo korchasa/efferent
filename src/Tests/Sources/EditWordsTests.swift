@@ -341,11 +341,12 @@ final class EditWordsTests: XCTestCase {
             paused: Bool = false,
             undecided: Bool = false,
             stopped: EditWords.DeliveryStop? = nil,
+            reach: EditWords.Reach = .whole,
             checked: Date? = nil
         ) -> EditWords.DeliveryLine {
             EditWords.delivery(
                 paused: paused, healthUndecided: undecided,
-                stopped: stopped, checked: checked, now: now
+                stopped: stopped, reach: reach, checked: checked, now: now
             )
         }
 
@@ -392,6 +393,65 @@ final class EditWordsTests: XCTestCase {
             line(stopped: .sealedByLock(waiting: 2), checked: now.addingTimeInterval(-300)).text,
             "2 edits wait until this phone is unlocked",
             "what stopped the look beats when it happened"
+        )
+    }
+
+    /// STATE-2 again, for the two conditions that live outside this app: a wake
+    /// nothing can deliver, and a system that runs nothing in the background.
+    /// Neither stops an edit arriving, so neither is raised as a fault — but
+    /// both are why the time under the dial is about to stop moving, and
+    /// without them the person has a still clock and no cause.
+    func testDeliveryLineNamesWhatTheSystemTookAway() {
+        let now = Date(timeIntervalSince1970: 1_757_336_400)
+        func line(
+            paused: Bool = false,
+            undecided: Bool = false,
+            stopped: EditWords.DeliveryStop? = nil,
+            reach: EditWords.Reach = .whole,
+            checked: Date? = nil
+        ) -> EditWords.DeliveryLine {
+            EditWords.delivery(
+                paused: paused, healthUndecided: undecided,
+                stopped: stopped, reach: reach, checked: checked, now: now
+            )
+        }
+
+        XCTAssertEqual(
+            line(reach: .noWake, checked: now),
+            .init(text: "nothing can wake this phone, so edits are late", isFault: false),
+            "a refused wake is slower, not broken, and the catch-up task still runs"
+        )
+        XCTAssertEqual(
+            line(reach: .nothingInTheBackground, checked: now),
+            .init(text: "background app refresh is off, so edits are late", isFault: false),
+            "it names the setting, because the screen is where the person meets it"
+        )
+        XCTAssertEqual(
+            line(reach: .nothingInTheBackground, checked: nil).text,
+            "background app refresh is off, so edits are late",
+            "the cause beats a bare \"not checked yet\", which reads as the agent's fault"
+        )
+
+        XCTAssertEqual(
+            line(stopped: .failed, reach: .nothingInTheBackground).text,
+            "the last look at the archive did not finish",
+            "what just happened beats what has been true all along"
+        )
+        XCTAssertEqual(
+            line(paused: true, reach: .nothingInTheBackground).text,
+            "agent edits held back with sending",
+            "a pause is why nothing is being delivered at all"
+        )
+        XCTAssertEqual(
+            line(undecided: true, reach: .noWake).text,
+            "health access not answered yet",
+            "an unanswered question stops every layer, not just the fast one"
+        )
+
+        XCTAssertEqual(
+            line(reach: .whole, checked: now.addingTimeInterval(-300)).text,
+            "agent edits checked 5 min ago",
+            "with both layers in place the line goes back to saying when"
         )
     }
 }

@@ -49,6 +49,20 @@ final class Services: ObservableObject {
     /// waiting behind a lock, or a run that failed, looked exactly like an
     /// agent that had sent nothing.
     @Published private(set) var deliveryStop: EditWords.DeliveryStop?
+    /// How far an edit can get without somebody opening the app.
+    ///
+    /// STATE-2: a wake the phone refused and a system that runs nothing in the
+    /// background both make delivery late, and from the everyday screen they
+    /// look exactly like an agent that sent nothing. Kept as a property the
+    /// screen can read rather than asked of UIKit inside a view, so the words
+    /// stay in `EditWords` and can be tested without a phone.
+    @Published private(set) var reach = EditWords.Reach.whole
+    /// Whether the last attempt to make this phone reachable failed.
+    ///
+    /// Only a failure, never a silence: registration is asked for on every
+    /// launch and Apple answers on its own time, so a phone that has simply not
+    /// been answered yet must not be called refused.
+    private var wakeRefused = false
     /// The walkthrough has just ended and the archive has never been handed to
     /// an agent. Lives only in memory: it is about this launch, not about the
     /// phone, and a person who closed the sheet has answered the question.
@@ -294,6 +308,10 @@ final class Services: ObservableObject {
     /// the only way to find out is to ask. Apple answers on the delegate.
     func registerForWake() {
         guard !demonstration, destination != nil else { return }
+        // Read once at launch as well as from the screen's ticker: a launch in
+        // the background never opens a screen, and the first thing a person
+        // does after turning background refresh back on is open the app.
+        refreshReach()
         UIApplication.shared.registerForRemoteNotifications()
     }
 
@@ -317,9 +335,49 @@ final class Services: ObservableObject {
             )
             try store.recordWakeRegistered(for: destination.bucket, token: hex)
             log.info("the service can wake this phone now")
+            wakeRefused = false
+            refreshReach()
         } catch {
             log.error("could not register for waking: \(String(describing: error))")
+            // A token Apple gave that the archive never learned reaches nobody,
+            // so this counts as a refusal on the screen exactly like Apple's.
+            recordWakeRefused()
         }
+    }
+
+    /// Nothing can ring this phone: Apple would not say how to reach it, or the
+    /// archive was never told. Written down because the everyday screen is the
+    /// only place a person would ever find out — being woken is the fast path
+    /// and never the only one, so the app goes on working and just goes slower.
+    func recordWakeRefused() {
+        wakeRefused = true
+        refreshReach()
+    }
+
+    /// Re-read the two settings delivery depends on and nothing in this app
+    /// controls. Cheap, and called from the screen's own ticker: background
+    /// refresh is switched in the system settings, which this app is not
+    /// running during.
+    func refreshReach() {
+        guard !demonstration else { return }
+        switch UIApplication.shared.backgroundRefreshStatus {
+        case .denied, .restricted:
+            // Both layers at once: without background refresh the system runs
+            // no catch-up task, and a silent wake is not delivered either.
+            reach = .nothingInTheBackground
+        case .available:
+            reach = wakeRefused ? .noWake : .whole
+        @unknown default:
+            // Nothing is known to be wrong, so nothing is said. A guess here
+            // would accuse the person's settings of a fault they do not have.
+            reach = wakeRefused ? .noWake : .whole
+        }
+    }
+
+    /// For the walk over the screens, which has no real settings to read.
+    func demonstrate(reach: EditWords.Reach) {
+        guard demonstration else { return }
+        self.reach = reach
     }
 
     /// The service says an edit is waiting. Everything else is this phone's.

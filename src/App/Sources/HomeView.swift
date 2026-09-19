@@ -84,6 +84,10 @@ struct HomeView: View {
             // with the view, so it costs nothing when nobody is looking.
             while !Task.isCancelled {
                 services.refreshStats()
+                // Alongside them, because background refresh is switched in the
+                // system settings — which is to say, while this app is not
+                // running and cannot be told.
+                services.refreshReach()
                 try? await Task.sleep(for: .seconds(2))
             }
         }
@@ -409,6 +413,7 @@ struct HomeView: View {
             paused: services.paused,
             healthUndecided: services.healthWriteUndecided,
             stopped: services.deliveryStop,
+            reach: services.reach,
             checked: services.stats?.lastEditCheckAt
         )
     }
