@@ -41,6 +41,14 @@ final class Services: ObservableObject {
     /// invitation to hand it over: an archive nobody can read is the state this
     /// app is least useful in, so the way out of it stays lit until it is done.
     @Published private(set) var agentConnected: Bool
+
+    /// What stopped the last look at the queue, or nil when nothing did.
+    ///
+    /// The screen reads it. NOTICE-7: a delivery that stopped used to leave its
+    /// only trace in the log, which is a place nobody looks — so an edit
+    /// waiting behind a lock, or a run that failed, looked exactly like an
+    /// agent that had sent nothing.
+    @Published private(set) var deliveryStop: EditWords.DeliveryStop?
     /// The walkthrough has just ended and the archive has never been handed to
     /// an agent. Lives only in memory: it is about this launch, not about the
     /// phone, and a person who closed the sheet has answered the question.
@@ -648,6 +656,10 @@ final class Services: ObservableObject {
     /// edits stay in the queue, and the days already changed are marked
     /// whatever stopped the run.
     private func applyEdits() async {
+        // A walk over the screens has an archive address and keys, both made
+        // up, so without this line it would ask a real service about a bucket
+        // that does not exist — every fifteen seconds, from the ticker.
+        guard !demonstration else { return }
         await ensureEditorRegistered()
         guard let applier = applierIfPaired() else { return }
         do {
@@ -665,6 +677,7 @@ final class Services: ObservableObject {
             case .busy, .notAsked: return
             case .nothingWaiting, .applied, .locked:
                 try store.recordEditCheck(heldByLock: Self.heldByLock(in: outcome))
+                deliveryStop = Self.stopped(by: outcome)
             }
             guard case let .applied(applied) = outcome else { return }
             if !applied.days.isEmpty {
@@ -680,9 +693,21 @@ final class Services: ObservableObject {
             )
         } catch where HealthReader.isLocked(error) {
             log.debug("the phone is locked, so no edit could be applied; they wait")
+            // The count is unknown here — the run failed on the way to it — so
+            // the sentence says the condition and not a figure.
+            deliveryStop = .sealedByLock(waiting: 0)
         } catch {
             log.error("applying edits failed: \(String(describing: error))")
+            deliveryStop = .failed
         }
+    }
+
+    /// What the screen is owed about a run that ended, or nil when the run did
+    /// its job. A locked phone is the one ending that is neither done nor
+    /// wrong: the queue was read, and what is in it goes in at the unlock.
+    private static func stopped(by outcome: Applier.Outcome) -> EditWords.DeliveryStop? {
+        guard case let .locked(waiting) = outcome, waiting > 0 else { return nil }
+        return .sealedByLock(waiting: waiting)
     }
 
     /// What a run leaves behind for the next unlock. Only a locked run leaves

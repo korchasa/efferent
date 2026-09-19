@@ -329,4 +329,69 @@ final class EditWordsTests: XCTestCase {
         XCTAssertEqual(ago(24 * 60 * 60), "yesterday")
         XCTAssertEqual(ago(9 * 24 * 60 * 60), "9 days ago", "the line that shows a phone gone quiet")
     }
+
+    /// The one line under the dial about the queue (NOTICE-7, STATE-1).
+    ///
+    /// The order matters as much as the words: each reason sits above the ones
+    /// it explains, so a person is never told "not checked yet" about a queue
+    /// nothing was allowed to read.
+    func testDeliveryLineNamesWhatStoppedTheLook() {
+        let now = Date(timeIntervalSince1970: 1_757_336_400)
+        func line(
+            paused: Bool = false,
+            undecided: Bool = false,
+            stopped: EditWords.DeliveryStop? = nil,
+            checked: Date? = nil
+        ) -> EditWords.DeliveryLine {
+            EditWords.delivery(
+                paused: paused, healthUndecided: undecided,
+                stopped: stopped, checked: checked, now: now
+            )
+        }
+
+        XCTAssertEqual(
+            line(checked: now.addingTimeInterval(-300)),
+            .init(text: "agent edits checked 5 min ago", isFault: false)
+        )
+        XCTAssertEqual(
+            line(),
+            .init(text: "agent edits not checked yet", isFault: false),
+            "an agent that has sent nothing yet is not a fault"
+        )
+
+        XCTAssertEqual(
+            line(stopped: .sealedByLock(waiting: 1)),
+            .init(text: "1 edit waits until this phone is unlocked", isFault: false)
+        )
+        XCTAssertEqual(
+            line(stopped: .sealedByLock(waiting: 3)),
+            .init(text: "3 edits wait until this phone is unlocked", isFault: false)
+        )
+        XCTAssertEqual(
+            line(stopped: .sealedByLock(waiting: 0)),
+            .init(text: "health is sealed until this phone is unlocked", isFault: false),
+            "a run that failed before counting says the condition, never a figure"
+        )
+        XCTAssertEqual(
+            line(stopped: .failed),
+            .init(text: "the last look at the archive did not finish", isFault: true)
+        )
+
+        XCTAssertEqual(
+            line(undecided: true, stopped: .failed, checked: now),
+            .init(text: "health access not answered yet", isFault: true),
+            "the unanswered question is why there was nothing to fail at"
+        )
+        XCTAssertEqual(
+            line(paused: true, undecided: true, stopped: .failed, checked: now),
+            .init(text: "agent edits held back with sending", isFault: false),
+            "a pause is the person's own doing and outranks everything under it"
+        )
+
+        XCTAssertEqual(
+            line(stopped: .sealedByLock(waiting: 2), checked: now.addingTimeInterval(-300)).text,
+            "2 edits wait until this phone is unlocked",
+            "what stopped the look beats when it happened"
+        )
+    }
 }

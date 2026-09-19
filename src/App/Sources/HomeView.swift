@@ -393,24 +393,24 @@ struct HomeView: View {
             // that tells them apart — and the one that makes an app iOS has
             // stopped waking recognisable, because its time stops moving.
             if services.agentConnected {
-                Legend(checkedLine, size: 9)
+                Legend(
+                    deliveryLine.text, size: 9,
+                    colour: deliveryLine.isFault ? Palette.alarm : Palette.legend
+                )
             }
         }
     }
 
-    /// When the archive was last asked what the agent has sent, or what is
-    /// stopping the asking.
-    private var checkedLine: String {
-        if services.paused { return "agent edits held back with sending" }
-        // Named before the time, because it is the reason there is no time: an
-        // unanswered Health question stops the queue being read at all, and an
-        // "not checked yet" that did not say why would send the person looking
-        // for a fault in the agent.
-        if services.healthWriteUndecided { return "health access not answered yet" }
-        guard let checked = services.stats?.lastEditCheckAt else {
-            return "agent edits not checked yet"
-        }
-        return "agent edits checked " + EditWords.ago(checked)
+    /// When the archive was last asked what the agent has sent, or what stopped
+    /// the asking. The words are `EditWords`' job; this only hands over what
+    /// the phone knows.
+    private var deliveryLine: EditWords.DeliveryLine {
+        EditWords.delivery(
+            paused: services.paused,
+            healthUndecided: services.healthWriteUndecided,
+            stopped: services.deliveryStop,
+            checked: services.stats?.lastEditCheckAt
+        )
     }
 
     private var state: SyncState {

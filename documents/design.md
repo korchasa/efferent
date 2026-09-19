@@ -185,6 +185,17 @@ something did. The everyday screen reads that: a last-checked time, and the cond
 delivery back when there is one — including which layer the app is running on, since a person who
 refused the wake should see slow delivery as their own choice.
 
+One line carries all of it, under the dial, because it is one question to the person looking: is
+anything coming, and if not, why. `EditWords.delivery` writes it and nothing else does. The order is
+the design: a pause first, because it is why there was no look at all and it is a decision rather
+than a fault; then an unanswered Health question, because it stops the queue being read and a bare
+"not checked yet" would send the person hunting for a fault in their agent; then what stopped the
+last run; then, when nothing did, when that run happened. Only the two that are wrong — the
+unanswered question and a run that failed — are drawn in the alarm colour. A locked phone is neither
+wrong nor finished: the queue was read, and the line says how many items go in at the next unlock.
+Before this, a delivery that stopped left its only trace in the log, which is a place nobody
+looks.
+
 **The notice question moves earlier.** Connecting an agent asks about notices. Today the question
 waits until an agent has already written something, which guarantees the first edit is silent.
 

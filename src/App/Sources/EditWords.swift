@@ -358,6 +358,76 @@ enum EditWords {
         "Your agent sent \(records(count)). They land in Health the next time you unlock this phone."
     }
 
+    /// Why the last look at the queue ended without writing anything.
+    ///
+    /// Only the endings a person can act on, or is owed an explanation for. A
+    /// run turned away because another one was already going is neither: it is
+    /// this very job being done, one caller along.
+    enum DeliveryStop: Equatable, Sendable {
+        /// The screen was locked, so Health would take nothing. The count is
+        /// what goes in at the next unlock.
+        case sealedByLock(waiting: Int)
+        /// Something went wrong. Which, is in the log — this line exists to
+        /// send the person there rather than to be the report itself.
+        case failed
+    }
+
+    /// The one line under the dial about the queue.
+    struct DeliveryLine: Equatable {
+        let text: String
+        /// Whether it names something wrong, which is drawn in the alarm colour
+        /// instead of the faint one. A locked phone is not wrong and a pause is
+        /// the person's own doing, so neither is raised.
+        let isFault: Bool
+    }
+
+    /// What the everyday screen says about the queue: what stopped the last
+    /// look, or when that look happened.
+    ///
+    /// NOTICE-7 and STATE-1 in one sentence, because they are one question to
+    /// the person looking — is anything coming, and if not, why. Silence has
+    /// two causes, nobody sent anything and nobody looked, and only one of them
+    /// is a fault. The log is not a place a person looks.
+    static func delivery(
+        paused: Bool,
+        healthUndecided: Bool,
+        stopped: DeliveryStop?,
+        checked: Date?,
+        now: Date = Date()
+    ) -> DeliveryLine {
+        // Before everything, because it is why there was no look at all, and it
+        // is a decision rather than a fault.
+        if paused {
+            return DeliveryLine(text: "agent edits held back with sending", isFault: false)
+        }
+        // Before the time, because an unanswered Health question stops the
+        // queue being read at all: a bare "not checked yet" would send the
+        // person looking for a fault in their agent.
+        if healthUndecided {
+            return DeliveryLine(text: "health access not answered yet", isFault: true)
+        }
+        switch stopped {
+        case let .sealedByLock(waiting):
+            // A count only when the queue was read far enough to have one. A
+            // run that failed on the way to it knows the condition and not the
+            // figure, and "0 edits wait" would be a lie about both.
+            let text = switch waiting {
+            case 0: "health is sealed until this phone is unlocked"
+            case 1: "1 edit waits until this phone is unlocked"
+            default: "\(waiting) edits wait until this phone is unlocked"
+            }
+            return DeliveryLine(text: text, isFault: false)
+        case .failed:
+            return DeliveryLine(text: "the last look at the archive did not finish", isFault: true)
+        case nil:
+            break
+        }
+        guard let checked else {
+            return DeliveryLine(text: "agent edits not checked yet", isFault: false)
+        }
+        return DeliveryLine(text: "agent edits checked " + ago(checked, now: now), isFault: false)
+    }
+
     /// How long ago something happened, in the coarsest words that are still
     /// true.
     ///
