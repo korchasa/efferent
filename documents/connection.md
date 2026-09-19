@@ -199,10 +199,14 @@ same second. All three readers unpack it into the NDJSON they always produced, s
 layer changed. Layout 1, one JSON object per line with the HealthKit record id on it, is still read
 while the archive is replaced.
 
-CryptoKit implements the sender on iOS. The optional TypeScript development reader uses `hpke-js`;
-the exact Python source returned by `setup_guide` uses PyHPKE 0.6.3. The three implementations are
-tested against each other. PyHPKE and hpke-js report passing the RFC vectors but have not had a
-formal independent audit; they are local readers and never expand what Cloudflare can see.
+CryptoKit implements the sender on iOS. The optional TypeScript development reader uses `hpke-js`.
+The exact Python source returned by `setup_guide` implements the suite itself on top of the PyCA
+`cryptography` library, its only dependency, and its `--self-test` seals and opens the vectors RFC
+9180 publishes for this suite in appendix A.2.1. It used PyHPKE until 2026-09-19: a package of one
+author with no independent audit, which an agent handed the guide was being told to install and
+trust with the reading key. The three implementations are tested against each other. `hpke-js`
+reports passing the RFC vectors but has no formal independent audit; it is a development reader
+nobody is handed and never expands what Cloudflare can see.
 
 The TypeScript reader dispatches on the first byte. It opens both version 1 and version 2, but every
 new seal is version 2. The Python reference intentionally opens only version 2 and fails clearly on

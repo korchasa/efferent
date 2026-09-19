@@ -439,9 +439,9 @@ deno task check
   Exits non-zero past the mark (`--warn <percent>`, 80 by default), so a scheduler can act on it.
 - `interop` — check that Swift and TypeScript agree on request bytes, HPKE and the phone handoff
   key, and that the phone opens and verifies an edit the reader sealed and signed.
-- `interop:python` — with PyHPKE installed in the selected Python, prove that the exact source
-  returned by `setup_guide` opens a TypeScript-sealed day and seals and signs an edit TypeScript
-  opens and verifies. Set `EFFERENT_PYTHON` to that interpreter.
+- `interop:python` — with `cryptography` installed in the selected Python, prove that the exact
+  source returned by `setup_guide` passes its RFC 9180 self-test, opens a TypeScript-sealed day and
+  seals and signs an edit TypeScript opens and verifies. Set `EFFERENT_PYTHON` to that interpreter.
 - `efferent` — the local reading side: `connect --handoff <file>`, `ask`, `sync`, `status`, `query`,
   `write --file <items.json>` and `edits`, plus `keygen`, `send` and `read` for protocol
   development. `connect --handoff -` reads the handoff from standard input without putting the key
