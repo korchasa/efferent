@@ -242,8 +242,7 @@ Decryption and analysis run on the agent's machine. The connection starts on the
 the phone creates the archive and reading key, then hands an otherwise unprepared agent a keyless
 remote MCP URL containing the bucket id and the reading key as a separate local secret. The short
 instruction tells the agent to call `setup_guide` first, and says how: the endpoint is streamable
-HTTP with no authentication, the instruction shows the registration command for Claude Code and
-Codex, and it gives the one JSON-RPC request that fetches the guide when the client cannot add a
+HTTP with no authentication, and one JSON-RPC request fetches the guide when the client cannot add a
 server in the running session. The remote MCP server returns setup text,
 archive metadata and ciphertext only. The complete decision and the boundary between phone,
 Cloudflare and agent are in [`documents/connection.md`](documents/connection.md).

@@ -76,10 +76,12 @@ public struct ConnectionHandoff: Equatable, Sendable {
     /// `Instruction:` and nothing after it. It names the transport and says
     /// there is no authentication, because an agent without a registered
     /// server otherwise stops at guessing an authorization header it does
-    /// not need (seen 2026-09-19), and it gives the one request that fetches
-    /// the guide when a server cannot be added mid-session.
+    /// not need (seen 2026-09-19), and it names the one request that fetches
+    /// the guide when a server cannot be added mid-session. No registration
+    /// command and no request body: that agent typed the command correctly on
+    /// its own, and the rest it can derive.
     public static let instruction =
-        #"Connect the supplied Efferent MCP and call setup_guide first. The MCP is a remote server over streamable HTTP with no authentication: register the address below exactly as it is, with no authorization header and no key (Claude Code: claude mcp add --transport http efferent <address>; Codex: codex mcp add efferent --url <address>). If your client cannot add a server in this session, every tool answers one plain HTTPS request instead: POST {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"setup_guide","arguments":{}}} to the address with the headers Content-Type: application/json and Accept: application/json, text/event-stream, and read the guide from the data line of the reply. Keep the reading key and the editor key local and never pass either to a remote tool."#
+        #"Connect the supplied Efferent MCP and call setup_guide first. The MCP is streamable HTTP with no authentication: register the address as it is, with no header and no key. If you cannot add a server in this session, POST a JSON-RPC tools/call for setup_guide to the address with Accept: application/json, text/event-stream. Keep the reading key and the editor key local and never pass either to a remote tool."#
 
     public let mcpURL: URL
     public let readingKey: String
