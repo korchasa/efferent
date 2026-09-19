@@ -561,6 +561,12 @@ final class Services: ObservableObject {
     }
 
     func sendNow() async {
+        await withTimeToFinish("sending the days that are owed", log: log) { [self] in
+            await send()
+        }
+    }
+
+    private func send() async {
         // The one place a pause is honoured. Every route into sending — the
         // button, the Health observer, the background refresh — arrives here,
         // so a single guard covers all of them and none of them can forget.
@@ -625,6 +631,12 @@ final class Services: ObservableObject {
     /// A pause holds edits exactly as it holds days: held back is a decision,
     /// and a decision that only half took effect would be worse than none.
     func deliverEdits() async {
+        await withTimeToFinish("delivering what an agent asked for", log: log) { [self] in
+            await deliver()
+        }
+    }
+
+    private func deliver() async {
         guard !paused else { return }
         await applyEdits()
         refreshStats()

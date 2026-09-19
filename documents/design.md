@@ -1,13 +1,15 @@
 # Design
 
 Status, 2026-09-19 (evening): the wake was watched end to end and it works, and watching it found
-one real defect, since fixed. An agent's edit reached the service at 20:57:20 and the locked phone
-asked for the queue at 20:57:23, after a hundred seconds of silence; it read the queue, wrote
-nothing, and said in its own log that Health was sealed. What it could not do was finish: the app
-was suspended a moment later, the fetch froze for 224 901 ms, the thirty seconds a wake is allowed
-went by unanswered, and the system stopped delivering wakes to this app altogether — the next push
-was accepted by Apple and never ran. See "What a wake is allowed" below for what that cost and what
-now holds it.
+the same defect twice, each time in a different place. An agent's edit reached the service at
+20:57:20 and the locked phone asked for the queue at 20:57:23, after a hundred seconds of silence;
+it read the queue, wrote nothing, and said in its own log that Health was sealed. What it could not
+do was finish: the app was suspended a moment later, the fetch froze for 224 901 ms, the thirty
+seconds a wake is allowed went by unanswered, and the system stopped delivering wakes to this app
+altogether — the next push was accepted by Apple and never ran. A second wake at 22:18 was frozen
+the same way for 97 794 ms although the first fix was in, because the run that was frozen had been
+started by an unlock rather than by the wake. See "What a wake is allowed" below for what that cost
+and what now holds it.
 
 ## Scope
 
@@ -108,13 +110,25 @@ changed together.
 
 **What a wake is allowed.** Thirty seconds of wall-clock time to do the work and say what came of
 it, and an app that has not answered by then is terminated. Two separate promises follow from that,
-and the app was keeping neither. The first is that the system must not suspend the app while the
-work is in flight: `beginBackgroundTask` asks for that, and it is asked for before the work starts,
-because the request is itself asynchronous and one made late loses the race it was meant to win. The
-second is that the system is answered inside the thirty seconds whatever the work is doing, so the
-woken work carries its own budget of twenty and `WakeAnswer` makes sure exactly one of the three
-endings — finished, out of budget, system reclaiming the time — reports a result and gives the
-promise back.
+and the app was keeping neither.
+
+The second one is the easy one: the system is answered inside the thirty seconds whatever the work
+is doing, so the woken work carries its own budget of twenty and `WakeAnswer` in
+`src/App/Sources/EfferentApp.swift` makes sure exactly one of the three endings — finished, out of
+budget, system reclaiming the time — reports a result.
+
+The first is that the system must not suspend the app while the work is in flight, and the mistake
+worth writing down is *where* that is asked for. Asking around the wake handler's own call looks
+right and is not: four different things start the same work, and when one of them is already running
+the applier turns the next one away in a moment. That is what happened on 2026-09-19 — an unlock had
+started a pass, the wake's request to fetch was refused, the handler reported and handed the promise
+straight back, and the pass the unlock had started ran on unprotected and was frozen for 97 794 ms.
+So the request belongs to the run: `withTimeToFinish` in `src/App/Sources/BorrowedTime.swift` wraps
+`deliverEdits()` and `sendNow()`, asks before the work starts (the request is itself asynchronous,
+and one made late loses the race it was meant to win), and gives it back exactly once — including
+when the system takes it back early, which also cancels the run. The work runs in a task of its own,
+so the wake handler giving up on waiting does not cut the run short: it answers the system and
+leaves the run to finish under its own protection.
 
 Underneath both sits a limit that was missing everywhere, not only on a wake: a network request was
 bounded only by how long it could go without receiving data, and a suspended app receives nothing
@@ -189,9 +203,9 @@ it, so the probe runs with `CLOUDFLARE_API_TOKEN` unset.
 ## What is not verified yet
 
 These are claims the design leans on and nobody has run.
-- That the fix holds. The wake, the lock and the write were all watched on 2026-09-19; what has not
-  been watched is a wake that both keeps its promises and finishes, because the defect was found on
-  the same evening it was built.
+- That the fix holds. The wake, the lock and the write were all watched on 2026-09-19, and the edit
+  did land — but only because a second wake resumed the frozen process. What has not been watched is
+  one wake that both keeps its promises and finishes on its own.
 - How hard Apple throttles in practice. Three an hour is Apple's own number and the service now
   holds to it, but the throttle that was actually seen was the other kind: an app that failed to
   answer one wake stopped being given the next.

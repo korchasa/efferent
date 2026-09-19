@@ -55,17 +55,25 @@ recognisable as a choice rather than a fault.
 
 **DELIVERY-5a — A wake ends inside the time it was given, and says so.** iOS allows 30 seconds of
 wall-clock time from the wake arriving to the app reporting what came of it, and terminates an app
-that has not reported. The app therefore asks not to be suspended while the work runs, carries its
-own budget well inside the 30, and reports exactly once however the work ends — finished, out of
-budget, or the system taking the time back. Cutting a run short costs nothing: the edit stays in the
-queue and the floor finds it.
+that has not reported. The app therefore carries its own budget well inside the 30 and reports
+exactly once however the work ends — finished, out of budget, or the system taking the time back.
+Cutting the *report* short costs nothing: the edit stays in the queue and the floor finds it.
+
+**DELIVERY-5b — A run in flight asks not to be suspended, whoever started it.** Every trigger in
+DELIVERY-9 starts the same work, and any of them can be the one running when a wake arrives. So the
+request belongs to the run, not to the trigger: a delivery or a send pass asks for the time when it
+starts and gives it back when it ends, and a caller that stops waiting leaves the run to finish
+under its own protection.
 
 *Why.* Kept neither promise, this fails in the shape that is hardest to notice. On 2026-09-19 a wake
 arrived, the app began fetching the edit, the system suspended it, and the fetch stayed frozen for
 224 901 ms. Nothing reported, and the system then stopped delivering wakes to the app: the next push
-was accepted by Apple and never ran. The app looked healthy throughout.
+was accepted by Apple and never ran. The app looked healthy throughout. Asking around the wake
+handler's own call was not enough, and the same evening proved it: an unlock had already started the
+work, the handler's request to fetch was turned away in a moment, the handler reported and gave the
+time back, and the run the unlock had started was frozen for another 97 794 ms.
 
-**DELIVERY-5b — The service rings no more often than Apple allows.** Two or three an hour, which is
+**DELIVERY-5c — The service rings no more often than Apple allows.** Two or three an hour, which is
 Apple's own number for a background wake; past it the app is throttled, and what is lost is the
 wakes that matter rather than the ones over the line. The service counts per archive and spends its
 allowance on the earliest edits of the hour, because one wake drains the whole queue.
