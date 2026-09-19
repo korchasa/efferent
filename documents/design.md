@@ -8,8 +8,10 @@ do was finish: the app was suspended a moment later, the fetch froze for 224 901
 seconds a wake is allowed went by unanswered, and the system stopped delivering wakes to this app
 altogether — the next push was accepted by Apple and never ran. A second wake at 22:18 was frozen
 the same way for 97 794 ms although the first fix was in, because the run that was frozen had been
-started by an unlock rather than by the wake. See "What a wake is allowed" below for what that cost
-and what now holds it.
+started by an unlock rather than by the wake. Once the promise was moved onto the run itself, both
+shapes were watched again and both finished: an unlock-started pass read seven days out of Health in
+282 ms where the frozen one had taken 97 794, and a wake on a live phone applied an edit 3 seconds
+after the agent wrote it. See "What a wake is allowed" below.
 
 ## Scope
 
@@ -203,9 +205,9 @@ it, so the probe runs with `CLOUDFLARE_API_TOKEN` unset.
 ## What is not verified yet
 
 These are claims the design leans on and nobody has run.
-- That the fix holds. The wake, the lock and the write were all watched on 2026-09-19, and the edit
-  did land — but only because a second wake resumed the frozen process. What has not been watched is
-  one wake that both keeps its promises and finishes on its own.
+- How it behaves over days rather than over an evening. Every shape of the run was watched on
+  2026-09-19 and each finished on its own, but all of it was watched inside two hours on one phone
+  with a development signature.
 - How hard Apple throttles in practice. Three an hour is Apple's own number and the service now
   holds to it, but the throttle that was actually seen was the other kind: an app that failed to
   answer one wake stopped being given the next.
