@@ -489,6 +489,9 @@ certificate, and the archive path above is the whole of the agreement with whate
 - `protocol/` — bucket, day and edit names, the request frame, signing, sealed envelopes, edits.
 - `server/` — the bucket service, a Cloudflare Worker over R2.
 - `documents/server-costs.md` — the measured marginal storage and operation cost per user.
+- `documents/requirements.md` — what the app must do, subsystem by subsystem, with an
+  identifier per requirement.
+- `documents/design.md` — how it is arranged to meet them.
 - `reader/efferent_hpke.py` — the source `setup_guide` hands an agent: HPKE, the day layouts and
   enough of the archive to fetch and open one. Every other reading module builds on it.
 - `reader/efferent/archive.py` — where days come from and where edits go: the keys, the service, the
