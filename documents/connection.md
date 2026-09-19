@@ -199,18 +199,20 @@ same second. All three readers unpack it into the NDJSON they always produced, s
 layer changed. Layout 1, one JSON object per line with the HealthKit record id on it, is still read
 while the archive is replaced.
 
-CryptoKit implements the sender on iOS. The optional TypeScript development reader uses `hpke-js`.
-The exact Python source returned by `setup_guide` implements the suite itself on top of the PyCA
-`cryptography` library, its only dependency, and its `--self-test` seals and opens the vectors RFC
-9180 publishes for this suite in appendix A.2.1. It used PyHPKE until 2026-09-19: a package of one
-author with no independent audit, which an agent handed the guide was being told to install and
-trust with the reading key. The three implementations are tested against each other. `hpke-js`
-reports passing the RFC vectors but has no formal independent audit; it is a development reader
-nobody is handed and never expands what Cloudflare can see.
+CryptoKit implements the sender on iOS. The exact Python source returned by `setup_guide`
+implements the suite itself on top of the PyCA `cryptography` library, its only dependency, and its
+`--self-test` seals and opens the vectors RFC 9180 publishes for this suite in appendix A.2.1. It
+used PyHPKE until 2026-09-19: a package of one author with no independent audit, which an agent
+handed the guide was being told to install and trust with the reading key.
 
-The TypeScript reader dispatches on the first byte. It opens both version 1 and version 2, but every
-new seal is version 2. The Python reference intentionally opens only version 2 and fails clearly on
-a legacy day rather than silently attempting another construction.
+There are two implementations and they are tested against each other by `deno task interop`, which
+has Swift seal and sign a real request for the Python reader to open and verify. A TypeScript reader
+was a third until 2026-09-19; it did the same job as the guide's script on top of `hpke-js`, and a
+protocol change had to be made in three places instead of two, so it is gone.
+
+The guide's script opens version 2 alone and fails clearly on a legacy day rather than silently
+attempting another construction. The installed reader in `reader/` dispatches on the first byte and
+opens both, because the archive it reads is replaced a day at a time. Every new seal is version 2.
 
 ## Migration state
 
@@ -222,8 +224,8 @@ connection. Adopting that legacy destination records its bucket without changing
 The first app build containing HPKE records the sealing version beside the archive ledger. When it
 finds a ledger created by version 1, it clears the plaintext digests and requeues every known day in
 one transaction. HealthKit anchors, sample-to-day rows, installation day and backfill progress stay
-intact. The phone then replaces days with version 2 newest first; the local TypeScript reader can
-read a mixed archive throughout this process. The reset is stored before sending and therefore runs
+intact. The phone then replaces days with version 2 newest first; the installed reader can read a
+mixed archive throughout this process. The reset is stored before sending and therefore runs
 only once even if the migration is interrupted.
 
 The owner can keep the existing archive, or explicitly disconnect and create a new phone-owned one.

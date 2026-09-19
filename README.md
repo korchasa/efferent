@@ -260,9 +260,11 @@ bucket, fetches only ciphertext using the bucket id and date, and emits local ND
 analyses those records with local code and never sends plaintext or the reading key to a remote
 tool.
 
-The TypeScript reader and shaped local health tools remain in this repository for development and
-for people who deliberately choose that interface. They are not a dependency of the public
-connection procedure.
+That script is not the only copy of itself. `reader/` holds the same reading side as an installable
+Python package — the command line tool, the MCP server, and the analysis behind both — and the
+`setup_guide` script is the part of it an agent needs to fetch and open a day. There is one reading
+implementation and it is this one; a second in another language would be a second place for a
+protocol change to be half-made.
 
 ## Letting an agent write
 
@@ -366,9 +368,10 @@ A day on the wire is the raw-deflate-compressed columnar object above, inside an
 base-mode HPKE envelope —
 `[version 2][32-byte encapsulated key][ciphertext and tag]` — with the bucket name and the date bound
 into the authenticated data. The suite is DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 and
-ChaCha20-Poly1305. CryptoKit seals on the phone and `hpke-js` opens in the local TypeScript reader.
-The reader retains the custom X25519/HKDF/AES-GCM version 1 decoder while stored days are replaced;
-new writes never use it.
+ChaCha20-Poly1305. CryptoKit seals on the phone and the Python reader opens, implementing HPKE
+itself so that PyCA `cryptography` is its only dependency — a reader an agent is told to install
+must name nothing nobody has audited. It retains the custom X25519/HKDF/AES-GCM version 1 decoder
+while stored days are replaced; new writes never use it.
 
 Days travel a month at a time, because the request is what costs rather than what is in it: a day is
 a few kilobytes and the first export is thousands of them, so a request each would be a phone
@@ -421,9 +424,9 @@ it runs on the machine of whoever is answering and is never deployed.
 deno task check
 ```
 
-- `check` — the secret scan, generated Cloudflare types, lint and types on the scripts, protocol and
-  reading-tool tests, then a simulator build.
-- `test` — protocol and reading-tool tests, then unit tests on any available iPhone simulator.
+- `check` — the secret scan, generated Cloudflare types, lint and types on the scripts, the protocol
+  and service tests, the Python reader's own format, lint and tests, then a simulator build.
+- `test` — protocol and service tests, then unit tests on any available iPhone simulator.
 - `dist` — unsigned App Store archive at `build/Efferent.xcarchive`.
 - `fmt` — format task scripts, and Swift if swiftformat is installed.
 - `secrets` — scan the working tree and the whole history for committed keys (`brew install
@@ -437,11 +440,13 @@ deno task check
   Cloudflare.
 - `ceilings` — how much of the service-wide ceiling has been handed over, read straight out of R2.
   Exits non-zero past the mark (`--warn <percent>`, 80 by default), so a scheduler can act on it.
-- `interop` — check that Swift and TypeScript agree on request bytes, HPKE and the phone handoff
-  key, and that the phone opens and verifies an edit the reader sealed and signed.
-- `interop:python` — with `cryptography` installed in the selected Python, prove that the exact
-  source returned by `setup_guide` passes its RFC 9180 self-test, opens a TypeScript-sealed day and
-  seals and signs an edit TypeScript opens and verifies. Set `EFFERENT_PYTHON` to that interpreter.
+- `interop` — check that Swift and Python agree on request bytes, HPKE, the day's own layout and
+  the phone handoff key, and that the phone opens and verifies an edit the reader sealed and signed.
+  It runs the RFC 9180 self-test first, on the exact source `setup_guide` returns.
+- `reader:setup` — make `reader/.venv` from Python 3.13 and install the one run-time dependency and
+  the formatter. Every task that runs the reader needs it; `EFFERENT_PYTHON` points at another
+  interpreter instead.
+- `test:reader` — the Python reader's own format check, lint and tests, without the Swift half.
 - `efferent` — the local reading side: `connect --handoff <file>`, `ask`, `sync`, `status`, `query`,
   `write --file <items.json>` and `edits`, plus `keygen`, `send` and `read` for protocol
   development. `connect --handoff -` reads the handoff from standard input without putting the key
@@ -484,7 +489,12 @@ certificate, and the archive path above is the whole of the agreement with whate
 - `protocol/` — bucket, day and edit names, the request frame, signing, sealed envelopes, edits.
 - `server/` — the bucket service, a Cloudflare Worker over R2.
 - `documents/server-costs.md` — the measured marginal storage and operation cost per user.
-- `tools/archive.ts` — where days come from and where edits go: the keys, the service, the mirror.
-- `tools/analysis.ts` — days turned into answers, and every correction that turning needs.
-- `tools/efferent.ts` — the reading side as a command line tool.
-- `tools/mcp.ts` — the reading side as an MCP server.
+- `reader/efferent_hpke.py` — the source `setup_guide` hands an agent: HPKE, the day layouts and
+  enough of the archive to fetch and open one. Every other reading module builds on it.
+- `reader/efferent/archive.py` — where days come from and where edits go: the keys, the service, the
+  mirror.
+- `reader/efferent/analysis.py` — days turned into answers, and every correction that turning needs.
+- `reader/efferent/cli.py` — the reading side as a command line tool.
+- `reader/efferent/mcp.py` — the reading side as an MCP server.
+- `reader/efferent/interop.py` — the reading half of `deno task interop`, and the fixture the Swift
+  half opens.

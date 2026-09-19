@@ -131,3 +131,28 @@ Phases, each a commit with `deno task check` green:
 ## Progress
 
 - 2026-09-19: scoped; P1 started.
+- 2026-09-19: P1 done (`3c42bac`). The guide script is `reader/efferent_hpke.py`, `deno task
+  reference` regenerates the copy the Worker serves and a test fails on drift between them.
+  `reader:setup`, `test:reader` and `ruff` are in place.
+- 2026-09-19: P2 done (`0dda9d6`). `archive.py`, `connection.py`, `analysis.py`, `cli.py` and
+  `phone.py`, with the ported tests. `phone.py` packs a day, frames a batch and signs an upload, so
+  `send` still stands in for a phone.
+- 2026-09-19: P3 done (`dee0f6e`). `mcp.py` serves the nine tools over stdio. The two servers were
+  run side by side and their `initialize` and `tools/list` answers diffed field by field until
+  identical — one tool description had lost a line break, which is what that comparison caught.
+  A red probe found two holes first: the edit-tag assertions called the function under test, so
+  they agreed with themselves, and nothing covered `note()` at all. Both are closed; breaking
+  either deliberately now fails exactly two tests.
+- 2026-09-19: P4 done (`fdb9124`). `interop.py` is the reading half and the fixture source;
+  `scripts/interop.ts` only runs the Swift test and carries the markers. The TypeScript reader,
+  `protocol/{sealedbox,sealedbox-v1,day}.ts`, the `@hpke/*` dependencies and
+  `scripts/python-interop.ts` are gone. `protocol/framing.ts` stays — `edits.ts` compresses with it
+  and the service imports that. `scripts/reader-run.ts` keeps `mcp` and `efferent` as `deno task`s.
+  Reversing series order in `pack_day` made the interop check fail with "Swift and Python packed
+  2026-08-07 differently", so the byte-equality claim bites. The secret scan needed the fixture
+  allowlist to name both the new path and the old one, because it reads history too, and needed the
+  reader's `__pycache__`, `.venv` and `.interop.json` exempted the way `build/` already is.
+- 2026-09-19: P5, docs done. `README.md`, `AGENTS.md` and `documents/connection.md` describe one
+  Python reader. Still open: the owner's own MCP registrations (`~/.codex/config.toml:143` and
+  `~/.claude.json` still run `deno run -A tools/mcp.ts`, which no longer exists) and the `APPS.md`
+  row in the factory.

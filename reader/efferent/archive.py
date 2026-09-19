@@ -58,8 +58,8 @@ def resolve(path: Path) -> str:
 
 # MARK: - Keys, as they are stored
 
-# The stored reader key is bare base64url PKCS8, the way the TypeScript reader
-# wrote it; the phone handoff carries raw halves. Both are one DER prefix apart.
+# The stored reader key is bare base64url PKCS8; the phone handoff carries raw
+# halves. Both are one DER prefix apart.
 
 
 def pkcs8(private: X25519PrivateKey | Ed25519PrivateKey) -> str:

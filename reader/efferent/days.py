@@ -47,7 +47,9 @@ def today() -> str:
 
 
 def now_iso() -> str:
-    """The moment, the way the TypeScript reader wrote it down: milliseconds and a Z."""
+    """The moment in the shape the reader's own files already carry: milliseconds
+    and a Z. Changing it would make a stamp written yesterday sort against one
+    written today."""
     return (
         datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.")
         + f"{datetime.now(timezone.utc).microsecond // 1000:03d}Z"
