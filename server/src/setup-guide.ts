@@ -31,9 +31,11 @@ Local reading procedure:
 1. Create a private Python virtual environment and install \`pyhpke==0.6.3\`.
 2. Save the code below as \`efferent_hpke.py\`. Save the complete three-field handoff as a separate
    owner-only file and set both files to mode 600 on POSIX systems.
-3. Use \`archive_status\` and \`list_sealed_days\` to choose the dates needed for the question. Run
-   \`python efferent_hpke.py --handoff <file> --day YYYY-MM-DD\` locally for each required date.
-   Keep its NDJSON output local and analyse it with local code.
+3. Use \`archive_status\` and \`list_sealed_days\` to choose the dates needed for the question. When no
+   MCP client is registered, call them the way the phone's instruction calls \`setup_guide\`: one
+   JSON-RPC \`tools/call\` POST per call to the same address, with the same two headers and the tool's
+   arguments in \`params.arguments\`. Run \`python efferent_hpke.py --handoff <file> --day YYYY-MM-DD\`
+   locally for each required date. Keep its NDJSON output local and analyse it with local code.
 4. Delete the temporary handoff file when the local session no longer needs it.
 
 No Efferent repository, Deno installation, local MCP server or gateway restart is required. The

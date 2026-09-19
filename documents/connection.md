@@ -81,8 +81,7 @@ The phone shares four fields as text:
 
 ```text
 Instruction:
-Connect the supplied Efferent MCP and call setup_guide first. Keep the reading key and the editor
-key local and never pass either to a remote tool.
+Connect the supplied Efferent MCP and call setup_guide first. The MCP is a remote server over streamable HTTP with no authentication: register the address below exactly as it is, with no authorization header and no key (Claude Code: claude mcp add --transport http efferent <address>; Codex: codex mcp add efferent --url <address>). If your client cannot add a server in this session, every tool answers one plain HTTPS request instead: POST {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"setup_guide","arguments":{}}} to the address with the headers Content-Type: application/json and Accept: application/json, text/event-stream, and read the guide from the data line of the reply. Keep the reading key and the editor key local and never pass either to a remote tool.
 
 MCP:
 https://<mcp-host>/mcp/b/<bucket-id>
@@ -116,6 +115,16 @@ The setup guide is ordinary MCP tool output. `setup_guide` takes no arguments, s
 cannot be passed to it, and returns the current runnable Python reference. There is no separate
 prompt URL and no prompt-version compatibility surface. The guide does not require a repository
 checkout, Deno, a local MCP server or a gateway restart.
+
+The MCP endpoint takes no authentication. The bucket id in the address is all it needs, and neither
+key ever reaches it. The instruction is one line, because every importer reads only the first line
+under `Instruction:`, and it says all of this itself: it names the transport (streamable HTTP), says
+that no authorization header and no key go into the client configuration, shows how Claude Code and
+Codex register such a server, and gives the one JSON-RPC `tools/call` request that fetches the guide
+when the client cannot add a server in the running session. Every remote tool answers that same
+request shape. The line grew on 2026-09-19 after an agent that had been told only to "connect" the MCP
+stopped and asked which authorization header the server expects — a header the server has never
+looked at.
 
 ## Responsibilities
 
