@@ -152,9 +152,10 @@ looked at.
 - Keep the existing upload signature boundary, and refuse an edit that is not signed by the
   registered editor key.
 - Hold sealed edits until the phone answers for them, hand each back only to the phone's writer
-  key, and replace it with the outcome the phone reports. Accept a second outcome for an edit whose
-  ciphertext is already gone, because an item the owner has yet to decide about is answered once
-  while it waits and once when they answer.
+  key, and replace it with the outcome the phone reports. A second outcome for an edit whose
+  ciphertext is already gone is still accepted: an older phone answered once while an item waited
+  for its owner and once when they decided, and nothing on the service needed to change when the
+  phone stopped asking.
 - Never accept a reading key or an editor key through configuration, authorization or tool
   arguments.
 - Never return plaintext or answer a question about the contents of a day or an edit.
