@@ -119,14 +119,23 @@ refused the wake should see slow delivery as their own choice.
 **The notice question moves earlier.** Connecting an agent asks about notices. Today the question
 waits until an agent has already written something, which guarantees the first edit is silent.
 
+## What the Worker reaching APNs cost to prove
+
+A Worker running on Cloudflare's edge reaches `api.push.apple.com`. Proved on 2026-09-19 without any
+key at all: an unsigned POST to `/3/device/<64 zeroes>` was answered `403 MissingProviderToken` in
+728 ms, with an `apns-id` header. An answer of that shape can only come from APNs itself, so HTTP/2,
+TLS and the route all work and the provider token is the only thing missing. The probe was a
+throwaway script run through `wrangler dev --remote`, which uploads to the edge and keeps no
+published address behind it.
+
+One trap came with it: the factory's Cloudflare API token cannot open a remote preview session — the
+account call for `subdomain/edge-preview` answers "No access to the specified resource", which reads
+like the script being wrong rather than the token being narrow. Wrangler's own OAuth session opens
+it, so the probe runs with `CLOUDFLARE_API_TOKEN` unset.
+
 ## What is not verified yet
 
 These are claims the design leans on and nobody has run.
-
-- Whether a Cloudflare Worker can reach APNs at all. APNs wants HTTP/2 and a token signed ES256;
-  the signing is the same shape as the App Store Connect key this factory already uses, the
-  transport is the part to prove. If it cannot, the wake needs a sender that is not the Worker, and
-  that is a larger change than it looks.
 - How hard Apple throttles silent pushes for this traffic. The shape here is forgiving — a burst of
   edits coalesces into one fetch that drains the queue — but the budget is real and undocumented.
 - Listing the queue on a locked phone. The two protection classes say it works; that is not the same
