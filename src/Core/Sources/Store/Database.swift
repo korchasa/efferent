@@ -241,6 +241,18 @@ enum MetaKey: String {
     /// anything new, because totals are not delivered faster than hourly. This
     /// is what stops the app doing that work twice for nothing.
     case lastRecentMarkAt = "recent.markedAt"
+    /// When the edit queue was last listed without being refused, in seconds
+    /// since 1970.
+    ///
+    /// The screen needs it for the same reason it needs `lastUploadAt`: an
+    /// agent that sent nothing and a phone that never looked are the same empty
+    /// strip, and only one of them is working.
+    case lastEditCheckAt = "edits.lastCheckAt"
+    /// Edits the service is holding that this phone has listed and not yet
+    /// written into Health — because the screen was locked when it looked.
+    /// Zero once a run has drained the queue, which is what makes it safe to
+    /// show as a count of what is waiting rather than of what ever arrived.
+    case editsWaiting = "edits.waiting"
     /// The sealed-envelope version represented by every non-null day digest.
     /// Changing it invalidates those claims and requeues the known archive.
     case sealingVersion = "sealing.version"

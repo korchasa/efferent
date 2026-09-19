@@ -496,6 +496,11 @@ final class Services: ObservableObject {
             asksWhileHeldBack += 1
             return
         }
+        // Edits first, days second: what an edit changes is a day that then
+        // goes up in the same pass. Above the lock guard below, because a
+        // locked phone can still list the queue and say what is coming — only
+        // the writing waits for the unlock.
+        await applyEdits()
         // Every day in a pass is built out of Health, and Health is sealed
         // while the screen is locked. Going in anyway marks a week, reads the
         // ledger and then waits on Health until it refuses — 70 seconds of a
@@ -510,10 +515,6 @@ final class Services: ObservableObject {
             lastError = "No archive has been created yet."
             return
         }
-        // Edits first, days second: what an edit changes is a day that then
-        // goes up in the same pass. The pause above holds edits back exactly as
-        // it holds days back.
-        await applyEdits()
         do {
             let started = Date()
             let outcome = try await uploader.send()
@@ -538,6 +539,22 @@ final class Services: ObservableObject {
         refreshStats()
     }
 
+    /// Go and see what the agent asked for, on its own.
+    ///
+    /// The one entry point for the inbound direction. It reads no Health and
+    /// sends no days, so anything may call it as often as a person's patience
+    /// asks for — the screen's own ticker does, every few seconds, and a pass
+    /// calls it first. Serialising overlapping callers is the applier's job and
+    /// costs nothing here.
+    ///
+    /// A pause holds edits exactly as it holds days: held back is a decision,
+    /// and a decision that only half took effect would be worse than none.
+    func deliverEdits() async {
+        guard !paused else { return }
+        await applyEdits()
+        refreshStats()
+    }
+
     /// Write what the agent asked for into Health and owe the days it changed.
     ///
     /// A failure is written down and does not stop the send behind it: the
@@ -547,7 +564,16 @@ final class Services: ObservableObject {
         await ensureEditorRegistered()
         guard let applier = applierIfPaired() else { return }
         do {
-            let outcome = try await applier.run()
+            // Read here, where the answer lives, and handed in: a locked phone
+            // still lists the queue, and only the writing waits for the unlock.
+            let outcome = try await applier.run(
+                canWrite: UIApplication.shared.isProtectedDataAvailable
+            )
+            if case .busy = outcome { return }
+            // Every other outcome means the service answered, so the queue was
+            // reached. That is the fact the screen needs: an agent who sent
+            // nothing and a phone that never looked are the same empty strip.
+            try store.recordEditCheck(waiting: Self.waiting(in: outcome))
             guard case let .applied(applied) = outcome else { return }
             if !applied.days.isEmpty {
                 let marked = try store.markDirty(applied.days)
@@ -565,6 +591,14 @@ final class Services: ObservableObject {
         } catch {
             log.error("applying edits failed: \(String(describing: error))")
         }
+    }
+
+    /// What a run leaves behind for the next unlock. Only a locked run leaves
+    /// anything: every other outcome either emptied the queue or never reached
+    /// it, and a stale count is worse than none.
+    private static func waiting(in outcome: Applier.Outcome) -> Int {
+        if case let .locked(waiting) = outcome { return waiting }
+        return 0
     }
 
     // MARK: - What an agent changed

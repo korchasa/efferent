@@ -87,6 +87,21 @@ struct HomeView: View {
                 try? await Task.sleep(for: .seconds(2))
             }
         }
+        .task {
+            // Somebody is looking at this screen, so the phone asks the archive
+            // what the agent has sent. Nothing else on an open phone does: the
+            // only trigger that fires by itself is Health getting new data, and
+            // an edit makes none — which is why an app left open on a still
+            // phone used to learn nothing at all.
+            //
+            // One listing request, no Health and no days, and cancelled with
+            // the view. 15 seconds against a promise of 20 leaves the request
+            // itself room to finish.
+            while !Task.isCancelled {
+                await services.deliverEdits()
+                try? await Task.sleep(for: .seconds(15))
+            }
+        }
         .sheet(isPresented: $readingLog) { LogView() }
         .sheet(isPresented: $readingEdits) { EditsView() }
         .sheet(isPresented: $connecting) { connectSheet }

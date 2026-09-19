@@ -33,6 +33,12 @@ struct EfferentApp: App {
                 // Second, and only ever after the first: two system sheets at
                 // once is one question nobody reads.
                 await Services.shared.askForNoticesIfNeeded()
+                // Coming to the front is a trigger of its own, said out loud.
+                // It looked like one before this line existed, because a resume
+                // is when Health hands over what it held back — which made the
+                // inbound direction work by coincidence and fail on a phone
+                // lying still with the app open.
+                await Services.shared.deliverEdits()
             }
         }
     }
@@ -82,6 +88,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             }
             uploader.backgroundEventsFinished = completionHandler
             uploader.adoptBackgroundSession()
+            // Awake, with a network, for a reason of the system's own choosing.
+            // A launch that does not ask makes the person wait for the next one.
+            await Services.shared.deliverEdits()
         }
     }
 
@@ -108,6 +117,19 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 
     func applicationWillEnterForeground(_: UIApplication) {
         log.debug("the app came back to the front")
+    }
+
+    /// The screen was unlocked, so Health will take a write again.
+    ///
+    /// This is the one moment edits that arrived on a locked phone can finally
+    /// land, and without it they would wait for whatever woke the app next —
+    /// which on a quiet phone is the catch-up task, hours away.
+    func applicationProtectedDataDidBecomeAvailable(_: UIApplication) {
+        log.debug("the phone was unlocked, so Health will take a write again")
+        Task { @MainActor in
+            await Services.shared.deliverEdits()
+            await Services.shared.sendNow()
+        }
     }
 
     /// A safety net under background delivery, not a schedule.

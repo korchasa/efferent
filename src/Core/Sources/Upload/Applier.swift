@@ -66,6 +66,12 @@ public final class Applier {
     public enum Outcome: Equatable, Sendable {
         case nothingWaiting
         case applied(Applied)
+        /// The queue was listed and nothing was written, because Health was
+        /// sealed by the lock screen. The count is what is waiting for the next
+        /// unlock, and it is the whole point of listing anyway: a phone that
+        /// stopped before looking cannot tell the person that anything is
+        /// coming.
+        case locked(waiting: Int)
         /// Another run holds the pass; this one did nothing.
         case busy
         /// Some writable type has never been asked about. The system sheet has
@@ -164,7 +170,10 @@ public final class Applier {
 
     // MARK: - A run
 
-    public func run() async throws -> Outcome {
+    /// - Parameter canWrite: whether Health will take a write at this moment.
+    ///   Read by the caller, which is on the main actor where the answer lives,
+    ///   rather than asked for here from whatever thread a run happens on.
+    public func run(canWrite: Bool = true) async throws -> Outcome {
         guard claimPass() else { return .busy }
         defer { releasePass() }
 
@@ -174,6 +183,16 @@ public final class Applier {
 
         let waiting = try await pending()
         guard !waiting.isEmpty else { return .nothingWaiting }
+
+        // Listing is done before this and writing after it, on purpose. A
+        // locked phone can reach its keys and its ledger — they are stored to
+        // survive the lock — and only Health is sealed, so the one thing a lock
+        // takes away is the writing. Stopping earlier would mean the person
+        // could not be told that anything was on its way.
+        guard canWrite else {
+            log.debug("\(waiting.count) edits are waiting; Health is sealed until the phone is unlocked")
+            return .locked(waiting: waiting.count)
+        }
 
         var applied = Applied()
         let started = now()

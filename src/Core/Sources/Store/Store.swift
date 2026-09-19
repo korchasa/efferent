@@ -31,15 +31,30 @@ public struct Stats: Equatable, Sendable {
     public let lastUploadAt: Date?
     /// How far back the first export has walked, if it has started.
     public let backfillReached: String?
+    /// When the edit queue was last listed without being refused. `nil` before
+    /// it ever was — a state the screen says differently, because a phone that
+    /// has never looked and an agent that has never written look alike.
+    public let lastEditCheckAt: Date?
+    /// Edits listed and not yet written into Health, which happens when the
+    /// screen was locked at the moment of the listing.
+    public let editsWaiting: Int
 
     public init(
-        pendingDays: Int, stuckDays: Int, sentDays: Int, lastUploadAt: Date?, backfillReached: String?
+        pendingDays: Int,
+        stuckDays: Int,
+        sentDays: Int,
+        lastUploadAt: Date?,
+        backfillReached: String?,
+        lastEditCheckAt: Date? = nil,
+        editsWaiting: Int = 0
     ) {
         self.pendingDays = pendingDays
         self.stuckDays = stuckDays
         self.sentDays = sentDays
         self.lastUploadAt = lastUploadAt
         self.backfillReached = backfillReached
+        self.lastEditCheckAt = lastEditCheckAt
+        self.editsWaiting = editsWaiting
     }
 }
 
@@ -586,8 +601,31 @@ public final class Store {
                 ) ?? 0,
                 lastUploadAt: Self.int(db, MetaKey.lastUploadAt.rawValue)
                     .map { Date(timeIntervalSince1970: TimeInterval($0)) },
-                backfillReached: Self.string(db, MetaKey.backfillReached.rawValue)
+                backfillReached: Self.string(db, MetaKey.backfillReached.rawValue),
+                lastEditCheckAt: Self.int(db, MetaKey.lastEditCheckAt.rawValue)
+                    .map { Date(timeIntervalSince1970: TimeInterval($0)) },
+                editsWaiting: Int(Self.int(db, MetaKey.editsWaiting.rawValue) ?? 0)
             )
+        }
+    }
+
+    /// When the edit queue was last listed without being refused, or nil if it
+    /// never has been.
+    public func lastEditCheckAt() throws -> Date? {
+        try dbQueue.read { db in
+            try Self.int(db, MetaKey.lastEditCheckAt.rawValue)
+                .map { Date(timeIntervalSince1970: TimeInterval($0)) }
+        }
+    }
+
+    /// One listing of the queue: when it happened, and how many edits it left
+    /// behind unwritten. Written together because they are one fact — a count
+    /// without the moment it was taken says nothing about whether it is still
+    /// true.
+    public func recordEditCheck(waiting: Int, at moment: Date = Date()) throws {
+        try dbQueue.write { db in
+            try Self.setInt(db, MetaKey.lastEditCheckAt.rawValue, Int64(moment.timeIntervalSince1970))
+            try Self.setInt(db, MetaKey.editsWaiting.rawValue, Int64(waiting))
         }
     }
 
