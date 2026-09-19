@@ -7,113 +7,135 @@ time; today it covers the delivery of an agent's edits and the notices about the
 this — what the app collects, the wire format, who can read the archive — is `README.md`, and the
 boundary with the service is [`connection.md`](connection.md).
 
-## Two chains, and only one of them is visible
+## The archive has two directions, and they are started by different things
 
-An agent's edit reaches the person over two chains, and they are often confused for each other.
+Outbound is the app's original job: Health gets new data, the phone owes a day, the day goes up. Its
+trigger belongs to Health, and that is right — Health is what changed.
 
-- **Delivery** puts the edit into Health. `Services.applyEdits()` calls `Applier.run()`, which lists
-  the archive's `e/` prefix, checks each edit's signature, opens it with the reading key, writes its
-  items, marks the days that changed, and answers the service.
-- **Telling** puts it in front of the person. `Notices.tell` writes one local notification, and the
-  strip on the everyday screen counts unseen rows of the edit journal.
+Inbound is an agent asking the phone to write something. Its trigger belongs to the agent, because
+the agent is what changed. Today it has no trigger of its own: `applyEdits()` sits at the head of
+`sendNow()`, so the inbound direction rides the outbound one and fires when Health has something to
+say. An edit produces nothing in Health, so the inbound direction fires by coincidence — most
+visibly, an app left open on a still phone never fetches, while switching away and back appears to
+work, because the resume is what makes Health hand over what accumulated.
 
-Telling depends entirely on delivery: until a delivery has happened, the journal is empty and there
-is nothing to say. Every complaint that starts "the app did not tell me" is a delivery question
-first.
+The whole design follows from putting that back the right way round: **the agent's write wakes the
+phone, and everything else is a floor under that wake.**
+
+## Three layers, and each has a different job
+
+- **The wake is the trigger.** The service takes an edit and rings the phone. This is what makes
+  delivery work in the ordinary case, including with the app closed.
+- **The floor is the guarantee.** A set of enumerated pull triggers that fetch without a wake.
+  Apple does not promise to deliver a background wake, and several ordinary states swallow one, so
+  the floor is what turns a lost wake into lost time instead of a lost edit.
+- **The queue is the recovery.** An edit stays in `e/` until the phone answers it. Nothing a missed
+  wake or an interrupted run can do loses an edit; the worst case is that it is applied later, and
+  applying it twice is safe because a sample carries the agent's sync identifier and a version that
+  only climbs.
+
+Reading them as alternatives is the mistake this document exists to prevent. Push without the floor
+is a channel whose delivery nobody promises; the floor without push is what the app has today.
 
 ## The states the app can be in
 
-**Process states.**
+**Process states, and what reaches each.**
 
-- *Never launched since installation.* The Health observer is not registered and the catch-up task
-  is not asked for — both happen in `didFinishLaunchingWithOptions`. Nothing arrives.
-- *Swiped away by the person.* iOS stops waking the app with Health deliveries and stops running its
-  background task until the next launch by hand. Nothing arrives, and the app is not told.
-- *Unloaded by the system.* A Health delivery or the catch-up task starts the process again in the
-  background, and it behaves like any background launch.
-- *Suspended in the background.* Health deliveries queue; resuming the process runs the handler.
-- *Running in the background with no screen.* Three ways in: a Health delivery, the catch-up
-  `BGProcessingTask`, and a relaunch to finish transfers started earlier.
-- *In front but not active* — app switcher, notification shade, an incoming call, a system sheet.
-  No trigger of its own.
-- *In front and active.* The everyday screen runs a 2-second loop, which reads the local database
-  and nothing else.
+- *Never launched since installation.* No observer, no catch-up task, no registration with the
+  service — all of them happen on first launch. Nothing reaches it, and nothing can.
+- *Swiped away by the person.* iOS delivers no background wake and runs no background task until the
+  next launch by hand. Neither layer reaches it. STATE-3 is how the person finds out.
+- *Unloaded by the system.* A wake starts the process in the background; so do a Health delivery and
+  the catch-up task.
+- *Suspended in the background.* A wake resumes it. Health deliveries queued meanwhile arrive too.
+- *Running in the background with no screen.* Four ways in: a wake, a Health delivery, the catch-up
+  task, and a relaunch to finish transfers started earlier. All four end in a delivery.
+- *In front but not active* — app switcher, notification shade, an incoming call, a system sheet. A
+  wake still arrives; the screen's own ticker does not run.
+- *In front and active.* The wake arrives, and the ticker fetches every 15 seconds regardless.
 
 **Conditions that stop a run whatever the process is doing.**
 
-- *The phone is locked.* Health is sealed, so a pass returns before it starts. Keys are stored
-  `AfterFirstUnlock` and the day database is `completeUntilFirstUserAuthentication`, so both are
-  reachable — the lock stops writing to Health, not reading the queue.
-- *Sending is paused.* One guard at the head of `sendNow` holds days and edits alike.
-- *No archive, or no reading key.* `applierIfPaired()` returns nothing and the run ends silently.
-- *Writing to Health has never been answered.* `Applier.run()` returns `.notAsked` without reading
-  the queue. The system's question can only be put by a launch with a screen.
-- *Background refresh off, or low power mode.* The catch-up task does not run. The app writes this
-  to the log at launch and shows nothing.
+- *The phone is locked.* Health is sealed. The queue is still listed and counted — keys are
+  `AfterFirstUnlock`, the day database is `completeUntilFirstUserAuthentication` — and the items go
+  in at the next unlock, which is itself a trigger.
+- *Sending is paused.* One guard at the head of the pass holds days and edits alike.
+- *No archive, or no reading key.* There is nothing to fetch from and nothing to open with.
+- *Writing to Health has never been answered.* The run returns `.notAsked` without reading the
+  queue; only a launch with a screen can put that question.
+- *Background refresh off, low power mode, or no network.* The wake and the catch-up task both stop.
+  The ticker and the foreground triggers still work, which is why the floor is not optional.
 
-## How it works today
+## How the wake is arranged
 
-`applyEdits()` runs at the head of `sendNow()`, and `sendNow()` has five callers: Health's new-data
-observer, the catch-up task, releasing a pause, undoing an edit, and queueing history. Four of those
-are the person's own doing. The fifth — the Health observer — is the only one that fires by itself,
-and it fires when Health has new data, which an agent's edit never produces.
+**The phone registers where it can be reached.** One more signed registration beside the editor key:
+`PUT /<bucket>/device`, proved with the device key over the same canonical request every other write
+uses, holding the APNs device token. The service keeps it under the bucket, like the editor key.
+Re-registering replaces it; disconnecting deletes it in the same act that forgets the reading key.
 
-That is why the app looks as it does from outside: switching into the app appears to fetch edits,
-because the resume is what makes Health hand over what accumulated while the screen was elsewhere.
-An app left open on a still phone gets no Health delivery, so it fetches nothing. The 2-second loop
-on the screen keeps redrawing the same numbers, which makes the app look alive while nothing is
-being asked.
+**The service rings the phone when it takes an edit.** `postEdit` in `server/src/index.ts` already
+stores the sealed edit and answers the agent. After the store it fires the wake, outside the
+response path, so an agent's write never waits on Apple and never fails because Apple did.
 
-## How it is arranged instead
+**The wake is silent and empty.** A background push — `content-available`, no alert, no body, no
+count. The phone wakes, runs the same delivery every other trigger runs, and puts up its own notice
+from what it actually wrote. An alert push would be more reliable, because Apple throttles silent
+ones; it would also mean the service composing a sentence about the person's health that it cannot
+read, which NOTICE-2 forbids. Reliability is bought from the floor instead.
+
+**What this adds to what the service learns.** One line, and it goes in `README.md` and in the
+store listing's privacy copy: the service can ring this phone, and it knows when it did. Nothing
+about the edit, the day, the metric or the outcome travels with it. That is the price of the
+inbound direction working while the app is closed, and it is named rather than glossed over.
+
+## How the floor is arranged
 
 **One entry point for delivery, separate from sending.** `deliverEdits()` does what `applyEdits()`
 does and is callable on its own, without reading Health and without sending days. `sendNow()` keeps
-calling it first, so a full pass is unchanged. Everything below calls the new entry point.
-Serialisation stays where it already is, in `Applier.claimPass()` — that is DELIVERY-6 for every
-caller at once.
+calling it first, so a full pass is unchanged. Every trigger below calls the entry point, and
+serialisation stays in `Applier.claimPass()` — that is DELIVERY-11 for all of them at once.
 
-**A ticker while the screen is in front.** The everyday screen's existing `.task` loop gains a
-second cadence: the local statistics every 2 seconds as now, and a delivery every 15 seconds. It is
-cancelled with the view, so an app in the background costs nothing. 15 seconds against the
-requirement's ceiling of 20 leaves room for the listing itself. This is DELIVERY-1.
+**A ticker while the screen is in front.** The everyday screen's `.task` loop gains a second
+cadence: local statistics every 2 seconds as now, a delivery every 15 seconds. Cancelled with the
+view, so a backgrounded app costs nothing. 15 against the ceiling of 20 leaves room for the listing.
 
 **The scene's own trigger.** The `scenePhase` handler that already asks about Health writing and
-notices also calls the delivery. This is DELIVERY-2, and it turns today's accidental behaviour into
-a stated one.
+notices also delivers.
 
 **Every awake launch asks.** The relaunch that finishes background transfers, and
-`protectedDataDidBecomeAvailable` after an unlock, both end in a delivery. The first one is a
-process that is already running with a network; the second is the moment Health stops being sealed,
-which is exactly when waiting edits can finally be written. This is DELIVERY-3.
+`protectedDataDidBecomeAvailable` after an unlock, both end in a delivery. The first is a process
+already running with a network; the second is the moment Health stops being sealed, which is exactly
+when waiting edits can be written.
 
-**A locked phone counts instead of stopping.** The guard on protected data moves off delivery and
-onto the Health write inside it: the queue is listed, the count is written to the journal as
-waiting, and the items are written when the phone is next unlocked. This is DELIVERY-7, and it is
-what makes NOTICE-4 sayable — the strip can show "waiting" where today it shows nothing at all.
+**A locked phone counts instead of stopping.** The guard on protected data moves off the delivery
+and onto the Health write inside it: the queue is listed, what is waiting is written to the journal,
+and the items go in at the unlock.
 
-**A record of the last look.** Each delivery writes down when it last finished, and what stopped it
-if something did. The everyday screen reads that: a last-checked time, and the condition holding
-delivery back when there is one. This is STATE-1, STATE-2 and STATE-3 — a person who swiped the app
-away sees a last-checked time from yesterday instead of an app that looks fine and does nothing.
+**A record of the last look.** Every delivery writes down when it finished and what stopped it if
+something did. The everyday screen reads that: a last-checked time, and the condition holding
+delivery back when there is one — including which layer the app is running on, since a person who
+refused the wake should see slow delivery as their own choice.
 
-**The notice question moves earlier.** Connecting an agent asks about notices; today the question
-waits until an agent has already written something, which guarantees the first edit is silent. This
-is NOTICE-3.
+**The notice question moves earlier.** Connecting an agent asks about notices. Today the question
+waits until an agent has already written something, which guarantees the first edit is silent.
 
-## Why not a push notification
+## What is not verified yet
 
-A push from the service would remove the polling and would reach a phone with the app closed. It is
-the right end state and the wrong next step: it needs an APNs key, device tokens kept by the
-service, a new background launch mode and a line in the privacy description, and it moves knowledge
-of "an edit is waiting for this phone" into the service, which today knows nothing about the phone's
-schedule. The design above closes the hole the person actually meets — an open app that ignores an
-edit — with one listing request every 15 seconds while somebody is looking at the screen. Push stays
-on the table as its own piece of work.
+These are claims the design leans on and nobody has run.
+
+- Whether a Cloudflare Worker can reach APNs at all. APNs wants HTTP/2 and a token signed ES256;
+  the signing is the same shape as the App Store Connect key this factory already uses, the
+  transport is the part to prove. If it cannot, the wake needs a sender that is not the Worker, and
+  that is a larger change than it looks.
+- How hard Apple throttles silent pushes for this traffic. The shape here is forgiving — a burst of
+  edits coalesces into one fetch that drains the queue — but the budget is real and undocumented.
+- Listing the queue on a locked phone. The two protection classes say it works; that is not the same
+  as having seen it.
+- Whether a delivery on every unlock is too much for a phone unlocked dozens of times an hour. If
+  it is, the answer is a minimum interval between deliveries, not a removed trigger.
 
 ## Open decisions
 
-- The 15-second cadence is a guess at a human's patience, not a measurement.
-- Listing the queue on a locked phone has not been run on a device yet; the two protection classes
-  say it should work, and that is not the same as having seen it.
-- A delivery on every unlock will fire on phones that unlock dozens of times an hour. If that turns
-  out to be too much, the floor is a minimum interval between deliveries, not a removed trigger.
+- The 15-second ticker is a guess at a person's patience, not a measurement.
+- Whether refusing the wake is a separate question to the person or rides on the notice permission
+  they are already asked for.
