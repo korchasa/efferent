@@ -4,6 +4,7 @@ import { checkTooling, run, section } from "./lib.ts";
 import { SCHEME, systemToolPath, WORKSPACE } from "./config.ts";
 import { generate } from "./generate.ts";
 import { scanForSecrets } from "./secrets.ts";
+import { checkReader } from "./test-reader.ts";
 
 // First, because it is the one failure a later commit cannot take back.
 await scanForSecrets();
@@ -14,6 +15,9 @@ await run("deno", { args: ["task", "server:types:check"] });
 
 section("Testing the protocol, the service and the reading tools");
 await run("deno", { args: ["test", "-A", "protocol/", "server/", "tools/"] });
+
+section("Checking and testing the Python reader");
+await checkReader();
 await generate();
 
 section("Building for the simulator");

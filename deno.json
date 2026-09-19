@@ -33,6 +33,9 @@
     "efferent": "deno run -A tools/efferent.ts",
     "interop": "deno run -A scripts/interop.ts",
     "interop:python": "deno run -A scripts/python-interop.ts",
+    "reader:setup": "deno run -A scripts/reader.ts",
+    "reference": "deno run -A scripts/reference.ts",
+    "test:reader": "deno run -A scripts/test-reader.ts",
     "icons": "deno run -A scripts/icons.ts",
     "screenshots": "deno run -A scripts/screenshots.ts",
     "ceilings": "deno run -A scripts/ceilings.ts"

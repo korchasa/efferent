@@ -1,0 +1,26 @@
+[project]
+name = "efferent-reader"
+version = "1.0.0"
+description = "The reading side of Efferent: opens the owner's sealed Health archive on the owner's machine."
+requires-python = ">=3.10"
+# The one dependency at run time. HPKE itself is written out in efferent_hpke.py,
+# which is also the exact script an agent receives from the remote setup_guide.
+dependencies = ["cryptography>=42"]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.6"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["efferent"]
+py-modules = ["efferent_hpke"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
