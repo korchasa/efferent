@@ -17,6 +17,32 @@ enum Snapshot {
     private static let size = CGSize(width: 430, height: 932)
     private static let scale: CGFloat = 3
 
+    /// Whether this launch shows made-up figures instead of the phone's own.
+    ///
+    /// `--demo` exists for the walk before a release. Every screen past setup
+    /// needs an archive, claiming an archive needs App Attest, and App Attest
+    /// needs a real iPhone — so on a simulator the app stops at "Creating your
+    /// archive" and the other screens cannot be looked at in either appearance
+    /// or at an accessibility text size. This hands the same made-up figures the
+    /// store screenshots are rendered from to the running app instead.
+    static var isDemonstration: Bool {
+        CommandLine.arguments.contains("--demo")
+    }
+
+    /// The services a `--demo` launch runs on, or nil for an ordinary launch.
+    ///
+    /// Further along than the state the store screenshots are rendered from: an
+    /// agent is connected and has a day and a half of work behind it, because
+    /// the strip, the list of what an agent changed and the screen for one
+    /// change are all behind that and would otherwise be unreachable.
+    static func demonstrationIfAsked() -> Services? {
+        guard isDemonstration else { return nil }
+        guard let services = try? sending() else { return nil }
+        services.markAgentConnected()
+        services.demonstrate(run())
+        return services
+    }
+
     static func runIfAsked() -> Bool {
         let arguments = CommandLine.arguments
         guard let flag = arguments.firstIndex(of: "--snapshot"), flag + 1 < arguments.count else {

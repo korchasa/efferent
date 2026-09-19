@@ -202,6 +202,24 @@ account call for `subdomain/edge-preview` answers "No access to the specified re
 like the script being wrong rather than the token being narrow. Wrangler's own OAuth session opens
 it, so the probe runs with `CLOUDFLARE_API_TOKEN` unset.
 
+## Walking the screens before a release
+
+Every screen past setup needs an archive, claiming an archive needs App Attest, and App Attest
+refuses a simulator — so a walk on a simulator used to stop at "Creating your archive" and the rest
+of the app could not be looked at in either appearance or at an accessibility text size. `--demo`
+hands the running app the same made-up figures the store screenshots are rendered from, one step
+further along: an agent connected and a day and a half of its work behind it, so the strip, the list
+of what an agent changed and the screen for one change are reachable. Nothing real is touched — an
+in-memory store, no Health, no Keychain, no network, no Apple — and the launch says so in its own
+log. It sits beside `--snapshot`, which the release binary already carries.
+
+Two things the walk on 2026-09-19 settled. The palette is pinned to light at the root
+(`RootView.preferredColorScheme(.light)`), and that pin holds everywhere it was checked, including
+sheets and the system alert — so dark mode is not half-supported, it is not used. And the app's own
+text does not follow the system text size: every size is a fixed `.system(size:)`, so at
+accessibility-extra-large only the sheet titles and the chevrons grow. Nothing clips or overlaps,
+but a person who enlarges text sees no change in the app's own words.
+
 ## What is not verified yet
 
 These are claims the design leans on and nobody has run.

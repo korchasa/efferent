@@ -5,12 +5,15 @@ import SwiftUI
 struct EfferentApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
+    private let services: Services
+
     init() {
         // The store screenshots are made by this same binary, offscreen, and
         // it quits before any of the real machinery below wakes up.
         if Snapshot.runIfAsked() {
             exit(0)
         }
+        services = Snapshot.demonstrationIfAsked() ?? Services.shared
     }
 
     @Environment(\.scenePhase) private var scenePhase
@@ -18,7 +21,7 @@ struct EfferentApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
-                .environmentObject(Services.shared)
+                .environmentObject(services)
         }
         // A launch with a screen is the only kind that can show the system
         // sheet, and the applier waits until one has. Asked here rather than
@@ -29,16 +32,16 @@ struct EfferentApp: App {
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             Task { @MainActor in
-                await Services.shared.askForWriteAccessIfNeeded()
+                await services.askForWriteAccessIfNeeded()
                 // Second, and only ever after the first: two system sheets at
                 // once is one question nobody reads.
-                await Services.shared.askForNoticesIfNeeded()
+                await services.askForNoticesIfNeeded()
                 // Coming to the front is a trigger of its own, said out loud.
                 // It looked like one before this line existed, because a resume
                 // is when Health hands over what it held back — which made the
                 // inbound direction work by coincidence and fail on a phone
                 // lying still with the app open.
-                await Services.shared.deliverEdits()
+                await services.deliverEdits()
             }
         }
     }
@@ -110,6 +113,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // delivery that caused it would be lost.
         log.info("launched \(UIApplication.shared.applicationState == .background ? "in the background" : "by hand")")
         log.debug(Self.situation())
+        // A `--demo` launch is a walk over the screens, so nothing below it
+        // should reach Health, the Keychain, the service or Apple.
+        guard !Snapshot.isDemonstration else {
+            log.info("this launch shows made-up figures; nothing real is touched")
+            return true
+        }
         Services.shared.health.startObserving()
 
         // Every launch, because the token belongs to Apple: a restore, a
