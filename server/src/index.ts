@@ -347,11 +347,13 @@ function createRemoteServer(env: Env, bucket: string, origin: string): McpServer
       title: "List submitted edits",
       description:
         "List the edits submitted to this archive by name, size, submission time and status: " +
-        "pending until the phone looks, then applied, or awaiting while the person is being asked " +
-        "about an item that would change or remove a record already in Health, declined if they " +
-        "said no, failed if the phone could not do it, and partial when some of it landed. " +
-        "awaiting and declined are answers rather than faults — never resend an edit over either; " +
-        "an awaiting one is answered again by the phone once the person has decided. " +
+        "pending until the phone looks, then applied; failed if the phone could not do it, and " +
+        "partial when some of it landed. Every item lands, replacements and removals included — " +
+        "an edit can only ever reach records this app itself wrote for the agent, and the phone " +
+        "keeps what each change pushed out so its owner can put it back. An outcome is told once " +
+        "and never revised. awaiting and declined come from a phone that used to ask its owner " +
+        "before changing anything; no phone does now, and they appear only on old edits — never " +
+        "resend an edit over either. " +
         "Edits are submitted with the local reference code — sealed to the reading key and " +
         "signed with the editor key — and this server never sees their contents. " +
         "`after` is a paging key, not a watermark; follow next until it is null.",

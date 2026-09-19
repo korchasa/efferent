@@ -52,11 +52,11 @@ itself, writes the samples into Health and reports what it did; \`--edits\` list
 status and counts. The phone looks when it is opened or wakes to send — minutes to hours, never at
 once.
 
-A status is \`pending\` until the phone looks, then \`applied\`. Adding something new lands by itself;
-anything that would change or remove a record already in Health is held and shown to the person, and
-the edit reads \`awaiting\` until they answer — then \`applied\` or \`declined\`. \`failed\` means the
-phone could not do it, and \`partial\` that some of it landed. Never resend an edit that is
-\`awaiting\` or \`declined\`: one is a question already asked, the other an answer already given.
+A status is \`pending\` until the phone looks, then \`applied\`. \`failed\` means the phone could not do
+it, and \`partial\` that some of it landed. An edit's outcome is told once and never revised.
+\`awaiting\` and \`declined\` come from a phone that used to ask its owner before changing or removing
+a record; no phone does now, and those two appear only on edits an older phone answered. Never
+resend an edit over either: one was a question, the other an answer.
 
 An item is \`{"op":"put","id":...,"metric":...,"start":...,"end":...,"value":...,"unit":...}\` for a
 quantity, the same with \`"stage"\` instead of value and unit for sleep, or \`{"op":"delete","id":...}\`.
@@ -75,8 +75,7 @@ in the archive afterwards like anything logged by hand.
 Every item lands, replacements and removals included, and nothing waits for the person holding the
 phone. What makes that safe is the limit above: you can only ever reach entries this app wrote for
 you. The phone keeps what each change pushed out and shows its owner what you did, so anything they
-did not want is put back by them afterwards. An edit's outcome is told once and never revised.
-\`awaitingApproval\` and \`declined\` appear only on edits answered by an older phone.
+did not want is put back by them afterwards.
 
 \`\`\`python
 ${PYTHON_HPKE_REFERENCE}\`\`\`
