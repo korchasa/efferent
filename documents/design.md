@@ -1,11 +1,13 @@
 # Design
 
-Status, 2026-09-19: both layers are written. Every pull trigger below is in the app, a locked phone
-counts what is on its way, the everyday screen says when the queue was last reached, and the service
-rings the phone when it takes an edit. What has not happened yet is a wake observed end to end on a
-real phone: it needs the four push secrets set on the deployed service and a build installed with
-the new capability. Until then the phone runs on the floor alone, which is the state the floor was
-built for.
+Status, 2026-09-19 (evening): the wake was watched end to end and it works, and watching it found
+one real defect, since fixed. An agent's edit reached the service at 20:57:20 and the locked phone
+asked for the queue at 20:57:23, after a hundred seconds of silence; it read the queue, wrote
+nothing, and said in its own log that Health was sealed. What it could not do was finish: the app
+was suspended a moment later, the fetch froze for 224 901 ms, the thirty seconds a wake is allowed
+went by unanswered, and the system stopped delivering wakes to this app altogether — the next push
+was accepted by Apple and never ran. See "What a wake is allowed" below for what that cost and what
+now holds it.
 
 ## Scope
 
@@ -104,6 +106,30 @@ other answers `BadDeviceToken`, which reads like a phone that has moved on. The 
 holds is a sandbox one, so the app's `aps-environment` is `development`; a store build needs both
 changed together.
 
+**What a wake is allowed.** Thirty seconds of wall-clock time to do the work and say what came of
+it, and an app that has not answered by then is terminated. Two separate promises follow from that,
+and the app was keeping neither. The first is that the system must not suspend the app while the
+work is in flight: `beginBackgroundTask` asks for that, and it is asked for before the work starts,
+because the request is itself asynchronous and one made late loses the race it was meant to win. The
+second is that the system is answered inside the thirty seconds whatever the work is doing, so the
+woken work carries its own budget of twenty and `WakeAnswer` makes sure exactly one of the three
+endings — finished, out of budget, system reclaiming the time — reports a result and gives the
+promise back.
+
+Underneath both sits a limit that was missing everywhere, not only on a wake: a network request was
+bounded only by how long it could go without receiving data, and a suspended app receives nothing
+while also waiting for nothing, so that limit never fires. `timeoutIntervalForResource` counts from
+the start of the request and stops for nothing; both sessions now set it. The same twenty-second
+limit is what eventually ended the frozen fetch above — after 224 901 ms.
+
+**How often a wake may be sent.** Apple asks for no more than two or three an hour and throttles an
+app that sends more, which costs the wakes that matter rather than the ones over the line. So the
+service keeps a count per bucket in `<bucket>/wakes` and spends three on the first three edits of an
+hour. That is the right way round for this shape of traffic: one wake drains the whole queue, so the
+second edit of a burst is usually fetched by the wake the first one bought. The count is
+deliberately approximate — two edits arriving together can both read it and both ring — because a
+conditional write and a retry on every edit costs more than being one over.
+
 **The wake is silent and empty.** A background push — `content-available`, no alert, no body, no
 count. The phone wakes, runs the same delivery every other trigger runs, and puts up its own notice
 from what it actually wrote. An alert push would be more reliable, because Apple throttles silent
@@ -163,15 +189,17 @@ it, so the probe runs with `CLOUDFLARE_API_TOKEN` unset.
 ## What is not verified yet
 
 These are claims the design leans on and nobody has run.
-- A wake observed end to end: agent writes, phone lights up, edit lands. Every piece is tested
-  against a stand-in — the service against an APNs that lives in `server/device_test.ts`, the
-  request against its own signature — and none of that is the same as a phone answering.
-- How hard Apple throttles silent pushes for this traffic. The shape here is forgiving — a burst of
-  edits coalesces into one fetch that drains the queue — but the budget is real and undocumented.
-- Listing the queue on a locked phone. The two protection classes say it works; that is not the same
-  as having seen it.
+- That the fix holds. The wake, the lock and the write were all watched on 2026-09-19; what has not
+  been watched is a wake that both keeps its promises and finishes, because the defect was found on
+  the same evening it was built.
+- How hard Apple throttles in practice. Three an hour is Apple's own number and the service now
+  holds to it, but the throttle that was actually seen was the other kind: an app that failed to
+  answer one wake stopped being given the next.
 - Whether a delivery on every unlock is too much for a phone unlocked dozens of times an hour. If
   it is, the answer is a minimum interval between deliveries, not a removed trigger.
+- What an unlock is worth at all. The notice that Health can be written to again reaches an app that
+  is already running, and on 2026-09-19 a phone unlocked at about 20:58 delivered it at 21:00:22 —
+  when something else had launched the app. So it is a trigger for a running app and not a way in.
 
 ## Open decisions
 

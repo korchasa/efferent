@@ -51,6 +51,10 @@ public struct Archive {
     public init(destination: Destination, timeout: TimeInterval = 20) {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = timeout
+        // Elapsed time as well as silence — see the same pair in `Applier`. A
+        // request that only stops growing while the app sleeps has no limit at
+        // all in the launches that matter.
+        configuration.timeoutIntervalForResource = timeout
         let session = URLSession(configuration: configuration)
 
         self.init(destination: destination) { url in

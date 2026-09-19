@@ -53,6 +53,23 @@ below carries those, and every requirement in it holds whether or not a wake was
 and nothing else. The screen says which of the two the app is running on, so a slow delivery is
 recognisable as a choice rather than a fault.
 
+**DELIVERY-5a — A wake ends inside the time it was given, and says so.** iOS allows 30 seconds of
+wall-clock time from the wake arriving to the app reporting what came of it, and terminates an app
+that has not reported. The app therefore asks not to be suspended while the work runs, carries its
+own budget well inside the 30, and reports exactly once however the work ends — finished, out of
+budget, or the system taking the time back. Cutting a run short costs nothing: the edit stays in the
+queue and the floor finds it.
+
+*Why.* Kept neither promise, this fails in the shape that is hardest to notice. On 2026-09-19 a wake
+arrived, the app began fetching the edit, the system suspended it, and the fetch stayed frozen for
+224 901 ms. Nothing reported, and the system then stopped delivering wakes to the app: the next push
+was accepted by Apple and never ran. The app looked healthy throughout.
+
+**DELIVERY-5b — The service rings no more often than Apple allows.** Two or three an hour, which is
+Apple's own number for a background wake; past it the app is throttled, and what is lost is the
+wakes that matter rather than the ones over the line. The service counts per archive and spends its
+allowance on the earliest edits of the hour, because one wake drains the whole queue.
+
 **DELIVERY-6 — Disconnecting forgets the wake.** The phone deletes its registration at the service
 in the same act that forgets its keys. An archive nobody can write to must not leave a way to ring
 that phone.

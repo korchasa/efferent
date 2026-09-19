@@ -44,8 +44,59 @@ struct EfferentApp: App {
     }
 }
 
+/// Answers the system once, however the woken work ends.
+///
+/// A wake has three endings — the work finished, it ran past its budget, or
+/// the system said the app was about to be suspended anyway — and each of them
+/// has to do two things: report a result, and give back the promise not to be
+/// suspended. Doing either twice is a crash, doing either never is an app the
+/// system terminates, so both are counted here and nowhere else.
+@MainActor
+private final class WakeAnswer {
+    private let report: (UIBackgroundFetchResult) -> Void
+    private var assertion = UIBackgroundTaskIdentifier.invalid
+    private var answered = false
+
+    init(report: @escaping (UIBackgroundFetchResult) -> Void) {
+        self.report = report
+    }
+
+    func hold(_ assertion: UIBackgroundTaskIdentifier) {
+        guard !answered else {
+            // The work beat the assertion, which is possible because asking is
+            // itself asynchronous. Give it straight back.
+            UIApplication.shared.endBackgroundTask(assertion)
+            return
+        }
+        self.assertion = assertion
+    }
+
+    /// - Returns: whether this was the ending that counted.
+    @discardableResult
+    func finish(_ result: UIBackgroundFetchResult) -> Bool {
+        guard !answered else { return false }
+        answered = true
+        report(result)
+        if assertion != .invalid {
+            UIApplication.shared.endBackgroundTask(assertion)
+            assertion = .invalid
+        }
+        return true
+    }
+}
+
 final class AppDelegate: NSObject, UIApplicationDelegate {
     static let refreshTaskIdentifier = "dev.korchasa.efferent.refresh"
+
+    /// How long the woken work may take before the system is answered without
+    /// it.
+    ///
+    /// Apple allows thirty seconds of wall-clock time to handle a wake and
+    /// terminates an app that has not answered by then. Twenty is room for a
+    /// slow network with the rest left for answering and winding down. Nothing
+    /// is lost by cutting a run short: the edit stays in the queue and the
+    /// floor finds it.
+    private static let wakeBudget = Duration.seconds(20)
 
     private let log = Log(category: "app")
 
@@ -168,15 +219,38 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     /// The handler rather than the `async` form of this method: the payload is
     /// a dictionary of `Any`, which cannot cross into a main-actor method, and
     /// this app has nothing to read out of it anyway.
+    ///
+    /// Two promises are made to the system here and both have to be kept. The
+    /// first is "do not suspend me while this runs": without it the app can be
+    /// put to sleep a moment after the wake arrives, and on 2026-09-19 that
+    /// left a fetch frozen for 224 901 ms, far past the thirty seconds a wake
+    /// is allowed — after which the system stopped delivering wakes at all,
+    /// silently. The second is "here is what came of it", which has to be said
+    /// inside those thirty seconds whatever the work is doing.
     func application(
-        _: UIApplication,
+        _ application: UIApplication,
         didReceiveRemoteNotification _: [AnyHashable: Any],
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
     ) {
-        Task { @MainActor in
+        let answer = WakeAnswer(report: completionHandler)
+        // Asked before the work starts, because asking is itself asynchronous
+        // and a request made at the last moment can lose the race with the
+        // suspension it was meant to prevent.
+        answer.hold(application.beginBackgroundTask(withName: "woken by the archive") { [weak self] in
+            self?.log.error("the system took back the time the wake was given")
+            answer.finish(.failed)
+        })
+
+        let work = Task { @MainActor in
             let before = Services.shared.edits.unseen.total
             await Services.shared.wokenByService()
-            completionHandler(Services.shared.edits.unseen.total == before ? .noData : .newData)
+            answer.finish(Services.shared.edits.unseen.total == before ? .noData : .newData)
+        }
+        Task { @MainActor in
+            try? await Task.sleep(for: Self.wakeBudget)
+            guard answer.finish(.failed) else { return }
+            self.log.error("the woken work outlasted its budget; the system was answered without it")
+            work.cancel()
         }
     }
 

@@ -152,6 +152,20 @@ public final class Applier {
     public static func session(timeout: TimeInterval = 20) -> Fetch {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = timeout
+        // Both limits, because they measure different things and only the
+        // second one is about elapsed time. `timeoutIntervalForRequest` is the
+        // longest silence allowed between pieces of an answer, and a suspended
+        // app is not waiting for data — it is not running at all, so the
+        // silence never grows. `timeoutIntervalForResource` runs from the
+        // moment the request starts and stops for nothing, which is the only
+        // kind of limit a wake can rely on. Its default is seven days.
+        //
+        // Measured on 2026-09-19: a fetch begun on a wake ended with this
+        // twenty-second limit after 224 901 ms, because the phone slept
+        // through almost four minutes of it. The same error is in the phone's
+        // log six times over the week before, so it is an ordinary state
+        // rather than a rare one.
+        configuration.timeoutIntervalForResource = timeout
         let session = URLSession(configuration: configuration)
         return { request in
             let (data, response) = try await session.data(for: request)
