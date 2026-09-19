@@ -22,6 +22,12 @@ final class EditsTests: XCTestCase {
             "efferent/v1 editor\n\(Self.bucket)\n1700000000\n\(Self.helloDigest)"
         )
         XCTAssertEqual(
+            String(decoding: CanonicalRequest.deviceRegistration(
+                bucket: Self.bucket, timestamp: 1_700_000_000, body: body
+            ), as: UTF8.self),
+            "efferent/v1 device\n\(Self.bucket)\n1700000000\n\(Self.helloDigest)"
+        )
+        XCTAssertEqual(
             String(decoding: CanonicalRequest.edit(
                 bucket: Self.bucket, timestamp: 1_700_000_000, sealed: body
             ), as: UTF8.self),
@@ -228,6 +234,50 @@ final class EditsTests: XCTestCase {
             signature,
             for: CanonicalRequest.editorRegistration(
                 bucket: destination.bucket, timestamp: 1_700_000_000, body: editor.publicKey.rawRepresentation
+            )
+        ))
+    }
+
+    /// Where the phone can be reached is the owner's to say, so it is signed
+    /// with the writer key over a body naming the token in the form the push
+    /// URL wants it in.
+    func testSayingWhereThePhoneIsIsAWriterSignedPutOfTokenAndTopic() throws {
+        let destination = try Destination(
+            endpoint: XCTUnwrap(URL(string: "https://efferent.example.com")),
+            readingPublicKey: WireTests.readingPublicKey
+        )
+        let identity = DeviceIdentity(account: "device-registration-test")
+        defer { try? identity.forget() }
+        let token = Data([0x0A, 0xFF, 0x10])
+        let request = try ArchiveCreator.deviceRequest(
+            destination: destination,
+            identity: identity,
+            token: token,
+            topic: "dev.korchasa.efferent",
+            now: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        XCTAssertEqual(request.url, destination.deviceURL)
+        XCTAssertEqual(request.url?.lastPathComponent, "device")
+        XCTAssertEqual(request.httpMethod, "PUT")
+        let body = try XCTUnwrap(request.httpBody)
+        let sent = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+        // Lower-case hex, every byte two characters: this string is put
+        // straight into the push URL, and `a` padded away would be another phone.
+        XCTAssertEqual(sent["token"], "0aff10")
+        XCTAssertEqual(sent["topic"], "dev.korchasa.efferent")
+
+        let writer = try identity.signingKey()
+        XCTAssertEqual(request.value(forHTTPHeaderField: "x-efferent-timestamp"), "1700000000")
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "x-efferent-writer"),
+            Base64URL.encode(writer.publicKey.rawRepresentation)
+        )
+        let signature = try Base64URL.decode(XCTUnwrap(request.value(forHTTPHeaderField: "x-efferent-signature")))
+        XCTAssertTrue(writer.publicKey.isValidSignature(
+            signature,
+            for: CanonicalRequest.deviceRegistration(
+                bucket: destination.bucket, timestamp: 1_700_000_000, body: body
             )
         ))
     }

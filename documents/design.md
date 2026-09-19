@@ -1,9 +1,11 @@
 # Design
 
-Status, 2026-09-19: the floor is built and the wake is not. Every pull trigger below is in the app,
-a locked phone counts what is on its way, and the everyday screen says when the queue was last
-reached. The wake waits on one thing only — an APNs key, which is made in the Apple Developer portal
-and cannot be made through the App Store Connect API.
+Status, 2026-09-19: both layers are written. Every pull trigger below is in the app, a locked phone
+counts what is on its way, the everyday screen says when the queue was last reached, and the service
+rings the phone when it takes an edit. What has not happened yet is a wake observed end to end on a
+real phone: it needs the four push secrets set on the deployed service and a build installed with
+the new capability. Until then the phone runs on the floor alone, which is the state the floor was
+built for.
 
 ## Scope
 
@@ -74,13 +76,33 @@ is a channel whose delivery nobody promises; the floor without push is what the 
 ## How the wake is arranged
 
 **The phone registers where it can be reached.** One more signed registration beside the editor key:
-`PUT /<bucket>/device`, proved with the device key over the same canonical request every other write
-uses, holding the APNs device token. The service keeps it under the bucket, like the editor key.
-Re-registering replaces it; disconnecting deletes it in the same act that forgets the reading key.
+`PUT /<bucket>/device`, signed by the **writer** key over `efferent/v1 device` — the same canonical
+shape every other write uses — carrying `{token, topic}` as JSON. The writer key and not the editor
+key, because this is the owner's decision: an agent may put edits in the queue and may not choose
+what gets woken. The service keeps it at `<bucket>/device`, checks the topic against its own
+`APP_ID` list, and refuses a token that is not hex, because that string goes straight into a URL.
 
-**The service rings the phone when it takes an edit.** `postEdit` in `server/src/index.ts` already
-stores the sealed edit and answers the agent. After the store it fires the wake, outside the
+The phone asks Apple on **every** launch with an archive (`registerForWake`), since a restore, a
+reinstall or a new phone each produce a different token and asking is the only way to find out. It
+sends the registration only when the pair is news — `wake.registeredAs` in `meta` holds
+`<bucket>:<token>` — so an ordinary launch costs nothing. Disconnecting sends
+`DELETE /<bucket>/device` **before** the keys that could sign it are forgotten, then unregisters
+with Apple. A token Apple has retired answers 410, and the service deletes it rather than pushing at
+it forever.
+
+**The service rings the phone when it takes an edit.** `postEdit` in `server/src/index.ts` stores
+the sealed edit, then calls `wakeThePhone`, which hands the work to `ctx.waitUntil` — outside the
 response path, so an agent's write never waits on Apple and never fails because Apple did.
+`server/src/apns.ts` signs an ES256 provider token with the `.p8` and keeps it for the life of the
+isolate: Apple refuses a token over an hour old and one made seconds ago just as readily, so a token
+per push is both slower and worse. A service without the four secrets (`APNS_KEY`, `APNS_KEY_ID`,
+`APNS_TEAM_ID`, `APNS_HOST`) wakes nothing and says nothing — that is the state before deployment,
+and it is not an error.
+
+`APNS_HOST` is named rather than derived. A key belongs to one environment, and a push sent to the
+other answers `BadDeviceToken`, which reads like a phone that has moved on. The key this factory
+holds is a sandbox one, so the app's `aps-environment` is `development`; a store build needs both
+changed together.
 
 **The wake is silent and empty.** A background push — `content-available`, no alert, no body, no
 count. The phone wakes, runs the same delivery every other trigger runs, and puts up its own notice
@@ -141,6 +163,9 @@ it, so the probe runs with `CLOUDFLARE_API_TOKEN` unset.
 ## What is not verified yet
 
 These are claims the design leans on and nobody has run.
+- A wake observed end to end: agent writes, phone lights up, edit lands. Every piece is tested
+  against a stand-in — the service against an APNs that lives in `server/device_test.ts`, the
+  request against its own signature — and none of that is the same as a phone answering.
 - How hard Apple throttles silent pushes for this traffic. The shape here is forgiving — a burst of
   edits coalesces into one fetch that drains the queue — but the budget is real and undocumented.
 - Listing the queue on a locked phone. The two protection classes say it works; that is not the same

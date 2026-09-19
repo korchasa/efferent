@@ -108,7 +108,9 @@ struct HomeView: View {
         .sheet(isPresented: $reachingBack) { reachBackSheet }
         .sheet(isPresented: $explainingAccess) { accessSheet }
         .alert("Disconnect?", isPresented: $confirmingDisconnect) {
-            Button("Disconnect", role: .destructive) { services.disconnect() }
+            Button("Disconnect", role: .destructive) {
+                Task { await services.disconnect() }
+            }
             Button("Keep", role: .cancel) {}
         } message: {
             Text(

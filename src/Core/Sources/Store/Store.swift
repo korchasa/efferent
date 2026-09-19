@@ -121,12 +121,13 @@ public final class Store {
                 arguments: [now]
             )
             try db.execute(
-                sql: "DELETE FROM meta WHERE key IN (?, ?, ?, ?, ?)",
+                sql: "DELETE FROM meta WHERE key IN (?, ?, ?, ?, ?, ?)",
                 arguments: [
                     MetaKey.lastUploadAt.rawValue,
                     MetaKey.backfillReached.rawValue,
                     MetaKey.lastReconciledAt.rawValue,
                     MetaKey.editorRegisteredFor.rawValue,
+                    MetaKey.wakeRegisteredAs.rawValue,
                     MetaKey.editsSeenAt.rawValue,
                 ]
             )
@@ -486,6 +487,27 @@ public final class Store {
     public func recordEditorRegistered(for bucket: String) throws {
         try dbQueue.write { db in
             try Self.setString(db, MetaKey.editorRegisteredFor.rawValue, bucket)
+        }
+    }
+
+    /// Whether this exact device token has already been registered for this
+    /// bucket. A token Apple has reissued is a different one, and has not.
+    public func wakeRegistered(for bucket: String, token: String) throws -> Bool {
+        try dbQueue.read { db in
+            try Self.string(db, MetaKey.wakeRegisteredAs.rawValue) == "\(bucket):\(token)"
+        }
+    }
+
+    public func recordWakeRegistered(for bucket: String, token: String) throws {
+        try dbQueue.write { db in
+            try Self.setString(db, MetaKey.wakeRegisteredAs.rawValue, "\(bucket):\(token)")
+        }
+    }
+
+    /// Forget that this phone is reachable, so the next launch registers again.
+    public func forgetWakeRegistration() throws {
+        try dbQueue.write { db in
+            try Self.setString(db, MetaKey.wakeRegisteredAs.rawValue, "")
         }
     }
 

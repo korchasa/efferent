@@ -61,6 +61,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         log.debug(Self.situation())
         Services.shared.health.startObserving()
 
+        // Every launch, because the token belongs to Apple: a restore, a
+        // reinstall or a new phone each produce a different one, and asking is
+        // the only way to find out. Nothing is shown and nobody is asked.
+        Services.shared.registerForWake()
+
         BGTaskScheduler.shared.register(
             forTaskWithIdentifier: Self.refreshTaskIdentifier, using: nil
         ) { task in
@@ -132,6 +137,49 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         }
     }
 
+    func application(
+        _: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken token: Data
+    ) {
+        Task { @MainActor in
+            await Services.shared.recordDeviceToken(token)
+        }
+    }
+
+    func application(
+        _: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+        // Worth a line: from here on the phone finds edits only when something
+        // else wakes it, which looks from the outside like a slow service.
+        log.error("apple would not say how to reach this phone: \(String(describing: error))")
+    }
+
+    /// The service says something is waiting.
+    ///
+    /// The push carries nothing — no count, no name, no day — so there is
+    /// nothing here to read. It is a moment of being awake with a network, and
+    /// what the app does with it is the same fetch it makes when it is opened.
+    ///
+    /// The result matters: the system counts what a wake produced, and an app
+    /// that always answers `.noData` is woken less often. So this says what
+    /// actually happened.
+    ///
+    /// The handler rather than the `async` form of this method: the payload is
+    /// a dictionary of `Any`, which cannot cross into a main-actor method, and
+    /// this app has nothing to read out of it anyway.
+    func application(
+        _: UIApplication,
+        didReceiveRemoteNotification _: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        Task { @MainActor in
+            let before = Services.shared.edits.unseen.total
+            await Services.shared.wokenByService()
+            completionHandler(Services.shared.edits.unseen.total == before ? .noData : .newData)
+        }
+    }
+
     /// A safety net under background delivery, not a schedule.
     ///
     /// The system decides when this runs — sometimes hourly, sometimes not for
@@ -167,6 +215,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             // screen is locked — which is most of when this task runs. Going in
             // anyway costs a ledger read and the start of a build, and comes
             // back with an error that describes the lock rather than a fault.
+            // Before the lock is looked at, because the queue can be listed
+            // through a lock even though Health cannot be written to. On a
+            // quiet locked phone this task is the only thing running, and
+            // without this line the screen would have nothing to say about
+            // edits that arrived overnight.
+            await Services.shared.deliverEdits()
             guard UIApplication.shared.isProtectedDataAvailable else {
                 self.log.info("the phone is locked, so Health is out of reach; this catch-up waits")
                 task.setTaskCompleted(success: true)

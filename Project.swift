@@ -80,7 +80,13 @@ public let project = Project(
                 ]),
                 // Background delivery wakes the app; the deferred send finishes
                 // through a background URLSession, which needs no mode of its own.
-                "UIBackgroundModes": .array([.string("processing")]),
+                // `remote-notification` is what lets a silent push run code
+                // while the app is not in front. Without it the wake arrives
+                // and nothing happens until somebody opens the app.
+                "UIBackgroundModes": .array([
+                    .string("processing"),
+                    .string("remote-notification"),
+                ]),
                 "BGTaskSchedulerPermittedIdentifiers": .array([
                     .string("dev.korchasa.efferent.refresh")
                 ]),

@@ -218,6 +218,14 @@ enum MetaKey: String {
     /// until it starts, and left in place when it finishes so a reinstall does
     /// not silently begin again.
     case backfillReached = "backfill.reached"
+    /// The device token last registered with the service, and the bucket it was
+    /// registered for, as `<bucket>:<token>`.
+    ///
+    /// Kept so the registration is sent when it is news and not on every launch.
+    /// Apple reissues a token after a restore, a reinstall or a new phone, so
+    /// what matters is whether this exact pair has already been sent — not
+    /// whether anything was ever registered.
+    case wakeRegisteredAs = "wake.registeredAs"
     /// When a day was last accepted by the service, in seconds since 1970.
     ///
     /// The screen needs one fact above all others — is this still working — and

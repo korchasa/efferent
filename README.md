@@ -212,6 +212,14 @@ signed it, and afterwards how many items the phone applied and the word it gave 
 Never a metric name, never a value, never which day inside the edit changed — the phone re-uploads
 those days whole, and a rewritten day looks like every other rewritten day.
 
+The wake adds the one line that is not about the archive at all: the service holds a way to ring
+this phone, and knows the moments it did. That is a device token Apple issued for this install of
+this app, registered by the phone and deleted when the phone disconnects. The push itself carries
+nothing — no count, no name, no day, no metric — and shows nothing; it is a moment of being awake,
+and the phone decides everything that follows. It exists so an agent's edit reaches Health while the
+app is closed, instead of waiting for whoever is holding the phone to open it. A phone that never
+registers is slower and works the same.
+
 Encryption hides contents, not the fact of them, and the privacy copy should say so plainly.
 
 ## Asking the archive

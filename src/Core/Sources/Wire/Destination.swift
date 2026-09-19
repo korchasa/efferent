@@ -55,6 +55,11 @@ public struct Destination: Equatable, Codable, Sendable {
         bucketURL.appendingPathComponent("stats")
     }
 
+    /// Where the phone says where it can be reached.
+    public var deviceURL: URL {
+        bucketURL.appendingPathComponent("device")
+    }
+
     /// Where the phone says who may edit.
     public var editorURL: URL {
         bucketURL.appendingPathComponent("editor")
@@ -149,6 +154,11 @@ public enum CanonicalRequest {
     /// and `canonicalFetch` in `protocol/signing.ts`.
     public static func editorRegistration(bucket: String, timestamp: Int64, body: Data) -> Data {
         canonical(["\(protocolName) editor", bucket, String(timestamp)], body: body)
+    }
+
+    /// The same string as `canonicalDeviceRegistration` in `protocol/signing.ts`.
+    public static func deviceRegistration(bucket: String, timestamp: Int64, body: Data) -> Data {
+        canonical(["\(protocolName) device", bucket, String(timestamp)], body: body)
     }
 
     public static func edit(bucket: String, timestamp: Int64, sealed: Data) -> Data {

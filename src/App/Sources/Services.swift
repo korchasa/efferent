@@ -272,6 +272,58 @@ final class Services: ObservableObject {
         }
     }
 
+    // MARK: - Being woken
+
+    /// Ask Apple for a way to reach this phone.
+    ///
+    /// Not a permission and not a question: a background wake needs no notice
+    /// permission and shows nothing, so nobody is asked anything here. What it
+    /// costs is written down instead — the service learns it can ring this
+    /// phone, and learns when it did.
+    ///
+    /// Called on every launch with an archive, because the token is Apple's to
+    /// change: a restore, a reinstall or a new phone all produce a new one, and
+    /// the only way to find out is to ask. Apple answers on the delegate.
+    func registerForWake() {
+        guard !demonstration, destination != nil else { return }
+        UIApplication.shared.registerForRemoteNotifications()
+    }
+
+    /// Apple answered with the way to reach this phone; tell the service.
+    ///
+    /// Sent when it is news — a token this bucket has already been told about
+    /// is not sent again — and a failure is a line in the log. Being woken is
+    /// the fast path and never the only one, so a phone that could not register
+    /// is slower and not broken.
+    func recordDeviceToken(_ token: Data) async {
+        guard !demonstration, let destination else { return }
+        let hex = token.map { String(format: "%02x", $0) }.joined()
+        guard let topic = Bundle.main.bundleIdentifier else {
+            log.error("this build has no bundle id, so it cannot say what to push under")
+            return
+        }
+        do {
+            guard try !store.wakeRegistered(for: destination.bucket, token: hex) else { return }
+            try await ArchiveCreator.registerDevice(
+                destination: destination, identity: identity, token: token, topic: topic
+            )
+            try store.recordWakeRegistered(for: destination.bucket, token: hex)
+            log.info("the service can wake this phone now")
+        } catch {
+            log.error("could not register for waking: \(String(describing: error))")
+        }
+    }
+
+    /// The service says an edit is waiting. Everything else is this phone's.
+    ///
+    /// The wake carries nothing, so there is nothing to read out of it — it is
+    /// the same fetch the open app and the catch-up task make, at a moment
+    /// somebody asked for rather than one the system chose.
+    func wokenByService() async {
+        log.info("woken: something is waiting at the archive")
+        await deliverEdits()
+    }
+
     private func refreshConnectionHandoff() {
         do {
             guard let deployment, let destination,
@@ -296,8 +348,22 @@ final class Services: ObservableObject {
 
     /// Forget where to send and both phone-owned keys. A phone-owned archive
     /// becomes unreadable if its reading key was not already moved elsewhere.
-    func disconnect() {
+    func disconnect() async {
         log.info("disconnected: this phone forgets the archive and its keys")
+        // First, while there is still a key that can sign for it: an archive
+        // this phone has let go of must not leave a way to ring it. A service
+        // that cannot be reached keeps the token, and refuses to wake a phone
+        // that no longer answers — which is a wake nobody sees rather than a
+        // way in.
+        if let destination, !demonstration {
+            do {
+                try await ArchiveCreator.forgetDevice(destination: destination, identity: identity)
+            } catch {
+                log.error("the service was not told to stop waking this phone: \(String(describing: error))")
+            }
+        }
+        UIApplication.shared.unregisterForRemoteNotifications()
+        try? store.forgetWakeRegistration()
         UserDefaults.standard.removeObject(forKey: Self.destinationKey)
         // Back to the beginning, not to an everyday screen with nowhere to
         // send: without an archive there is nothing for that screen to show.

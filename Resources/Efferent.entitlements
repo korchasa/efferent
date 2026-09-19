@@ -9,5 +9,12 @@
 	     only ever sees new data when the person opens it by hand. -->
 	<key>com.apple.developer.healthkit.background-delivery</key>
 	<true/>
+	<!-- Lets the archive's own service wake this phone when an agent has put an
+	     edit in the queue. The push carries nothing and shows nothing; it is a
+	     moment of being awake, and the phone decides the rest. `development`
+	     here because the push key this factory holds is a sandbox one — a store
+	     build needs `production`. -->
+	<key>aps-environment</key>
+	<string>development</string>
 </dict>
 </plist>

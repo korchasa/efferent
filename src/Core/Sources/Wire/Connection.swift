@@ -147,6 +147,18 @@ public enum ConnectionError: Error, Equatable {
     }
 }
 
+/// Where the phone can be reached, as the service keeps it.
+///
+/// Encoded rather than assembled by hand because these two strings are what a
+/// wake is addressed with, and a typo in either is a push that goes nowhere and
+/// says nothing about why.
+struct DeviceRegistration: Encodable {
+    /// Apple's device token, hex — the form the push URL wants it in.
+    let token: String
+    /// The bundle id this build runs under, which is the push topic.
+    let topic: String
+}
+
 /// Claims the logical archive before there is a day to upload.
 public enum ArchiveCreator {
     /// The bytes a claim is made of, which are also what Apple attests.
@@ -233,6 +245,95 @@ public enum ArchiveCreator {
         let (body, response) = try await session.data(for: editorRequest(
             destination: destination, identity: identity, editorPublicKey: editorPublicKey, now: now
         ))
+        guard let http = response as? HTTPURLResponse else {
+            throw ConnectionError.server(status: 0, message: "the server did not return HTTP")
+        }
+        guard (200 ..< 300).contains(http.statusCode) else {
+            throw ConnectionError.refusal(status: http.statusCode, body: body)
+        }
+    }
+
+    /// The request that tells the service where this phone can be reached.
+    ///
+    /// Signed by the writer key rather than the editor key, because this is the
+    /// owner's decision: an agent may put edits in the queue and may not choose
+    /// what gets woken. The body names the device token Apple issued and the
+    /// topic to push it under, which is this build's bundle id — the service
+    /// refuses a topic belonging to another app.
+    public static func deviceRequest(
+        destination: Destination,
+        identity: DeviceIdentity,
+        token: Data,
+        topic: String,
+        now: Date = Date()
+    ) throws -> URLRequest {
+        let key = try identity.signingKey()
+        let timestamp = Int64(now.timeIntervalSince1970)
+        let body = try JSONEncoder().encode(
+            DeviceRegistration(token: token.map { String(format: "%02x", $0) }.joined(), topic: topic)
+        )
+        let signature = try key.signature(for: CanonicalRequest.deviceRegistration(
+            bucket: destination.bucket, timestamp: timestamp, body: body
+        ))
+
+        var request = URLRequest(url: destination.deviceURL)
+        request.httpMethod = "PUT"
+        request.httpBody = body
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(String(timestamp), forHTTPHeaderField: "x-efferent-timestamp")
+        request.setValue(
+            Base64URL.encode(key.publicKey.rawRepresentation), forHTTPHeaderField: "x-efferent-writer"
+        )
+        request.setValue(Base64URL.encode(Data(signature)), forHTTPHeaderField: "x-efferent-signature")
+        return request
+    }
+
+    /// Tell the service where this phone can be reached.
+    public static func registerDevice(
+        destination: Destination,
+        identity: DeviceIdentity,
+        token: Data,
+        topic: String,
+        session: URLSession = .shared,
+        now: Date = Date()
+    ) async throws {
+        let (body, response) = try await session.data(for: deviceRequest(
+            destination: destination, identity: identity, token: token, topic: topic, now: now
+        ))
+        guard let http = response as? HTTPURLResponse else {
+            throw ConnectionError.server(status: 0, message: "the server did not return HTTP")
+        }
+        guard (200 ..< 300).contains(http.statusCode) else {
+            throw ConnectionError.refusal(status: http.statusCode, body: body)
+        }
+    }
+
+    /// Tell the service to forget where this phone is.
+    ///
+    /// Signed over an empty body with the same canonical message the
+    /// registration uses. Called while disconnecting, before the keys that
+    /// could sign it are forgotten — after that this phone can no longer ask.
+    public static func forgetDevice(
+        destination: Destination,
+        identity: DeviceIdentity,
+        session: URLSession = .shared,
+        now: Date = Date()
+    ) async throws {
+        let key = try identity.signingKey()
+        let timestamp = Int64(now.timeIntervalSince1970)
+        let signature = try key.signature(for: CanonicalRequest.deviceRegistration(
+            bucket: destination.bucket, timestamp: timestamp, body: Data()
+        ))
+
+        var request = URLRequest(url: destination.deviceURL)
+        request.httpMethod = "DELETE"
+        request.setValue(String(timestamp), forHTTPHeaderField: "x-efferent-timestamp")
+        request.setValue(
+            Base64URL.encode(key.publicKey.rawRepresentation), forHTTPHeaderField: "x-efferent-writer"
+        )
+        request.setValue(Base64URL.encode(Data(signature)), forHTTPHeaderField: "x-efferent-signature")
+
+        let (body, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw ConnectionError.server(status: 0, message: "the server did not return HTTP")
         }
