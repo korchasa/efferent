@@ -770,7 +770,8 @@ Deno.test("setup_guide returns the complete local reader without receiving a key
   assertEquals(response.status, 200, JSON.stringify(body));
   assert(guide.includes("# Set up Efferent"));
   assert(guide.includes("three fields"));
-  assert(guide.includes("pyhpke==0.6.3"));
+  assert(guide.includes("--self-test"));
+  assert(!guide.includes("pyhpke"));
   assert(guide.includes('USER_AGENT = "efferent-local-reader/1.0"'));
   assert(guide.includes("To write into Health"));
   assert(guide.includes("--write"));

@@ -132,6 +132,10 @@ try {
     return output.stdout;
   };
 
+  const vectors = new TextDecoder().decode(await reference("--self-test")).trim();
+  if (!vectors.startsWith("RFC 9180 A.2.1")) throw new Error(`the self-test printed: ${vectors}`);
+  console.log(`Python: ${vectors}`);
+
   const opened = await reference("--day", DAY);
   if (
     !opened.every((byte, index) => byte === plaintext[index]) || opened.length !== plaintext.length

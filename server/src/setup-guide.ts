@@ -28,9 +28,12 @@ analyse. Days stored before this layout are lines already and pass straight thro
 
 Local reading procedure:
 
-1. Create a private Python virtual environment and install \`pyhpke==0.6.3\`.
-2. Save the code below as \`efferent_hpke.py\`. Save the complete three-field handoff as a separate
-   owner-only file and set both files to mode 600 on POSIX systems.
+1. Create a private Python virtual environment and install \`cryptography\` (PyCA, 42 or newer).
+   That is the script's only dependency: HPKE itself is written out in the script.
+2. Save the code below as \`efferent_hpke.py\` and run \`python efferent_hpke.py --self-test\`. It
+   seals and opens the vectors published in RFC 9180 appendix A.2.1 for this exact suite, so the
+   script's cryptography is checked against the standard before it touches a key. Save the complete
+   handoff as a separate owner-only file and set both files to mode 600 on POSIX systems.
 3. Use \`archive_status\` and \`list_sealed_days\` to choose the dates needed for the question. When no
    MCP client is registered, call them the way the phone's instruction calls \`setup_guide\`: one
    JSON-RPC \`tools/call\` POST per call to the same address, with the same two headers and the tool's

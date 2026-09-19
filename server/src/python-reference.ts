@@ -18,19 +18,108 @@ import zlib
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
-from pyhpke import AEADId, CipherSuite, KDFId, KEMId
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
 INFO = b"efferent/v2 hpke"
 SEALED_VERSION = 2
 ENC_BYTES = 32
-SUITE = CipherSuite.new(
-    KEMId.DHKEM_X25519_HKDF_SHA256,
-    KDFId.HKDF_SHA256,
-    AEADId.CHACHA20_POLY1305,
-)
 USER_AGENT = "efferent-local-reader/1.0"
 RAW = (serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+
+# RFC 9180 HPKE, base mode, DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 and
+# ChaCha20-Poly1305, written out below rather than imported: the only
+# dependency is then the cryptography library, and --self-test checks these
+# lines against the vectors the RFC publishes for this exact suite (A.2.1).
+# Every sealed object here is one message per context, so the sequence number
+# is always 0 and the nonce is the base nonce itself.
+KEM_SUITE = b"KEM" + (32).to_bytes(2, "big")
+HPKE_SUITE = b"HPKE" + (32).to_bytes(2, "big") + (1).to_bytes(2, "big") + (3).to_bytes(2, "big")
+
+
+def hkdf_extract(salt: bytes, ikm: bytes) -> bytes:
+    return hmac.new(salt or bytes(32), ikm, hashlib.sha256).digest()
+
+
+def hkdf_expand(prk: bytes, info: bytes, length: int) -> bytes:
+    out, block, counter = b"", b"", 1
+    while len(out) < length:
+        block = hmac.new(prk, block + info + bytes([counter]), hashlib.sha256).digest()
+        out, counter = out + block, counter + 1
+    return out[:length]
+
+
+def labeled_extract(suite: bytes, salt: bytes, label: bytes, ikm: bytes) -> bytes:
+    return hkdf_extract(salt, b"HPKE-v1" + suite + label + ikm)
+
+
+def labeled_expand(suite: bytes, prk: bytes, label: bytes, info: bytes, length: int) -> bytes:
+    return hkdf_expand(prk, length.to_bytes(2, "big") + b"HPKE-v1" + suite + label + info, length)
+
+
+def key_and_nonce(dh: bytes, enc: bytes, recipient_public: bytes, info: bytes) -> tuple[bytes, bytes]:
+    shared = labeled_expand(
+        KEM_SUITE,
+        labeled_extract(KEM_SUITE, b"", b"eae_prk", dh),
+        b"shared_secret",
+        enc + recipient_public,
+        32,
+    )
+    context = (
+        b"\x00"
+        + labeled_extract(HPKE_SUITE, b"", b"psk_id_hash", b"")
+        + labeled_extract(HPKE_SUITE, b"", b"info_hash", info)
+    )
+    secret = labeled_extract(HPKE_SUITE, shared, b"secret", b"")
+    return (
+        labeled_expand(HPKE_SUITE, secret, b"key", context, 32),
+        labeled_expand(HPKE_SUITE, secret, b"base_nonce", context, 12),
+    )
+
+
+def hpke_seal(
+    recipient_public: bytes, info: bytes, aad: bytes, plaintext: bytes,
+    ephemeral: X25519PrivateKey | None = None,
+) -> bytes:
+    """Encapsulated key followed by ciphertext and tag. The ephemeral key is
+    supplied only by the self-test; every real seal draws a fresh one."""
+    ephemeral = ephemeral or X25519PrivateKey.generate()
+    enc = ephemeral.public_key().public_bytes(*RAW)
+    dh = ephemeral.exchange(X25519PublicKey.from_public_bytes(recipient_public))
+    key, nonce = key_and_nonce(dh, enc, recipient_public, info)
+    return enc + ChaCha20Poly1305(key).encrypt(nonce, plaintext, aad)
+
+
+def hpke_open(recipient_private: bytes, info: bytes, aad: bytes, sealed: bytes) -> bytes:
+    private = X25519PrivateKey.from_private_bytes(recipient_private)
+    enc, ciphertext = sealed[:ENC_BYTES], sealed[ENC_BYTES:]
+    dh = private.exchange(X25519PublicKey.from_public_bytes(enc))
+    key, nonce = key_and_nonce(dh, enc, private.public_key().public_bytes(*RAW), info)
+    return ChaCha20Poly1305(key).decrypt(nonce, ciphertext, aad)
+
+
+def self_test() -> None:
+    """RFC 9180 appendix A.2.1, the published base-mode vectors for this suite:
+    seal with the RFC's ephemeral key and expect its bytes, then open them."""
+    info = bytes.fromhex("4f6465206f6e2061204772656369616e2055726e")
+    ephemeral = X25519PrivateKey.from_private_bytes(
+        bytes.fromhex("f4ec9b33b792c372c1d2c2063507b684ef925b8c75a42dbcbf57d63ccd381600")
+    )
+    recipient_private = bytes.fromhex("8057991eef8f1f1af18f4a9491d16a1ce333f695d4db8e38da75975c4478e0fb")
+    recipient_public = bytes.fromhex("4310ee97d88cc1f088a5576c77ab0cf5c3ac797f3d95139c6c84b5429c59662a")
+    plaintext = bytes.fromhex("4265617574792069732074727574682c20747275746820626561757479")
+    aad = bytes.fromhex("436f756e742d30")
+    expected = bytes.fromhex(
+        "1afa08d3dec047a643885163f1180476fa7ddb54c6a8029ea33f95796bf2ac4a"
+        "1c5250d8034ec2b784ba2cfd69dbdb8af406cfe3ff938e131f0def8c8b60b4db"
+        "21993c62ce81883d2dd1b51a28"
+    )
+    sealed = hpke_seal(recipient_public, info, aad, plaintext, ephemeral)
+    if sealed != expected:
+        raise SystemExit("self-test failed: the sealed bytes differ from RFC 9180 A.2.1")
+    if hpke_open(recipient_private, info, aad, sealed) != plaintext:
+        raise SystemExit("self-test failed: the RFC 9180 A.2.1 ciphertext did not open")
+    print("RFC 9180 A.2.1: sealed and opened exactly as published")
 
 
 def base64url(value: str) -> bytes:
@@ -125,11 +214,7 @@ def read_day(handoff_path: Path, day: str) -> bytes:
         version = blob[0] if blob else "missing"
         raise ValueError(f"expected HPKE sealed version 2, got {version}")
 
-    recipient = SUITE.kem.deserialize_private_key(private_raw)
-    context = SUITE.create_recipient_context(
-        blob[1 : 1 + ENC_BYTES], recipient, info=INFO
-    )
-    compressed = context.open(blob[1 + ENC_BYTES :], aad=aad)
+    compressed = hpke_open(private_raw, INFO, aad, blob[1:])
     return zlib.decompress(compressed, -zlib.MAX_WBITS)
 
 
@@ -295,11 +380,8 @@ def write_edit(handoff_path: Path, items_path: Path) -> str:
     # Sealed to the phone's reading key, with the bucket in the tag; the service
     # names the edit afterwards and never sees inside it.
     public_raw = X25519PrivateKey.from_private_bytes(private_raw).public_key().public_bytes(*RAW)
-    enc, context = SUITE.create_sender_context(
-        SUITE.kem.deserialize_public_key(public_raw), info=INFO
-    )
-    sealed = bytes([SEALED_VERSION]) + enc + context.seal(
-        pack_edit(items), aad=f"efferent/v1 edit\n{bucket}".encode()
+    sealed = bytes([SEALED_VERSION]) + hpke_seal(
+        public_raw, INFO, f"efferent/v1 edit\n{bucket}".encode(), pack_edit(items)
     )
 
     # Signed by the editor key over the canonical message the service and the
@@ -349,12 +431,18 @@ def list_edits(handoff_path: Path) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--handoff", required=True, type=Path)
+    parser.add_argument("--handoff", type=Path, help="the file holding the phone's handoff")
     what = parser.add_mutually_exclusive_group(required=True)
+    what.add_argument("--self-test", action="store_true", help="check HPKE against RFC 9180 A.2.1")
     what.add_argument("--day", help="YYYY-MM-DD: fetch and decrypt that day")
     what.add_argument("--write", type=Path, help="a JSON file of items to write into Health")
     what.add_argument("--edits", action="store_true", help="list the edits and their outcomes")
     args = parser.parse_args()
+    if args.self_test:
+        self_test()
+        return
+    if args.handoff is None:
+        parser.error("--handoff is required")
     if args.write:
         sys.stdout.write(write_edit(args.handoff, args.write) + "\n")
         return
