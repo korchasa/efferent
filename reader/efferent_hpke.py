@@ -138,6 +138,12 @@ def to_base64url(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).rstrip(b"=").decode()
 
 
+def bucket_of(reading_public_raw: bytes) -> str:
+    """The bucket id, which is the reading public key hashed and written in
+    base32. The service never learns the key; it is handed the name."""
+    return base64.b32encode(hashlib.sha256(reading_public_raw).digest()).decode().lower()[:26]
+
+
 def optional_field(handoff: str, name: str) -> str | None:
     match = re.search(rf"(?:^|\n){re.escape(name)}:\s*\r?\n([^\r\n]+)", handoff)
     return match.group(1).strip() if match else None
@@ -177,8 +183,7 @@ def connection(handoff: str) -> tuple[str, str, bytes, bytes | None]:
     if not hmac.compare_digest(actual_public, public_raw):
         raise ValueError("the private and public halves of the reading key do not match")
 
-    derived = base64.b32encode(hashlib.sha256(public_raw).digest()).decode().lower()[:26]
-    if derived != bucket:
+    if bucket_of(public_raw) != bucket:
         raise ValueError("the reading key belongs to a different bucket than the MCP URL")
 
     editor_raw = None
