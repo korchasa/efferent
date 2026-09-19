@@ -304,4 +304,29 @@ final class EditWordsTests: XCTestCase {
         XCTAssertEqual(EditWords.figure(78.42), "78.4")
         XCTAssertEqual(EditWords.figure(2600), "2\u{2009}600")
     }
+
+    // MARK: - What has not landed yet
+
+    func testWhatIsOnTheWaySaysWhatHappensNextRatherThanWhatWentWrong() {
+        XCTAssertEqual(
+            EditWords.onTheWay(1),
+            "Your agent sent 1 record. They land in Health the next time you unlock this phone."
+        )
+        XCTAssertTrue(EditWords.onTheWay(4).hasPrefix("Your agent sent 4 records."))
+    }
+
+    func testHowLongAgoIsSaidInTheCoarsestWordsThatAreStillTrue() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        func ago(_ seconds: TimeInterval) -> String {
+            EditWords.ago(now.addingTimeInterval(-seconds), now: now)
+        }
+        XCTAssertEqual(ago(5), "just now")
+        XCTAssertEqual(ago(89), "just now", "a minute and a half is still just now")
+        XCTAssertEqual(ago(90), "1 min ago")
+        XCTAssertEqual(ago(59 * 60), "59 min ago")
+        XCTAssertEqual(ago(60 * 60), "1 hour ago")
+        XCTAssertEqual(ago(5 * 60 * 60), "5 hours ago")
+        XCTAssertEqual(ago(24 * 60 * 60), "yesterday")
+        XCTAssertEqual(ago(9 * 24 * 60 * 60), "9 days ago", "the line that shows a phone gone quiet")
+    }
 }

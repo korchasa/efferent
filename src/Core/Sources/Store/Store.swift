@@ -36,8 +36,8 @@ public struct Stats: Equatable, Sendable {
     /// has never looked and an agent that has never written look alike.
     public let lastEditCheckAt: Date?
     /// Edits listed and not yet written into Health, which happens when the
-    /// screen was locked at the moment of the listing.
-    public let editsWaiting: Int
+    /// screen was locked at the moment of the listing. They land at the unlock.
+    public let editsHeldByLock: Int
 
     public init(
         pendingDays: Int,
@@ -46,7 +46,7 @@ public struct Stats: Equatable, Sendable {
         lastUploadAt: Date?,
         backfillReached: String?,
         lastEditCheckAt: Date? = nil,
-        editsWaiting: Int = 0
+        editsHeldByLock: Int = 0
     ) {
         self.pendingDays = pendingDays
         self.stuckDays = stuckDays
@@ -54,7 +54,7 @@ public struct Stats: Equatable, Sendable {
         self.lastUploadAt = lastUploadAt
         self.backfillReached = backfillReached
         self.lastEditCheckAt = lastEditCheckAt
-        self.editsWaiting = editsWaiting
+        self.editsHeldByLock = editsHeldByLock
     }
 }
 
@@ -604,7 +604,7 @@ public final class Store {
                 backfillReached: Self.string(db, MetaKey.backfillReached.rawValue),
                 lastEditCheckAt: Self.int(db, MetaKey.lastEditCheckAt.rawValue)
                     .map { Date(timeIntervalSince1970: TimeInterval($0)) },
-                editsWaiting: Int(Self.int(db, MetaKey.editsWaiting.rawValue) ?? 0)
+                editsHeldByLock: Int(Self.int(db, MetaKey.editsHeldByLock.rawValue) ?? 0)
             )
         }
     }
@@ -622,10 +622,10 @@ public final class Store {
     /// behind unwritten. Written together because they are one fact — a count
     /// without the moment it was taken says nothing about whether it is still
     /// true.
-    public func recordEditCheck(waiting: Int, at moment: Date = Date()) throws {
+    public func recordEditCheck(heldByLock: Int, at moment: Date = Date()) throws {
         try dbQueue.write { db in
             try Self.setInt(db, MetaKey.lastEditCheckAt.rawValue, Int64(moment.timeIntervalSince1970))
-            try Self.setInt(db, MetaKey.editsWaiting.rawValue, Int64(waiting))
+            try Self.setInt(db, MetaKey.editsHeldByLock.rawValue, Int64(heldByLock))
         }
     }
 

@@ -217,6 +217,32 @@ final class ApplierTests: XCTestCase {
         XCTAssertEqual(world.service.listings, 1)
     }
 
+    // MARK: - A locked phone (DELIVERY-12)
+
+    func testALockedPhoneListsTheQueueAndWritesNothing() async throws {
+        var world = try World()
+        try world.submit(Self.breakfast)
+        try world.submit(Self.sleep)
+
+        let outcome = try await world.applier().run(canWrite: false)
+
+        XCTAssertEqual(outcome, .locked(waiting: 2), "the count is what the unlock will land")
+        XCTAssertEqual(world.service.listings, 1, "the queue was reached")
+        XCTAssertTrue(world.writer.samples.isEmpty, "Health is sealed")
+        XCTAssertEqual(world.service.outcomes.count, 0, "an unanswered edit stays in the queue")
+    }
+
+    func testTheSameEditsLandOnceTheLockIsOff() async throws {
+        var world = try World()
+        try world.submit(Self.breakfast)
+
+        _ = try await world.applier().run(canWrite: false)
+        let outcome = try applied(await world.applier().run())
+
+        XCTAssertEqual(outcome.edits, 1)
+        XCTAssertEqual(outcome.items, 1, "nothing was lost to the locked run")
+    }
+
     // MARK: - When the answer does not land (DoD-5)
 
     func testAnAnswerThatDidNotLandLeavesTheEditToBeAppliedAgainWithAHigherVersion() async throws {

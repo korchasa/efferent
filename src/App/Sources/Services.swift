@@ -573,7 +573,7 @@ final class Services: ObservableObject {
             // Every other outcome means the service answered, so the queue was
             // reached. That is the fact the screen needs: an agent who sent
             // nothing and a phone that never looked are the same empty strip.
-            try store.recordEditCheck(waiting: Self.waiting(in: outcome))
+            try store.recordEditCheck(heldByLock: Self.heldByLock(in: outcome))
             guard case let .applied(applied) = outcome else { return }
             if !applied.days.isEmpty {
                 let marked = try store.markDirty(applied.days)
@@ -596,7 +596,7 @@ final class Services: ObservableObject {
     /// What a run leaves behind for the next unlock. Only a locked run leaves
     /// anything: every other outcome either emptied the queue or never reached
     /// it, and a stale count is worse than none.
-    private static func waiting(in outcome: Applier.Outcome) -> Int {
+    private static func heldByLock(in outcome: Applier.Outcome) -> Int {
         if case let .locked(waiting) = outcome { return waiting }
         return 0
     }
@@ -724,15 +724,20 @@ final class Services: ObservableObject {
         await Notices.ask()
     }
 
-    /// Ask about notices once an agent has actually written something.
+    /// Ask about notices once an agent is connected — before it can write, not
+    /// after it has.
     ///
     /// The walkthrough offers the question too, and this is what makes walking
     /// past it cost nothing: its "Not now" never shows the system sheet, so the
-    /// permission is still undetermined and the question can be put again here
-    /// — this time about something that has just happened rather than about a
-    /// thing that never has.
+    /// permission is still undetermined and the question can be put again here.
+    ///
+    /// It used to wait until an agent had actually written something, which
+    /// read as the more considerate order and guaranteed the opposite: the
+    /// first edit — the one a person most wants to hear about — always landed
+    /// in silence, because the permission was still being asked for. A
+    /// connected agent is a thing that has just happened, and that is enough.
     func askForNoticesIfNeeded() async {
-        guard agentConnected, edits.ever.anything else { return }
+        guard agentConnected else { return }
         await askForNotices()
     }
 

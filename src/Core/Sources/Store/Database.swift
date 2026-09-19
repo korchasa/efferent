@@ -249,10 +249,13 @@ enum MetaKey: String {
     /// strip, and only one of them is working.
     case lastEditCheckAt = "edits.lastCheckAt"
     /// Edits the service is holding that this phone has listed and not yet
-    /// written into Health — because the screen was locked when it looked.
-    /// Zero once a run has drained the queue, which is what makes it safe to
-    /// show as a count of what is waiting rather than of what ever arrived.
-    case editsWaiting = "edits.waiting"
+    /// written into Health, because the screen was locked when it looked.
+    ///
+    /// Not to be confused with `EditTally.waiting`, which counts edits from an
+    /// older build that were never answered at all. This one empties as soon as
+    /// a run drains the queue, which is what makes it safe to show as a count
+    /// of what is on its way rather than of what ever arrived.
+    case editsHeldByLock = "edits.heldByLock"
     /// The sealed-envelope version represented by every non-null day digest.
     /// Changing it invalidates those claims and requeues the known archive.
     case sealingVersion = "sealing.version"

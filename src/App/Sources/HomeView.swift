@@ -191,7 +191,24 @@ struct HomeView: View {
     /// Opening the list is what ends it — the same run tomorrow is history, and
     /// history belongs in the list.
     @ViewBuilder private var agentNotice: some View {
-        if services.edits.unseen.total > 0 {
+        if services.edits.unseen.total == 0, let held = services.stats?.editsHeldByLock, held > 0 {
+            // Listed at the service, not yet in Health, because the screen was
+            // locked when this phone looked. Said plainly rather than left as
+            // an empty screen: the person is about to unlock the phone anyway,
+            // and this is the sentence that makes the wait legible.
+            DarkPanel(padding: 0) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Legend("agent edits · on the way", size: 9, colour: Palette.darkLegend)
+                    Text(EditWords.onTheWay(held))
+                        .font(.system(size: 15))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } else if services.edits.unseen.total > 0 {
             DarkPanel(padding: 0) {
                 Button { readingEdits = true } label: {
                     VStack(alignment: .leading, spacing: 10) {
@@ -362,12 +379,31 @@ struct HomeView: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "lock")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(Palette.legend)
-            Legend("encrypted on device", size: 9)
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "lock")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Palette.legend)
+                Legend("encrypted on device", size: 9)
+            }
+            // An agent who sent nothing and a phone that never looked are the
+            // same empty screen, and one of them is a fault. This is the line
+            // that tells them apart — and the one that makes an app iOS has
+            // stopped waking recognisable, because its time stops moving.
+            if services.agentConnected {
+                Legend(checkedLine, size: 9)
+            }
         }
+    }
+
+    /// When the archive was last asked what the agent has sent, or what is
+    /// stopping the asking.
+    private var checkedLine: String {
+        if services.paused { return "agent edits held back with sending" }
+        guard let checked = services.stats?.lastEditCheckAt else {
+            return "agent edits not checked yet"
+        }
+        return "agent edits checked " + EditWords.ago(checked)
     }
 
     private var state: SyncState {

@@ -346,4 +346,32 @@ enum EditWords {
         let parts = calendar.dateComponents([.hour, .minute], from: date)
         return String(format: "%02d:%02d", parts.hour ?? 0, parts.minute ?? 0)
     }
+
+    // MARK: - What has not landed yet
+
+    /// Edits the service is holding that this phone has seen and cannot write
+    /// yet, because Health is sealed while the screen is locked.
+    ///
+    /// It says what happens next rather than what went wrong: nothing did, and
+    /// the thing that fixes it is the unlock the person is about to do anyway.
+    static func onTheWay(_ count: Int) -> String {
+        "Your agent sent \(records(count)). They land in Health the next time you unlock this phone."
+    }
+
+    /// How long ago something happened, in the coarsest words that are still
+    /// true.
+    ///
+    /// Coarse on purpose. This line exists so that a phone iOS has stopped
+    /// waking is recognisable by its time standing still, and for that a person
+    /// needs to tell minutes from days — not to read a clock.
+    static func ago(_ moment: Date, now: Date = Date()) -> String {
+        let seconds = Int(now.timeIntervalSince(moment))
+        if seconds < 90 { return "just now" }
+        let minutes = seconds / 60
+        if minutes < 60 { return "\(minutes) min ago" }
+        let hours = minutes / 60
+        if hours < 24 { return hours == 1 ? "1 hour ago" : "\(hours) hours ago" }
+        let days = hours / 24
+        return days == 1 ? "yesterday" : "\(days) days ago"
+    }
 }
