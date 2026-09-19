@@ -132,7 +132,6 @@ struct EditsView: View {
         .scrollContentBackground(.hidden)
     }
 
-
     private var nothing: some View {
         VStack(spacing: 8) {
             Legend("no edits yet")
