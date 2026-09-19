@@ -62,7 +62,17 @@ class FakeArchive:
             def log_message(self, *_):
                 pass
 
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        class Server(ThreadingHTTPServer):
+            # The reader fetches a window of days at once, and the default
+            # backlog of 5 is smaller than that window: the connections past it
+            # are refused by the kernel and arrive as "connection reset by
+            # peer", which reads as an archive that dropped the request. macOS
+            # 27 enforces it where earlier versions were forgiving, so two tests
+            # that had passed for months began failing overnight, in the reader
+            # rather than in the stub that caused it.
+            request_queue_size = 128
+
+        self.server = Server(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
