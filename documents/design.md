@@ -1,5 +1,10 @@
 # Design
 
+Status, 2026-09-19: the floor is built and the wake is not. Every pull trigger below is in the app,
+a locked phone counts what is on its way, and the everyday screen says when the queue was last
+reached. The wake waits on one thing only — an APNs key, which is made in the Apple Developer portal
+and cannot be made through the App Store Connect API.
+
 ## Scope
 
 How the app is arranged to meet [`requirements.md`](requirements.md). Written one subsystem at a
