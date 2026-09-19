@@ -7,7 +7,8 @@
 # and phone handoffs carry raw key bytes, all with no armour, so a real reading
 # key pasted into a source file would have sailed through a default scan.
 # Verified: a history scan of this repository with the stock ruleset reports
-# nothing, while the fixture key in `scripts/interop.ts` sits in it in plain sight.
+# nothing, while the fixture key in `reader/efferent/interop.py` sits in it in
+# plain sight.
 #
 # The reading key is the one that matters. It decrypts every day the archive has
 # ever held, it is generated once and never rotated, and publishing it cannot be
@@ -31,13 +32,22 @@ regex = '''MC4CAQAwBQYDK2V[uw][A-Za-z0-9+/_-]{20,}'''
 keywords = ["MC4CAQAwBQYDK2V"]
 
   # The one place such a key is committed on purpose. Scoped as narrowly as it
-  # can be: this file, and this exact value. A different key pasted into the
+  # can be: these files, and this exact value. A different key pasted into the
   # same file still fails, which is the point — the danger is not the fixture,
   # it is the day someone edits that line and pastes a real key over it.
+  #
+  # Two paths because the check scans history as well as the working directory,
+  # and history cannot be edited. The fixture lived in `scripts/interop.ts`
+  # until the reader moved to Python on 2026-09-19; every commit before that
+  # still carries it there, so dropping the old path turns the history scan red
+  # over a key that guarded nothing then either.
   [[rules.allowlists]]
   description = "the interop check's throwaway key pair, which guards nothing"
   condition = "AND"
-  paths = ['''^scripts/interop\.ts$''']
+  paths = [
+    '''^reader/efferent/interop\.py$''',
+    '''^scripts/interop\.ts$''',
+  ]
   regexes = ['''MC4CAQAwBQYDK2VuBCIEIB-BUIZTXqbNIR0MFd8VXE2BPlP2ohi2pcpCd_FksGD6''']
 
 [[rules]]
@@ -77,10 +87,22 @@ description = "the local mirror: decrypted days and the reading key itself"
 # keys: a build before a check turned up eleven of them, none in this project's
 # code. A scanner that has to be preceded by `rm -rf build` is a scanner people
 # learn to skip.
+#
+# The Python reader's three leftovers are the same case once more. `__pycache__`
+# holds the compiled form of every module, the interop fixture key included, and
+# it is rewritten the moment anything imports the reader; `.venv` holds the
+# `cryptography` package with its own test keys; `.interop.json` is the scratch
+# file `deno task interop` passes its markers through, which survives a failed
+# run. All three are in `.gitignore`, so the scan is the only thing that ever
+# looks at them, and a check that goes red after running the reader is a check
+# people learn to skip.
 paths = [
   '''^\.efferent''',
   '''(^|/)\.wrangler/''',
   '''^build/''',
+  '''(^|/)__pycache__/''',
+  '''^reader/\.venv/''',
+  '''^reader/\.interop\.json$''',
 ]
 
 [[allowlists]]

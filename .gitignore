@@ -19,7 +19,8 @@ xcuserdata/
 # Machine-local build settings: the team id names the account, not the app.
 Configs/Local.xcconfig
 
-# The Python reader's interpreter and caches — never committed.
+# The Python reader's interpreter, caches and the interop check's scratch file.
 reader/.venv/
+reader/.interop.json
 __pycache__/
 *.egg-info/

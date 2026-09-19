@@ -13,8 +13,8 @@ await checkTooling();
 section("Checking generated Cloudflare types");
 await run("deno", { args: ["task", "server:types:check"] });
 
-section("Testing the protocol, the service and the reading tools");
-await run("deno", { args: ["test", "-A", "protocol/", "server/", "tools/"] });
+section("Testing the protocol and the service");
+await run("deno", { args: ["test", "-A", "protocol/", "server/"] });
 
 section("Checking and testing the Python reader");
 await checkReader();
