@@ -473,6 +473,15 @@ final class Services: ObservableObject {
         await requestHealthAccess()
     }
 
+    /// Whether some writable Health type has never been decided about, which
+    /// stops the queue being read at all. Asked of HealthKit each time rather
+    /// than remembered: the person can answer it in the Health app, and a
+    /// remembered "no" would go on blaming a question that was answered.
+    var healthWriteUndecided: Bool {
+        guard !demonstration else { return false }
+        return healthWriter.writeAccessUndecided()
+    }
+
     func refreshNow() async {
         do {
             _ = try await health.refresh()
@@ -569,11 +578,16 @@ final class Services: ObservableObject {
             let outcome = try await applier.run(
                 canWrite: UIApplication.shared.isProtectedDataAvailable
             )
-            if case .busy = outcome { return }
-            // Every other outcome means the service answered, so the queue was
-            // reached. That is the fact the screen needs: an agent who sent
-            // nothing and a phone that never looked are the same empty strip.
-            try store.recordEditCheck(heldByLock: Self.heldByLock(in: outcome))
+            // Only when the queue was actually reached. `busy` did not get to
+            // ask, and `notAsked` returns before the listing — writing a time
+            // for either would put a sentence on the screen saying this phone
+            // looked, which is the one thing that line exists to be honest
+            // about.
+            switch outcome {
+            case .busy, .notAsked: return
+            case .nothingWaiting, .applied, .locked:
+                try store.recordEditCheck(heldByLock: Self.heldByLock(in: outcome))
+            }
             guard case let .applied(applied) = outcome else { return }
             if !applied.days.isEmpty {
                 let marked = try store.markDirty(applied.days)

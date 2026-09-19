@@ -400,6 +400,11 @@ struct HomeView: View {
     /// stopping the asking.
     private var checkedLine: String {
         if services.paused { return "agent edits held back with sending" }
+        // Named before the time, because it is the reason there is no time: an
+        // unanswered Health question stops the queue being read at all, and an
+        // "not checked yet" that did not say why would send the person looking
+        // for a fault in the agent.
+        if services.healthWriteUndecided { return "health access not answered yet" }
         guard let checked = services.stats?.lastEditCheckAt else {
             return "agent edits not checked yet"
         }
