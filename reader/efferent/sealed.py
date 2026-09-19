@@ -28,6 +28,12 @@ def associated_data(bucket: str, day: str) -> bytes:
     return f"efferent/v1\n{bucket}\n{day}".encode()
 
 
+def edit_associated_data(bucket: str) -> bytes:
+    """The bucket is bound into the ciphertext; the name is given later, by the
+    service."""
+    return f"efferent/v1 edit\n{bucket}".encode()
+
+
 def open_legacy(private_raw: bytes, public_raw: bytes, blob: bytes, aad: bytes) -> bytes:
     if len(blob) <= LEGACY_HEADER:
         raise ValueError("sealed v1 blob is too short")

@@ -28,7 +28,7 @@ import efferent_hpke as wire
 
 from .days import is_day, now_iso
 from .phone import canonical_edit, decompress, sign, unix_now
-from .sealed import associated_data, open_sealed
+from .sealed import associated_data, edit_associated_data, open_sealed
 
 DAYS = "days"
 STATE = "mirror.json"
@@ -337,7 +337,7 @@ class Archive:
         sealed = bytes([wire.SEALED_VERSION]) + wire.hpke_seal(
             self.reading_public,
             wire.INFO,
-            f"efferent/v1 edit\n{self.bucket}".encode(),
+            edit_associated_data(self.bucket),
             wire.pack_edit(items),
         )
         timestamp = unix_now()

@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 import efferent_hpke as wire
 from efferent.phone import (
+    canonical_edit,
     canonical_request,
     compress,
     decompress,
@@ -22,7 +23,12 @@ from efferent.phone import (
     pack_days,
     unpack_days,
 )
-from efferent.sealed import associated_data, open_sealed, seal_legacy
+from efferent.sealed import (
+    associated_data,
+    edit_associated_data,
+    open_sealed,
+    seal_legacy,
+)
 
 
 def beat(at: str, value: int) -> dict:
@@ -119,6 +125,30 @@ class Frames(unittest.TestCase):
             unpack_days(whole[: 16 + 4])
         with self.assertRaises(ValueError):
             unpack_days(b"")
+
+
+class Tags(unittest.TestCase):
+    """The bytes bound into a ciphertext, written out rather than called.
+
+    Every other test asks the function what the tag is and then checks against
+    the function, which agrees with itself however it is changed. These are the
+    literal strings the phone and the service also hold, so a change to either
+    tag fails here and is noticed on this side rather than on a phone."""
+
+    def test_a_day_is_bound_to_its_bucket_and_its_date(self):
+        self.assertEqual(
+            associated_data("b" * 26, "2026-08-07"),
+            b"efferent/v1\n" + b"b" * 26 + b"\n2026-08-07",
+        )
+
+    def test_an_edit_is_bound_to_its_bucket(self):
+        self.assertEqual(edit_associated_data("b" * 26), b"efferent/v1 edit\n" + b"b" * 26)
+
+    def test_an_edit_signs_the_protocol_the_bucket_the_moment_and_the_body(self):
+        self.assertEqual(
+            canonical_edit("b" * 26, 1_700_000_000, b"x").split("\n")[:3],
+            ["efferent/v1 edit", "b" * 26, "1700000000"],
+        )
 
 
 class Signing(unittest.TestCase):
