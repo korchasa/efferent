@@ -152,7 +152,19 @@ strip says "could not write 1 record", and the notice ends "and 1 did not happen
 protocol and the service, 113 on the Python reader.
 
 Not done, and needing their own go-ahead: build 22 is still the number, because it was never
-uploaded anywhere; deploying the service to both environments —
-which must happen in step with the build, because the phone now sends `failed` and a Worker that has
-not been deployed will turn the answer away — re-rendering the store screenshots, the TestFlight
-upload and the acceptance walk.
+uploaded anywhere; deploying the service to both environments; re-rendering the store screenshots;
+the TestFlight upload; and the acceptance walk.
+
+### The phone and the service change word together (owner, 2026-09-20)
+
+`validateOutcome` turns away a field it does not know, so a phone and a Worker on different sides of
+this rename cannot talk: an old phone answering `refused` to a new Worker, or a new phone answering
+`failed` to an old one, is turned away either way. The phone has already applied the items by then,
+so the edit stays in the queue and is applied again on the next pass, for ever, without its outcome
+ever landing.
+
+Decided: **nothing is deployed until the build is ready to go out, and then the Worker deploy and the
+build install happen back to back, in one sitting.** No compatibility window is built for this — the
+phone and the service are updated together, and a Worker deployed on its own is the mistake this
+paragraph exists to prevent. The gap between the two is a few minutes, and it is harmless as long as
+no edit is put into the queue during it; the queue is empty and only the owner fills it.
