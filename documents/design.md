@@ -16,7 +16,8 @@ after the agent wrote it. See "What a wake is allowed" below.
 ## Scope
 
 How the app is arranged to meet [`requirements.md`](requirements.md). Written one subsystem at a
-time; today it covers the delivery of an agent's edits and the notices about them. Everything above
+time; today it covers the delivery of an agent's edits, the notices about them, and the one question
+the walkthrough puts to Health. Everything above
 this — what the app collects, the wire format, who can read the archive — is `README.md`, and the
 boundary with the service is [`connection.md`](connection.md).
 
@@ -286,6 +287,25 @@ line per record, the line's key follows what stands in Health (`EditEntry.person
 record that is out is written back), and the earlier items are read on the record's own page under
 "before this". Going back to a value an earlier item held is not offered as a key at all: it is a
 value the agent chose and the person never saw. WORD-6.
+
+## How a screen asks Health how far back it goes
+
+`EarliestDay` (`src/App/Sources/EarliestDay.swift`) is one `@StateObject` per screen holding two
+published values: the day the last look found, and whether a look has happened at all. It has no
+reader of its own — `look` takes the call as a closure, so the screen hands it `Services`, and a
+demonstration run answers with its own figures rather than with the phone's Health.
+
+Two screens keep one each, and both ask as they appear: the range step of the walkthrough
+(`SetupView.range`) and the sheet that reaches further back (`HomeView.reachBackSheet`). The
+walkthrough also asks once on its first screen, which is a head start and never the answer the
+fourth screen shows — SETUP-1 is exactly the rule that the head start may not become the answer.
+`Services.firstDayInHealth` writes a line for every look, because a screen showing a stale answer
+and a screen that has just asked are identical from the outside.
+
+Health is asked through `HealthCoordinator.firstDay`, which reads the earliest sample of the
+aggregate metrics (`HealthReader.earliestDay`). Being refused because nobody has answered Health yet
+is not an error and is not shown as one: the screen already says, in plain words, that Health has
+nothing to read.
 
 ## Walking the screens before a release
 

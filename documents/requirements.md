@@ -231,9 +231,11 @@ history and a phone that has not been asked yet both come back with nothing, so 
 states and not two: still working it out, Health has nothing, and a real first day. Reading the
 second out of the first tells somebody their history is missing.
 
-**SETUP-3 — A range never promises history the archive cannot hold.** A day chosen earlier than the
-first day is offered as the first day, and marking history clamps to it in any case. What the screen
-promises and what the export queues are the same span.
+**SETUP-3 — A range never promises history the archive cannot hold.** Once the first day is known, a
+day chosen earlier than it is offered as the first day, and what the screen promises is the span the
+export queues. While it is unknown the calendar still opens — a range is better than a dead screen —
+and marking history clamps to Health's own first record, so the export is right even when the
+sentence above the button was hopeful.
 
 **SETUP-4 — The walkthrough never claims access it cannot see.** Apple does not tell an app what was
 allowed, so no screen says access was granted; the walkthrough says where the switches live instead.
