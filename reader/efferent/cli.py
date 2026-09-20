@@ -52,7 +52,6 @@ USAGE = """usage:
   efferent status [--url <endpoint>]    what the archive holds, and what the mirror does
   efferent query [filters]              answer from the mirror, offline
   efferent ask [filters]                answer from the archive, fetching only those days
-  efferent write --file <items.json>    seal, sign and hand the phone an edit (- for stdin)
   efferent edits [--all] [--after <n>]  what became of the edits; pending only by default
 
 filters (query, ask and read):
@@ -216,33 +215,6 @@ def status(url: str | None) -> None:
     behind = remote["days"] - len(mirrored)
     tail = f"  — {behind} behind, run sync" if behind > 0 else "  — up to date"
     print(f"mirror   {len(mirrored)} days, {mirrored[0]} … {mirrored[-1]}{tail}")
-
-
-def write_edits(options: dict) -> None:
-    """Hand the phone an edit: a JSON list of items, or an object with `items`.
-
-    Everything that can be wrong with an item is said here before anything is
-    sealed; what the phone then does with it is a question for `edits`."""
-    path = require(options, "file")
-    text = sys.stdin.read() if path == "-" else open(path).read()
-    try:
-        parsed = json.loads(text)
-    except ValueError as error:
-        raise Failure(f"{path} is not JSON: {error}") from None
-    items = parsed if isinstance(parsed, list) else (parsed or {}).get("items")
-    if not isinstance(items, list):
-        raise Failure(f'{path} must hold a list of items, or an object with "items"')
-
-    state = load_state(options.get("url"))
-    archive = open_archive(state["endpoint"])
-    answer = archive.submit_edits(items)
-    print(f"submitted: {answer['name']}")
-    print(f"at:        {answer['at']}")
-    print(f"bytes:     {answer['bytes']}, {len(items)} item{'' if len(items) == 1 else 's'}")
-    print(
-        "the phone applies it the next time it is opened or wakes to send; "
-        "`efferent edits` says when"
-    )
 
 
 def edits(options: dict) -> None:
@@ -447,7 +419,6 @@ COMMANDS = {
     "query": query,
     "ask": ask,
     "status": lambda o: status(o.get("url")),
-    "write": write_edits,
     "edits": edits,
 }
 

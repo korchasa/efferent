@@ -340,14 +340,15 @@ system anything, so a phone that walked past it is asked once more — the first
 writes something.
 
 ```bash
-deno task efferent write --file items.json   # seal, sign and hand the phone an edit
 deno task efferent edits --all               # what became of each, by name
 ```
 
-The local MCP server offers the same as `phone_data_write` and `phone_data_edits`, and its overview
-names what may be written and in which unit. The Python reference returned by `setup_guide` writes
-too — `--write <items.json>` and `--edits` — so the public connection path needs nothing from this
-repository in either direction.
+Writing is the MCP server's: `phone_data_write` takes the items and `phone_data_edits` says what
+became of each, and the overview names what may be written and in which unit. The Python reference
+returned by `setup_guide` writes too — `--write <items.json>` and `--edits` — so the public
+connection path needs nothing from this repository in either direction. The reader on the command
+line does not write at all: a third way to seal the same edit is a third place for the rules about
+ids and units to drift.
 
 ## Who can read it
 
@@ -455,10 +456,10 @@ deno task check
   the formatter. Every task that runs the reader needs it; `EFFERENT_PYTHON` points at another
   interpreter instead.
 - `test:reader` — the Python reader's own format check, lint and tests, without the Swift half.
-- `efferent` — the local reading side: `connect --handoff <file>`, `ask`, `sync`, `status`, `query`,
-  `write --file <items.json>` and `edits`, plus `keygen`, `send` and `read` for protocol
-  development. `connect --handoff -` reads the handoff from standard input without putting the key
-  in a process argument.
+- `efferent` — the local reading side: `connect --handoff <file>`, `ask`, `sync`, `status`,
+  `query` and `edits`, plus `keygen`, `send` and `read` for protocol development. It does not
+  write; that is `phone_data_write` on the MCP server. `connect --handoff -` reads the handoff
+  from standard input without putting the key in a process argument.
 - `mcp` — the same archive as an MCP server on stdio, for an agent to read and write.
 
 `EFFERENT_HOME` is not optional in practice. Unset, the reading side falls back to `.efferent`
