@@ -180,7 +180,13 @@ public enum OutcomeCode: String, Codable, Sendable, CaseIterable {
 /// What the phone tells the service about one edit: how many items landed and
 /// which did not, by index and word. Never a metric, never a value.
 public struct Outcome: Equatable, Sendable, Encodable {
-    public struct Refusal: Equatable, Sendable, Encodable {
+    /// One item the phone could not carry out, and the word for why.
+    ///
+    /// A failure, not a refusal: two of the words below are a decision
+    /// somebody made, and the other nine are simply the thing not working.
+    /// The edit as a whole is already called `failed` when one of these is in
+    /// it, and an item is now called the same.
+    public struct Failure: Equatable, Sendable, Encodable {
         public let item: Int
         public let code: OutcomeCode
 
@@ -191,11 +197,11 @@ public struct Outcome: Equatable, Sendable, Encodable {
     }
 
     public let applied: Int
-    public let refused: [Refusal]
+    public let failed: [Failure]
 
-    public init(applied: Int, refused: [Refusal]) {
+    public init(applied: Int, failed: [Failure]) {
         self.applied = applied
-        self.refused = refused
+        self.failed = failed
     }
 
     public func encoded() throws -> Data {

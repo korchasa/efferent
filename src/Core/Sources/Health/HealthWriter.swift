@@ -131,7 +131,7 @@ public struct DisplacedRecord: Codable, Equatable, Hashable, Sendable {
 }
 
 /// Why an item was not written, in a word the outcome can carry.
-public enum WriteRefused: Error, Equatable {
+public enum WriteFailed: Error, Equatable {
     case code(OutcomeCode)
 }
 
@@ -202,8 +202,8 @@ public struct Written: Equatable, Sendable {
 
 /// The real one.
 ///
-/// Every refusal is a `WriteRefused` with its word, so an edit with one bad
-/// item still gets its other items applied. What is not a refusal is Health
+/// Every failure is a `WriteFailed` with its word, so an edit with one bad
+/// item still gets its other items applied. What is not one of those is Health
 /// being unreachable — a locked phone — and that is thrown as it came, because
 /// it says nothing about the item and everything about the moment.
 public struct HealthKitWriter: HealthWriter {
@@ -231,16 +231,16 @@ public struct HealthKitWriter: HealthWriter {
 
     public func apply(_ item: EditItem.Put, version: Int) async throws -> Written {
         guard let metric = WritableMetric.named(item.metric) else {
-            throw WriteRefused.code(.unknownMetric)
+            throw WriteFailed.code(.unknownMetric)
         }
         guard store.authorizationStatus(for: metric.type) == .sharingAuthorized else {
-            throw WriteRefused.code(.unauthorized)
+            throw WriteFailed.code(.unauthorized)
         }
         let start = Date(timeIntervalSince1970: TimeInterval(item.start))
         let end = Date(timeIntervalSince1970: TimeInterval(item.end))
         // HealthKit refuses a sample that ends in the future, with an error
         // that names nothing. Said here instead, with a word.
-        guard end >= start, end <= now() else { throw WriteRefused.code(.badRange) }
+        guard end >= start, end <= now() else { throw WriteFailed.code(.badRange) }
 
         let metadata: [String: Any] = [
             HKMetadataKeySyncIdentifier: Self.syncIdentifier(item.id),
@@ -249,10 +249,10 @@ public struct HealthKitWriter: HealthWriter {
         let sample: HKSample
         if let unit = metric.unit, let type = metric.type as? HKQuantityType {
             guard item.stage == nil, item.unit == unit.unitString else {
-                throw WriteRefused.code(.badUnit)
+                throw WriteFailed.code(.badUnit)
             }
             guard let value = item.value, value.isFinite, value >= 0 else {
-                throw WriteRefused.code(.badRange)
+                throw WriteFailed.code(.badRange)
             }
             sample = HKQuantitySample(
                 type: type,
@@ -265,16 +265,16 @@ public struct HealthKitWriter: HealthWriter {
             guard item.value == nil, item.unit == nil,
                   let stage = item.stage.flatMap({ WritableMetric.sleepStages[$0] })
             else {
-                throw WriteRefused.code(.badUnit)
+                throw WriteFailed.code(.badUnit)
             }
             guard end.timeIntervalSince(start) <= Self.longestSleep else {
-                throw WriteRefused.code(.badRange)
+                throw WriteFailed.code(.badRange)
             }
             sample = HKCategorySample(
                 type: type, value: stage.rawValue, start: start, end: end, metadata: metadata
             )
         } else {
-            throw WriteRefused.code(.unknownMetric)
+            throw WriteFailed.code(.unknownMetric)
         }
 
         // What the new sample pushes out, read before it lands. This is the
@@ -304,7 +304,7 @@ public struct HealthKitWriter: HealthWriter {
             displaced += samples.compactMap { Self.record($0, metric: metric, calendar: calendar) }
             found += samples
         }
-        guard !found.isEmpty else { throw WriteRefused.code(.notFound) }
+        guard !found.isEmpty else { throw WriteFailed.code(.notFound) }
         try await saving { try await store.delete(found) }
         return Written(days: days, displaced: displaced)
     }
@@ -356,7 +356,8 @@ public struct HealthKitWriter: HealthWriter {
     }
 
     /// Health's own refusals, sorted into words. A locked phone is not one of
-    /// them and is thrown as it came.
+    /// them and is thrown as it came. Health refusing is one cause of a failed
+    /// item among several, which is why the word for the item is the wider one.
     private func saving<T>(_ work: () async throws -> T) async throws -> T {
         do {
             return try await work()
@@ -368,9 +369,9 @@ public struct HealthKitWriter: HealthWriter {
             if failure.domain == HKError.errorDomain,
                failure.code == HKError.Code.errorAuthorizationDenied.rawValue
             {
-                throw WriteRefused.code(.unauthorized)
+                throw WriteFailed.code(.unauthorized)
             }
-            throw WriteRefused.code(.healthRefused)
+            throw WriteFailed.code(.healthRefused)
         }
     }
 }

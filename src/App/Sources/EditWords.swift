@@ -25,7 +25,7 @@ enum EditWords {
     static func colour(_ state: EditEntry.State) -> Color {
         switch state {
         case .written: Palette.accent
-        case .refused: Palette.alarm
+        case .failed: Palette.alarm
         // Waiting is among them now: an older version of the app held items
         // back for an answer, and those rows are history like the rest.
         case .removed, .declined, .waiting: Palette.legend
@@ -43,15 +43,15 @@ enum EditWords {
         if tally.removed > 0 {
             parts.append("removed \(records(tally.removed))")
         }
-        if tally.refused > 0 {
-            parts.append("had \(records(tally.refused)) refused")
+        if tally.failed > 0 {
+            parts.append("could not write \(records(tally.failed))")
         }
         guard !parts.isEmpty else { return "Your agent changed nothing." }
         return "Your agent " + list(parts) + " in Health."
     }
 
-    /// The same counts as a legend, for the row above the keys: "3 applied,
-    /// 1 refused".
+    /// The same counts as a legend, for the row above the keys: "3 written,
+    /// 1 failed".
     static func counted(_ tally: EditTally) -> String {
         var parts: [String] = []
         if tally.waiting > 0 {
@@ -63,8 +63,8 @@ enum EditWords {
         if tally.removed > 0 {
             parts.append("\(tally.removed) removed")
         }
-        if tally.refused > 0 {
-            parts.append("\(tally.refused) refused")
+        if tally.failed > 0 {
+            parts.append("\(tally.failed) failed")
         }
         if tally.declined > 0 {
             parts.append("\(tally.declined) turned down")
@@ -136,8 +136,8 @@ enum EditWords {
                 : "You wrote it back\(moment)"
         }
         switch entry.state {
-        case .refused:
-            return "\(arrived) · " + (entry.code.map(reason) ?? "refused")
+        case .failed:
+            return "\(arrived) · " + (entry.code.map(reason) ?? "it did not happen")
         case .removed:
             guard let day = entry.day else { return "Agent removed at \(arrived)" }
             return "Agent removed at \(arrived) · a record from \(spoken(day: day))"
@@ -195,11 +195,11 @@ enum EditWords {
         }
         if let code = entry.code {
             switch entry.state {
-            // The same column, and not the word "refused": nothing has been
-            // turned away here, and nothing has been written either.
+            // The same column, and not the word "failed": nothing went wrong
+            // here, and nothing has been written either.
             case .waiting: fields.append(Field(name: "your answer", value: "never given"))
             case .declined: fields.append(Field(name: "your answer", value: "no"))
-            default: fields.append(Field(name: "refused", value: reason(code)))
+            default: fields.append(Field(name: "did not happen", value: reason(code)))
             }
         }
         fields.append(Field(name: "agent acted", value: stamp(entry.at, in: calendar)))
@@ -241,7 +241,7 @@ enum EditWords {
                 + "again, so the archive stops showing it too."
         case .written:
             return "This record is in Health."
-        case .refused:
+        case .failed:
             return "Nothing was written, so there is nothing to take back. Your agent can send it "
                 + "again once the reason is gone."
         case .removed where restores(entry):
@@ -308,8 +308,8 @@ enum EditWords {
 
     // MARK: - Words for the codes
 
-    /// Every way an item can be turned away, said as a fact about this phone's
-    /// Health rather than as the word the wire carries.
+    /// Every way an item can fail, said as a fact about this phone's Health
+    /// rather than as the word the wire carries.
     static func reason(_ code: OutcomeCode) -> String {
         switch code {
         case .unknownMetric: "not a metric agents may write"
@@ -321,7 +321,7 @@ enum EditWords {
         case .badSignature: "not signed by your agent's key"
         case .cannotOpen: "this phone could not open it"
         case .malformed: "the edit did not make sense"
-        // The two that are not a refusal. They are in the same set because the
+        // The two that are not a failure. They are in the same set because the
         // wire has one field for "what became of this item", and an agent reads
         // them the same way — except that these two can change.
         case .awaitingApproval: "waiting for you to allow it"

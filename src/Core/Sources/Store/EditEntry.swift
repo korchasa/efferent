@@ -22,8 +22,12 @@ public struct EditEntry: Equatable, Hashable, Sendable, Identifiable {
         case written
         /// The record is out of Health.
         case removed
-        /// Health never took it. `code` says why, in a word.
-        case refused
+        /// It did not happen. `code` says why, in a word: the metric is not
+        /// one this app writes, the unit does not fit it, the span is
+        /// impossible, Health has not been allowed, the record is not there,
+        /// Health itself said no, the letter would not open. Health is as it
+        /// was either way.
+        case failed
         /// A change or a removal the agent asked for and Health has not seen:
         /// it would alter or take away a record that stands there now, and that
         /// is the person's to allow. The item is kept here, whole, because the
@@ -65,7 +69,7 @@ public struct EditEntry: Equatable, Hashable, Sendable, Identifiable {
     public let stage: String?
     /// The day in the archive the item landed on, or left.
     public let day: String?
-    /// Why it was refused, when it was.
+    /// Why it could not be done, when it could not.
     public let code: OutcomeCode?
     /// When this phone applied what the agent asked for.
     public let at: Date
@@ -165,7 +169,7 @@ public struct EditTally: Equatable, Sendable {
     public var written = 0
     /// Records the agent removed and the person has not brought back.
     public var removed = 0
-    public var refused = 0
+    public var failed = 0
     public var waiting = 0
     public var declined = 0
     /// Rows the person wrote back after the agent had removed or replaced them.
@@ -176,7 +180,7 @@ public struct EditTally: Equatable, Sendable {
     public init(
         written: Int = 0,
         removed: Int = 0,
-        refused: Int = 0,
+        failed: Int = 0,
         waiting: Int = 0,
         declined: Int = 0,
         personWrote: Int = 0,
@@ -184,7 +188,7 @@ public struct EditTally: Equatable, Sendable {
     ) {
         self.written = written
         self.removed = removed
-        self.refused = refused
+        self.failed = failed
         self.waiting = waiting
         self.declined = declined
         self.personWrote = personWrote
@@ -196,7 +200,7 @@ public struct EditTally: Equatable, Sendable {
     /// purpose — it is a question rather than something that happened, and the
     /// screen asks it instead of counting it.
     public var total: Int {
-        written + removed + refused + declined + personWrote + personRemoved
+        written + removed + failed + declined + personWrote + personRemoved
     }
 
     /// What the person has since changed, whichever way round.

@@ -211,6 +211,16 @@ enum Database {
             """)
         }
 
+        // An item that never happened was called `refused`, which reads as a
+        // decision somebody made. Nine of the eleven words for why are not a
+        // decision at all — a metric this app cannot write, a unit that does
+        // not fit, a letter that would not open — so the row now says what it
+        // is: it failed. The word for the whole edit has always been `failed`;
+        // this is the item catching up with it.
+        migrator.registerMigration("v9.editLog.failedNotRefused") { db in
+            try db.execute(sql: "UPDATE editLog SET state = 'failed' WHERE state = 'refused'")
+        }
+
         return migrator
     }
 

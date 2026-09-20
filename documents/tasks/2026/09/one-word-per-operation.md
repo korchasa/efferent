@@ -114,3 +114,45 @@ acceptance walk on the new build.
 Nothing about the wire, the archive, the reading path or the applier's reach. No
 requirement changes about what an agent may touch. The journal's contents are
 preserved; only how a row is written down and read out.
+
+## A second word, decided 2026-09-20
+
+The owner read the finished journal and asked what separates `refused` from `removed`. The answer
+exposed the next wrong word: `refused` is the only unhappy outcome of the five, and the word dresses
+it up as somebody's decision. Nine of the eleven codes are nothing anybody decided — a metric this
+app does not write, a unit that does not fit, a span that cannot be, no such record, a letter that
+would not open or would not parse. Two of them genuinely are a decision: Health saying no, and Health
+access never granted.
+
+Worse, `declined` sat in the same list meaning "you turned this down", so two different states read
+as one word.
+
+Decided: the item is **failed**, everywhere — screen, journal, wire, service, the listing an agent
+reads (WORD-5 in `documents/requirements.md`). This is not a new word: the service has always called
+a whole edit `failed` when one of its items did not land, so the rename makes the item agree with the
+edit rather than inventing a third vocabulary. `refused` stays only where somebody really refused —
+the service turning a request away, Apple turning down an attestation, the system turning down a
+wake, a day the service keeps rejecting, and the code `healthRefused`.
+
+The owner also asked whether `removed` might be `canceled`. It cannot: `canceled` says an action was
+called off and leaves unsaid whether the record is in Health, which is the one question the journal
+exists to answer; "cancel" is also what happens *before* an action, and the approval gate that word
+belonged to was removed. `removed` is the pair to `written`, and every row answers with one of them.
+
+### Done
+
+`v9.editLog.failedNotRefused` rewrites the stored word. On the wire `Outcome.refused` became
+`Outcome.failed`, `Outcome.Refusal` became `Outcome.Failure`, and `WriteRefused` became
+`WriteFailed`. The service writes the count under `failed` and reads the old key as well, because an
+outcome stored before the rename is a real answer and reading it as zero would report a failed edit
+as applied. The screen's field under a record is now "did not happen" rather than "refused", the
+strip says "could not write 1 record", and the notice ends "and 1 did not happen".
+
+`deno task check` and `deno task test` are green: 207 Swift tests (206 passed, 1 skipped), 118 on the
+protocol and the service, 113 on the Python reader.
+
+Not done, and needing their own go-ahead: build 22 is still the number, because it was never
+uploaded anywhere; deploying the service to both environments —
+which must happen in step with the build, because the phone now sends `failed` and a Worker that has
+not been deployed will turn the answer away — re-rendering the store screenshots, the TestFlight
+upload and the acceptance walk.

@@ -170,7 +170,7 @@ final class HealthWriterTests: XCTestCase {
             do {
                 _ = try await writer(store).apply(item, version: 1)
                 XCTFail("\(item) was written")
-            } catch let WriteRefused.code(code) {
+            } catch let WriteFailed.code(code) {
                 XCTAssertEqual(code, expected, "\(item)")
             } catch {
                 XCTFail("\(item): \(error)")
@@ -185,7 +185,7 @@ final class HealthWriterTests: XCTestCase {
         do {
             _ = try await writer(store).apply(meal(), version: 1)
             XCTFail("written without permission")
-        } catch let WriteRefused.code(code) {
+        } catch let WriteFailed.code(code) {
             XCTAssertEqual(code, .unauthorized)
         }
         XCTAssertFalse(writer(store).writeAccessUndecided())
@@ -199,7 +199,7 @@ final class HealthWriterTests: XCTestCase {
         do {
             _ = try await writer(store).apply(meal(), version: 1)
             XCTFail("written")
-        } catch let WriteRefused.code(code) {
+        } catch let WriteFailed.code(code) {
             XCTAssertEqual(code, .healthRefused)
         } catch {
             XCTFail("\(error)")
@@ -211,7 +211,7 @@ final class HealthWriterTests: XCTestCase {
         do {
             _ = try await writer(store).apply(meal(), version: 1)
             XCTFail("written")
-        } catch is WriteRefused {
+        } catch is WriteFailed {
             XCTFail("a locked phone is a condition to wait out, not an answer about the item")
         } catch {
             XCTAssertTrue(HealthReader.isLocked(error))
@@ -234,7 +234,7 @@ final class HealthWriterTests: XCTestCase {
         do {
             _ = try await writer.remove(id: "agent:meal:1")
             XCTFail("removed twice")
-        } catch let WriteRefused.code(code) {
+        } catch let WriteFailed.code(code) {
             XCTAssertEqual(code, .notFound)
         }
     }

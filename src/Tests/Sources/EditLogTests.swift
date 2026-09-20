@@ -49,10 +49,10 @@ final class EditLogTests: XCTestCase {
         XCTAssertEqual(try store.edit(entry.id), entry)
     }
 
-    func testARefusedItemKeepsTheWordItWasTurnedAwayWith() throws {
+    func testAFailedItemKeepsTheWordItCouldNotBeDoneWith() throws {
         let store = try Store.inMemory()
         try store.recordEdit(
-            lunch(), at: 0, in: "1757336400000-abcdefgh", state: .refused, day: nil,
+            lunch(), at: 0, in: "1757336400000-abcdefgh", state: .failed, day: nil,
             code: .unauthorized, at: Self.noon
         )
 
@@ -67,7 +67,7 @@ final class EditLogTests: XCTestCase {
         try store.recordUnopenedEdit("1757336400000-abcdefgh", code: .badSignature, at: Self.noon)
 
         let entry = try XCTUnwrap(store.recentEdits().first)
-        XCTAssertEqual(entry.state, .refused)
+        XCTAssertEqual(entry.state, .failed)
         XCTAssertEqual(entry.code, .badSignature)
         XCTAssertEqual(entry.recordID, "")
         XCTAssertNil(entry.metric)
@@ -137,7 +137,7 @@ final class EditLogTests: XCTestCase {
             lunch(id: "agent:meal:2"), at: 1, in: "a", state: .written, day: "2025-09-08", at: fresh
         )
         try store.recordEdit(
-            lunch(id: "agent:meal:3"), at: 2, in: "a", state: .refused, day: nil,
+            lunch(id: "agent:meal:3"), at: 2, in: "a", state: .failed, day: nil,
             code: .badRange, at: fresh
         )
         try store.recordEdit(
@@ -154,7 +154,7 @@ final class EditLogTests: XCTestCase {
         // The one written at the watermark itself has been seen.
         XCTAssertEqual(summary.unseen.total, 3)
         XCTAssertEqual(summary.unseen.written, 1)
-        XCTAssertEqual(summary.unseen.refused, 1)
+        XCTAssertEqual(summary.unseen.failed, 1)
         XCTAssertEqual(summary.unseen.removed, 1)
     }
 
@@ -209,9 +209,9 @@ final class EditLogTests: XCTestCase {
         XCTAssertEqual(entries.count, 3)
 
         // Health has nothing under that id, so the removal is nobody's business:
-        // it is refused the way it always was, and no decision is asked for.
+        // it fails the way it always did, and no decision is asked for.
         let removed = try XCTUnwrap(entries.first { $0.editName == name })
-        XCTAssertEqual(removed.state, .refused)
+        XCTAssertEqual(removed.state, .failed)
         XCTAssertEqual(removed.code, .notFound)
         XCTAssertEqual(removed.recordID, "agent:water:1")
         // A deletion names no metric and no instant: the record was gone before
@@ -228,7 +228,7 @@ final class EditLogTests: XCTestCase {
         XCTAssertEqual(meal.day, "2025-09-07")
 
         let sleep = try XCTUnwrap(entries.first { $0.recordID == "agent:sleep:1" })
-        XCTAssertEqual(sleep.state, .refused)
+        XCTAssertEqual(sleep.state, .failed)
         XCTAssertEqual(sleep.code, .unauthorized)
         XCTAssertEqual(sleep.stage, "asleepCore")
         XCTAssertNil(sleep.day)
@@ -243,7 +243,7 @@ final class EditLogTests: XCTestCase {
 
         let entry = try XCTUnwrap(world.store.recentEdits().first)
         XCTAssertEqual(entry.editName, name)
-        XCTAssertEqual(entry.state, .refused)
+        XCTAssertEqual(entry.state, .failed)
         XCTAssertEqual(entry.code, .badSignature)
         XCTAssertEqual(entry.recordID, "")
     }
@@ -466,7 +466,7 @@ final class EditLogTests: XCTestCase {
             [
                 "written/agent",
                 "removed/agent",
-                "refused/agent",
+                "failed/agent",
                 "waiting/agent",
                 "declined/agent",
                 // The person took out an addition, which is a removal.

@@ -77,7 +77,7 @@ final class ApplierTests: XCTestCase {
         func apply(_ item: EditItem.Put, version: Int) async throws -> Written {
             writes += 1
             if let code = refuse[item.id] {
-                throw WriteRefused.code(code)
+                throw WriteFailed.code(code)
             }
             // What stood under that id, before the new sample takes its place.
             let displaced = samples[item.id].map { [Self.record($0.put)] } ?? []
@@ -88,7 +88,7 @@ final class ApplierTests: XCTestCase {
         }
 
         func remove(id: String) async throws -> Written {
-            guard let held = samples.removeValue(forKey: id) else { throw WriteRefused.code(.notFound) }
+            guard let held = samples.removeValue(forKey: id) else { throw WriteFailed.code(.notFound) }
             let gone = Self.record(held.put)
             return Written(days: [gone.day], displaced: [gone])
         }
@@ -197,7 +197,7 @@ final class ApplierTests: XCTestCase {
 
         XCTAssertEqual(outcome.edits, 2)
         XCTAssertEqual(outcome.items, 3)
-        XCTAssertEqual(outcome.refused, 0)
+        XCTAssertEqual(outcome.failed, 0)
         XCTAssertEqual(outcome.days, ["2025-09-07", "2025-09-06"])
         XCTAssertNil(outcome.stoppedBy)
         XCTAssertEqual(world.service.fetched, [first, second], "listing order")
@@ -274,11 +274,11 @@ final class ApplierTests: XCTestCase {
         let outcome = try applied(await world.applier().run())
 
         XCTAssertEqual(outcome.edits, 1)
-        XCTAssertEqual(outcome.refused, 1)
+        XCTAssertEqual(outcome.failed, 1)
         XCTAssertTrue(world.writer.samples.isEmpty, "nothing was written")
-        let refused = try XCTUnwrap(world.service.outcomes[name]?["refused"] as? [[String: Any]])
-        XCTAssertEqual(refused.first?["code"] as? String, "badSignature")
-        XCTAssertEqual(refused.first?["item"] as? Int, 0)
+        let failed = try XCTUnwrap(world.service.outcomes[name]?["failed"] as? [[String: Any]])
+        XCTAssertEqual(failed.first?["code"] as? String, "badSignature")
+        XCTAssertEqual(failed.first?["item"] as? Int, 0)
         XCTAssertTrue(world.service.queue.isEmpty)
     }
 
@@ -286,21 +286,21 @@ final class ApplierTests: XCTestCase {
         var world = try World()
         let name = try world.submit(Self.breakfast, sealedTo: Curve25519.KeyAgreement.PrivateKey().publicKey)
         _ = try applied(await world.applier().run())
-        let refused = try XCTUnwrap(world.service.outcomes[name]?["refused"] as? [[String: Any]])
-        XCTAssertEqual(refused.first?["code"] as? String, "cannotOpen")
+        let failed = try XCTUnwrap(world.service.outcomes[name]?["failed"] as? [[String: Any]])
+        XCTAssertEqual(failed.first?["code"] as? String, "cannotOpen")
     }
 
     func testAnEditThatIsNotABatchIsAnsweredMalformed() async throws {
         var world = try World()
         let name = try world.submit(#"{"op":"merge","id":"a"}"#)
         _ = try applied(await world.applier().run())
-        let refused = try XCTUnwrap(world.service.outcomes[name]?["refused"] as? [[String: Any]])
-        XCTAssertEqual(refused.first?["code"] as? String, "malformed")
+        let failed = try XCTUnwrap(world.service.outcomes[name]?["failed"] as? [[String: Any]])
+        XCTAssertEqual(failed.first?["code"] as? String, "malformed")
     }
 
     // MARK: - Items Health will not take
 
-    func testARefusedItemIsAnsweredByIndexAndTheOthersStillLand() async throws {
+    func testAFailedItemIsAnsweredByIndexAndTheOthersStillLand() async throws {
         var world = try World()
         world.writer.refuse["agent:meal:1"] = .unauthorized
         let name = try world.submit(Self.breakfast + "," + Self.sleep + #",{"op":"delete","id":"nothing"}"#)
@@ -308,11 +308,11 @@ final class ApplierTests: XCTestCase {
         let outcome = try applied(await world.applier().run())
 
         XCTAssertEqual(outcome.items, 3)
-        XCTAssertEqual(outcome.refused, 2)
+        XCTAssertEqual(outcome.failed, 2)
         XCTAssertEqual(outcome.days, ["2025-09-06"])
-        let refused = try XCTUnwrap(world.service.outcomes[name]?["refused"] as? [[String: Any]])
-        XCTAssertEqual(refused.map { $0["item"] as? Int }, [0, 2])
-        XCTAssertEqual(refused.map { $0["code"] as? String }, ["unauthorized", "notFound"])
+        let failed = try XCTUnwrap(world.service.outcomes[name]?["failed"] as? [[String: Any]])
+        XCTAssertEqual(failed.map { $0["item"] as? Int }, [0, 2])
+        XCTAssertEqual(failed.map { $0["code"] as? String }, ["unauthorized", "notFound"])
         XCTAssertEqual(world.service.outcomes[name]?["applied"] as? Int, 1)
     }
 
@@ -331,8 +331,8 @@ final class ApplierTests: XCTestCase {
     }
 
     private func codes(_ world: World, of name: String) throws -> [String] {
-        let refused = try XCTUnwrap(world.service.outcomes[name]?["refused"] as? [[String: Any]])
-        return refused.compactMap { $0["code"] as? String }
+        let failed = try XCTUnwrap(world.service.outcomes[name]?["failed"] as? [[String: Any]])
+        return failed.compactMap { $0["code"] as? String }
     }
 
     /// Nothing waits for an answer. An agent reaches only what this app wrote,
@@ -344,7 +344,7 @@ final class ApplierTests: XCTestCase {
         let outcome = try applied(await world.applier().run())
 
         XCTAssertEqual(outcome.items, 2)
-        XCTAssertEqual(outcome.refused, 0)
+        XCTAssertEqual(outcome.failed, 0)
         XCTAssertEqual(outcome.days, ["2025-09-07", "2025-09-06"])
         XCTAssertTrue(world.service.queue.isEmpty)
         XCTAssertEqual(world.service.outcomes[name]?["applied"] as? Int, 2)
@@ -403,7 +403,7 @@ final class ApplierTests: XCTestCase {
 
         let outcome = try applied(await world.applier().run())
 
-        XCTAssertEqual(outcome.refused, 1)
+        XCTAssertEqual(outcome.failed, 1)
         XCTAssertNil(world.writer.samples["agent:meal:1"], "Health was never asked")
         XCTAssertEqual(try codes(world, of: name), ["declined"])
     }

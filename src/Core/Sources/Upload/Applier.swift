@@ -34,7 +34,7 @@ import os
 /// always could; nothing new ever joins them.
 ///
 /// **A bad edit is answered, not left.** One the phone cannot verify, open or
-/// read is answered with a single refusal and leaves the queue like any other:
+/// read is answered as a single failed item and leaves the queue like any other:
 /// a queue blocked forever by one bad edit is worse than a bad edit answered.
 /// A failure to *deliver* the answer is different, and stops the run — the
 /// edit stays, and is applied again next time.
@@ -52,7 +52,7 @@ public final class Applier {
     public struct Applied: Equatable, Sendable {
         public var edits = 0
         public var items = 0
-        public var refused = 0
+        public var failed = 0
         /// The two operations, counted apart, because the notice says them in
         /// the same words the journal does.
         public var written = 0
@@ -226,7 +226,7 @@ public final class Applier {
             }
         }
         log.info(
-            "applied \(applied.edits) edits, \(applied.items) items, \(applied.refused) refused, "
+            "applied \(applied.edits) edits, \(applied.items) items, \(applied.failed) failed, "
                 + "\(applied.days.count) days to rebuild, "
                 + "in \(Uploader.milliseconds(since: started)) ms"
         )
@@ -279,7 +279,7 @@ public final class Applier {
     private struct Result {
         let written: Int
         let removed: Int
-        let refused: [Efferent.Outcome.Refusal]
+        let failed: [Efferent.Outcome.Failure]
         let days: Set<String>
         var applied: Int {
             written + removed
@@ -307,29 +307,29 @@ public final class Applier {
         switch try open(answer) {
         case let .items(items):
             result = try await write(items, of: name)
-        case let .refused(code):
-            log.debug("\(name): refused whole, \(code.rawValue)")
+        case let .unreadable(code):
+            log.debug("\(name): could not be read at all, \(code.rawValue)")
             try store.recordUnopenedEdit(name, code: code, at: now())
-            result = Result(written: 0, removed: 0, refused: [.init(item: 0, code: code)], days: [])
+            result = Result(written: 0, removed: 0, failed: [.init(item: 0, code: code)], days: [])
         }
 
         applied.days.formUnion(result.days)
-        try await report(name, Efferent.Outcome(applied: result.applied, refused: result.refused))
+        try await report(name, Efferent.Outcome(applied: result.applied, failed: result.failed))
         applied.edits += 1
-        applied.items += result.applied + result.refused.count
-        applied.refused += result.refused.count
+        applied.items += result.applied + result.failed.count
+        applied.failed += result.failed.count
         applied.written += result.written
         applied.removed += result.removed
         log.debug(
             "\(name): \(answer.body.count) bytes, \(result.applied) applied"
-                + (result.refused.isEmpty
-                    ? "" : ", refused " + result.refused.map { "\($0.item):\($0.code.rawValue)" }.joined(separator: " "))
+                + (result.failed.isEmpty
+                    ? "" : ", failed " + result.failed.map { "\($0.item):\($0.code.rawValue)" }.joined(separator: " "))
         )
     }
 
     private enum Opened {
         case items([EditItem])
-        case refused(OutcomeCode)
+        case unreadable(OutcomeCode)
     }
 
     /// The editor's signature, then the seal, then the shape. Each failure is
@@ -347,7 +347,7 @@ public final class Applier {
                   )
               )
         else {
-            return .refused(.badSignature)
+            return .unreadable(.badSignature)
         }
         let plaintext: Data
         do {
@@ -357,22 +357,22 @@ public final class Applier {
                 associatedData: CanonicalRequest.associatedData(editBucket: destination.bucket)
             )
         } catch {
-            return .refused(.cannotOpen)
+            return .unreadable(.cannotOpen)
         }
         do {
             return try .items(EditBatch.unpack(plaintext))
         } catch {
-            return .refused(.malformed)
+            return .unreadable(.malformed)
         }
     }
 
-    /// The items, in order. A refusal is written down and the next item goes;
+    /// The items, in order. A failure is written down and the next item goes;
     /// anything else — a locked phone, a ledger that will not write — stops
     /// the run, and the edit is applied again next time.
     private func write(_ items: [EditItem], of name: String) async throws -> Result {
         var written = 0
         var removed = 0
-        var refused: [Efferent.Outcome.Refusal] = []
+        var failed: [Efferent.Outcome.Failure] = []
         var days: Set<String> = []
         // What this phone already did with this very edit. An edit is applied
         // again whenever a run died between writing and answering, and the
@@ -386,7 +386,7 @@ public final class Applier {
             // — because the revised outcome never landed — would ask the person
             // a question they have already answered, and lose their answer.
             if before[index] == .declined {
-                refused.append(.init(item: index, code: .declined))
+                failed.append(.init(item: index, code: .declined))
                 continue
             }
             do {
@@ -406,14 +406,14 @@ public final class Applier {
                 case .put: written += 1
                 case .delete: removed += 1
                 }
-            } catch let WriteRefused.code(code) {
-                refused.append(.init(item: index, code: code))
+            } catch let WriteFailed.code(code) {
+                failed.append(.init(item: index, code: code))
                 try store.recordEdit(
-                    item, at: index, in: name, state: .refused, day: nil, code: code, at: now()
+                    item, at: index, in: name, state: .failed, day: nil, code: code, at: now()
                 )
             }
         }
-        return Result(written: written, removed: removed, refused: refused, days: days)
+        return Result(written: written, removed: removed, failed: failed, days: days)
     }
 
     /// Write one item into Health, without writing anything down: the two

@@ -759,7 +759,7 @@ final class Services: ObservableObject {
             await Notices.tell(
                 written: applied.written,
                 removed: applied.removed,
-                refused: applied.refused
+                failed: applied.failed
             )
         } catch where HealthReader.isLocked(error) {
             log.debug("the phone is locked, so no edit could be applied; they wait")
@@ -831,8 +831,8 @@ final class Services: ObservableObject {
     /// Take back everything that has landed since the person last looked.
     ///
     /// The whole run at once, because that is what the strip on the everyday
-    /// screen is about: a batch that has just arrived and is not wanted. A
-    /// refusal has nothing to take back, and neither has a removal an older
+    /// screen is about: a batch that has just arrived and is not wanted. An
+    /// item that never happened has nothing to take back, and neither has a removal an older
     /// build wrote down without keeping what it took out; both are passed over
     /// rather than reported as failures.
     func actOnRecentRun() async {
@@ -860,7 +860,7 @@ final class Services: ObservableObject {
                     + "\(days.count) days changed, \(marked) newly waiting"
             )
             lastError = nil
-        } catch WriteRefused.code(.notFound) {
+        } catch WriteFailed.code(.notFound) {
             // Health has not got it, so there is nothing to take out and
             // nothing to mark: the day it was on changed when it went.
             do { try store.recordPersonAction(entry.id, left: left) } catch {

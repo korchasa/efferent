@@ -243,7 +243,7 @@ writes one. A reader could answer neither question.
 
 Since v8 the row carries two fields, and WORD-1 to WORD-4 are what they exist for.
 
-- `state` — what the record is: `written`, `removed`, `refused`, plus `waiting` and `declined`,
+- `state` — what the record is: `written`, `removed`, `failed`, plus `waiting` and `declined`,
   which no build produces any more and which are kept because a decision an older build recorded is
   never reopened.
 - `askedBy` — `agent` or `person`. A row begins as the agent's and becomes the person's the moment
@@ -255,7 +255,7 @@ becomes screen text, `Notices` says the same two verbs on the lock screen, and t
 named for the operation the press performs rather than for the fact that it reverses something.
 
 **The migration reads each old row off its own evidence, and guesses at nothing.** `applied` and
-`deleted` map straight across, `refused`, `waiting` and `declined` are untouched, and an `undone` row
+`deleted` map straight across, `refused`, `waiting` and `declined` keep their meaning, and an `undone` row
 becomes the person's with the operation worked out from the item: no metric means the item was a
 removal, so the person wrote a record back; a metric with nothing displaced means a plain addition,
 so they removed one; a metric with something displaced means a replacement, so they wrote the
@@ -263,6 +263,16 @@ displaced record back. `undoneAt` is renamed `personActedAt` in the same step, b
 "undone" — it meant when the person acted. `EditLogTests` builds a database at v7 holding a row of
 every old state and asserts the whole mapping: this is the one migration where a mistake costs
 history rather than a redraw.
+
+**v9 renames the third word.** An item that never happened was called `refused`, which reads as a
+decision somebody made; nine of the eleven codes for why are not a decision at all. It is now
+`failed`, which is what the service has always called an edit holding one of them, so the two levels
+finally agree. The rename runs the whole way down — `EditEntry.State.failed`, `WriteFailed`,
+`Outcome.failed` on the wire, `failed` in the JSON the phone sends and in the listing the agent
+reads — and the word `refused` is left only where somebody really did refuse: the service turning a
+request away, Apple turning an attestation down, the system turning down a wake, and the code
+`healthRefused`. The service reads the old metadata key as well as the new one, because an outcome
+stored before the rename is a real answer and reading it as zero would call a failed edit applied.
 
 ## Walking the screens before a release
 

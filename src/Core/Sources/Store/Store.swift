@@ -699,7 +699,7 @@ public final class Store {
         _ editName: String, code: OutcomeCode, at moment: Date = Date()
     ) throws {
         try write(
-            editName: editName, item: 0, recordID: "", state: .refused, metric: nil, start: nil,
+            editName: editName, item: 0, recordID: "", state: .failed, metric: nil, start: nil,
             end: nil, value: nil, unit: nil, stage: nil, day: nil, code: code,
             displaced: [], at: moment
         )
@@ -857,7 +857,7 @@ public final class Store {
             case (.removed, .person): tally.personRemoved = count
             // The three that Health never took are the agent's by construction:
             // nothing the person does produces one.
-            case (.refused, _): tally.refused = count
+            case (.failed, _): tally.failed = count
             case (.waiting, _): tally.waiting = count
             case (.declined, _): tally.declined = count
             case (nil, _): break

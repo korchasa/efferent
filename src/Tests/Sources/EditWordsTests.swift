@@ -91,7 +91,7 @@ final class EditWordsTests: XCTestCase {
         )
         XCTAssertEqual(
             EditWords.title(made(
-                state: .refused, recordID: "", metric: nil, start: nil, end: nil, value: nil,
+                state: .failed, recordID: "", metric: nil, start: nil, end: nil, value: nil,
                 unit: nil, day: nil, code: .badSignature
             )),
             "An edit this phone could not read"
@@ -104,7 +104,7 @@ final class EditWordsTests: XCTestCase {
             "Agent wrote at 13:16 · for 8 Sep 2025, 13:00 – 13:15"
         )
         XCTAssertEqual(
-            EditWords.detail(made(state: .refused, code: .unauthorized), in: Self.utc),
+            EditWords.detail(made(state: .failed, code: .unauthorized), in: Self.utc),
             "13:16 · writing this is switched off in Health"
         )
         // The person's own row says the operation and who performed it, in the
@@ -143,10 +143,10 @@ final class EditWordsTests: XCTestCase {
         tally.written = 1
         XCTAssertEqual(EditWords.summary(tally), "Your agent wrote 1 record in Health.")
         tally.removed = 2
-        tally.refused = 1
+        tally.failed = 1
         XCTAssertEqual(
             EditWords.summary(tally),
-            "Your agent wrote 1 record, removed 2 records and had 1 record refused in Health."
+            "Your agent wrote 1 record, removed 2 records and could not write 1 record in Health."
         )
         XCTAssertEqual(EditWords.summary(EditTally()), "Your agent changed nothing.")
     }
@@ -187,13 +187,13 @@ final class EditWordsTests: XCTestCase {
         )
     }
 
-    func testARefusedEditSaysWhyAndOffersNothingToTakeBack() {
-        let refused = made(state: .refused, day: nil, code: .badUnit)
+    func testAFailedEditSaysWhyAndOffersNothingToTakeBack() {
+        let failed = made(state: .failed, day: nil, code: .badUnit)
         XCTAssertTrue(
-            EditWords.fields(refused, in: Self.utc)
-                .contains { $0.name == "refused" && $0.value == "the unit does not fit the metric" }
+            EditWords.fields(failed, in: Self.utc)
+                .contains { $0.name == "did not happen" && $0.value == "the unit does not fit the metric" }
         )
-        XCTAssertTrue(EditWords.note(refused, in: Self.utc).hasPrefix("Nothing was written"))
+        XCTAssertTrue(EditWords.note(failed, in: Self.utc).hasPrefix("Nothing was written"))
     }
 
     func testEveryRefusalHasASentenceAndNoneOfThemIsTheWireWord() {
@@ -217,12 +217,12 @@ final class EditWordsTests: XCTestCase {
         XCTAssertEqual(EditWords.title(waiting), "Energy · 520 kcal")
         XCTAssertEqual(EditWords.detail(waiting, in: Self.utc), "13:16 · for 8 Sep 2025, 13:00 – 13:15")
         XCTAssertTrue(EditWords.note(waiting, in: Self.utc).hasPrefix("An older version of this app"))
-        // Not the word "refused": nothing was turned away, and nothing written.
+        // Not the word "did not happen": nothing went wrong, and nothing written.
         XCTAssertTrue(
             EditWords.fields(waiting, in: Self.utc)
                 .contains { $0.name == "your answer" && $0.value == "never given" }
         )
-        XCTAssertFalse(EditWords.fields(waiting, in: Self.utc).contains { $0.name == "refused" })
+        XCTAssertFalse(EditWords.fields(waiting, in: Self.utc).contains { $0.name == "did not happen" })
         XCTAssertFalse(waiting.personCanAct, "its own page offers nothing to press")
     }
 

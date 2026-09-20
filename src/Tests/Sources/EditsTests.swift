@@ -163,9 +163,9 @@ final class EditsTests: XCTestCase {
     }
 
     func testAnOutcomeEncodesCountsAndCodesOnly() throws {
-        let outcome = Outcome(applied: 2, refused: [.init(item: 1, code: .badRange)])
+        let outcome = Outcome(applied: 2, failed: [.init(item: 1, code: .badRange)])
         let text = try String(decoding: outcome.encoded(), as: UTF8.self)
-        XCTAssertEqual(text, #"{"applied":2,"refused":[{"code":"badRange","item":1}]}"#)
+        XCTAssertEqual(text, #"{"applied":2,"failed":[{"code":"badRange","item":1}]}"#)
     }
 
     // MARK: - Opening what the agent sealed

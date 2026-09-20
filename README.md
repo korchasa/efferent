@@ -208,7 +208,7 @@ sees which days arrived together. It already knew as much from their write times
 second, so nothing new is given away, but the frame says it outright.
 
 An edit adds to the list in the same coin: that one arrived, how big it was, which editor key
-signed it, and afterwards how many items the phone applied and the word it gave for each it refused.
+signed it, and afterwards how many items the phone applied and the word it gave for each that failed.
 Never a metric name, never a value, never which day inside the edit changed — the phone re-uploads
 those days whole, and a rewritten day looks like every other rewritten day.
 
@@ -289,7 +289,7 @@ id; a `delete` removes it. The id is the agent's handle — `agent:meal:2026-09-
 phone turns it into a HealthKit sync identifier with a version it keeps itself, so applying the same
 edit twice, after a crash before the phone could say it had, still ends with one sample. Only entries
 written this way can be replaced or removed: what the watch, the phone or another app recorded is
-Health's and stays as it is, and an item that names one is refused with a word rather than skipped.
+Health's and stays as it is, and an item that names one fails with a word rather than being skipped.
 
 The path is the archive's path run backwards. The agent packs the items, seals them to the phone's
 own reading key with the bucket in the tag, signs the sealed bytes with the editor key and posts
@@ -297,7 +297,7 @@ them; the service checks the signature, stores the ciphertext and names it. The 
 that can reach Health and is not paused, lists the queue, fetches each edit with a writer-signed
 request, **checks the editor signature itself** — a service that decided on its own what goes into
 Health would be able to write into Health — opens it, applies the items and reports an outcome: a
-count of what landed and, per refused item, its index and one of a closed set of words. The service
+count of what landed and, per failed item, its index and one of a closed set of words. The service
 replaces the edit with its outcome, and the days the items touched are marked and re-uploaded whole,
 so the entry shows up in the archive afterwards like anything logged by hand. An edit whose outcome
 the service did not accept stays in the queue and is applied again; that is what the version is for.
@@ -329,7 +329,7 @@ decision a person actually makes is about the run in front of them, and a screen
 each item separately would turn one answer into a chore nobody finishes — which ends with an agent
 waiting forever on a question that was read and left. A row above the keys opens the list of
 everything an agent has ever done. Each line says the metric in the person's own word, the value and
-when it arrived; a refused one says why in a sentence rather than a code. A record still standing in
+when it arrived; one that failed says why in a sentence rather than a code. A record still standing in
 Health can be taken back out from its own page or by swiping its row: the sample leaves Health, the
 day it was on is marked, and it goes to the archive again, so the archive stops showing it too. A
 record the agent removed offers no undo, because the old value was never kept — the agent hands over

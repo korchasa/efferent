@@ -33,12 +33,12 @@ enum Notices {
     }
 
     /// Say what a run did, if there is anybody to say it to.
-    static func tell(written: Int, removed: Int, refused: Int) async {
-        guard written + removed + refused > 0 else { return }
+    static func tell(written: Int, removed: Int, failed: Int) async {
+        guard written + removed + failed > 0 else { return }
         guard await status() == .authorized else { return }
         let content = UNMutableNotificationContent()
         content.title = "Efferent"
-        content.body = sentence(written: written, removed: removed, refused: refused)
+        content.body = sentence(written: written, removed: removed, failed: failed)
         content.sound = .default
         do {
             try await UNUserNotificationCenter.current().add(
@@ -61,15 +61,15 @@ enum Notices {
     /// The two operations are named by the same two verbs the journal and the
     /// list use, and a run that did both says both: one word for what happened
     /// to a record, wherever a person meets it.
-    static func sentence(written: Int, removed: Int, refused: Int) -> String {
+    static func sentence(written: Int, removed: Int, failed: Int) -> String {
         if written + removed == 0 {
-            return "Your agent sent \(records(refused)) this phone could not write."
+            return "Your agent sent \(records(failed)) this phone could not write."
         }
-        if refused == 0 {
+        if failed == 0 {
             return "Your agent changed Health: \(operations(written: written, removed: removed))."
         }
         return "Your agent changed Health: "
-            + "\(operations(written: written, removed: removed)), and \(refused) refused."
+            + "\(operations(written: written, removed: removed)), and \(failed) did not happen."
     }
 
     /// "2 records written", "1 record removed", "2 written, 1 removed" — the

@@ -125,7 +125,7 @@ enum Snapshot {
     }
 
     /// A day and a half of an agent's work, with one of each thing that can
-    /// become of an item: written, taken back out, refused, and a record the
+    /// become of an item: written, taken back out, failed, and a record the
     /// agent removed. The instants are relative, so the list groups them under
     /// "today" and "yesterday" whenever the screenshots happen to be taken.
     private static func run() -> [Services.DemoEdit] {
@@ -211,7 +211,7 @@ enum Snapshot {
                     start: seconds(at(before, 19)), end: seconds(at(before, 19.25)),
                     value: 64, unit: "g", stage: nil
                 )),
-                state: .refused, code: .unauthorized, at: at(before, 21.7)
+                state: .failed, code: .unauthorized, at: at(before, 21.7)
             ),
             // One the person has already written back: the record stands in
             // Health again because of them, and the row has to say so in the

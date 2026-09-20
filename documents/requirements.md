@@ -185,6 +185,14 @@ record, while taking back a removal writes one.
 and the key says so; reversing a removal writes the record back and the key says that instead. One
 word for both would hide which of the two is about to happen.
 
+**WORD-5 — An item that did not happen failed; it was not refused.** Eleven words say why an item
+did not land, and nine of them are nothing anybody decided: a metric this app does not write, a unit
+that does not fit it, a span that cannot be, Health not allowed, no such record, a letter that would
+not open or would not parse. Calling those a refusal reads as a decision somebody made and hides
+that something is wrong. The word is the same on the screen, in the journal, in the answer the phone
+sends the service and in what an agent reads back — and it is the word the whole edit already
+carried when one of its items did not land.
+
 ## What the app must be able to say about itself
 
 **STATE-1 — The screen says when the queue was last checked.** Silence has two causes — nobody sent
