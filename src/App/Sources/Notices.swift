@@ -56,6 +56,12 @@ enum Notices {
             try await UNUserNotificationCenter.current().add(
                 UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
             )
+            // A step that did something, so it is written down. Without it the
+            // log could say why a notice was dropped but never that one was
+            // put up, and "it was posted and nobody saw it" could not be told
+            // apart from "it was never posted" — which is a whole evening of
+            // guessing about a launch nobody watched.
+            log.info("said: \(content.body)")
         } catch {
             log.error("could not put up a notice: \(String(describing: error))")
         }
