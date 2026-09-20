@@ -438,6 +438,7 @@ struct HomeView: View {
         SyncState(
             stats: services.stats,
             paused: services.paused,
+            rereading: services.rereading,
             problem: services.lastError,
             timeLeft: services.timeLeft,
             progress: services.syncProgress
@@ -564,6 +565,9 @@ struct SyncState {
     let caption: String
     /// Something went wrong, in words a person can read.
     let problem: String?
+    /// Health is being read again at the person's asking, so there is no
+    /// figure to give yet.
+    let rereading: Bool
     /// Everything Health has offered is in the archive, and that is good news.
     let settled: Bool
     /// How much of the scale is lit. Not always the same as how much of the run
@@ -576,13 +580,18 @@ struct SyncState {
     init(
         stats: Stats?,
         paused: Bool,
+        rereading: Bool = false,
         problem: String?,
         timeLeft: TimeInterval?,
         progress: Double
     ) {
         let sentDays = stats?.sentDays ?? 0
         let pending = stats?.pendingDays ?? 0
-        remaining = grouped(pending)
+        self.rereading = rereading
+        // A dash rather than a figure, because the count during a re-read is
+        // of days to look at and not of days owed: the last week is marked
+        // first and mostly written off a second later.
+        remaining = rereading ? "—" : grouped(pending)
 
         if let problem {
             self.problem = problem
@@ -601,6 +610,19 @@ struct SyncState {
             settled = false
             self.progress = progress
             mood = .resting
+            return
+        }
+
+        // Said in words, so the dash is a state and not a missing number. It
+        // comes after the pause because a re-read is what starting ends with,
+        // and before everything else because those all read the queue the
+        // re-read is still changing.
+        if rereading {
+            status = "reading health"
+            caption = "reading health"
+            settled = false
+            self.progress = progress
+            mood = .alight
             return
         }
 
@@ -642,7 +664,12 @@ struct SyncState {
     /// What the button is worth saying out loud, which is the state rather than
     /// the figure once the figure is nought.
     var spokenValue: String {
-        settled ? "Up to date" : "\(remaining) days waiting"
+        if rereading {
+            // "— days waiting" is what a screen reader would otherwise make
+            // of the dash.
+            return "Reading Health"
+        }
+        return settled ? "Up to date" : "\(remaining) days waiting"
     }
 
     /// How long the archive has been silent, when that is long enough to say.

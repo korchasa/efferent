@@ -154,7 +154,15 @@ near-identical lines teaches a person to swipe without reading.
 
 **NOTICE-4 — Permission is asked before the first edit can arrive.** The walkthrough asks, and
 connecting an agent asks again if the walkthrough was walked past. Asking after the first edit has
-landed means the first edit never produces a notice, which is exactly the one the person wanted.
+landed means the first edit never produces a notice, which is exactly the one the person wanted. A
+phone whose journal already holds agent edits is asked as well: "an agent is connected" is recorded
+when the setup text leaves through this app's own share sheet, and an agent carried across from an
+older install or set up by hand never raises that flag — such a phone was asked nothing and dropped
+every notice in silence.
+
+**NOTICE-8 — The log says what became of a notice.** Both that one was put up and that one was
+dropped, with the standing of the permission when it was. A notice is produced in launches nobody
+watches, so a silence with no line behind it cannot be told from a notice nobody saw.
 
 **NOTICE-5 — Only a change to Health is announced.** An edit that arrived and is waiting for an
 unlock shows on the strip and produces no notice: unlocking applies it, and that run's notice says

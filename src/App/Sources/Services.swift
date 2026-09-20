@@ -42,6 +42,18 @@ final class Services: ObservableObject {
     /// app is least useful in, so the way out of it stays lit until it is done.
     @Published private(set) var agentConnected: Bool
 
+    /// The phone is re-reading Health because the person asked it to, so the
+    /// figure on the face is about to change and is not shown yet.
+    ///
+    /// Pressing start marks the last week and only then works out which of
+    /// those days differ from the archive — usually none of them. For the
+    /// second or two in between, the queue holds days that are about to be
+    /// written off, and the face was reporting them as work: "5 days waiting"
+    /// on a phone that was up to date, gone again before it could be read
+    /// (owner, 2026-09-20). A figure that is about to change is not a status,
+    /// so the face says nothing rather than saying five.
+    @Published private(set) var rereading = false
+
     /// What stopped the last look at the queue, or nil when nothing did.
     ///
     /// The screen reads it. NOTICE-7: a delivery that stopped used to leave its
@@ -1065,7 +1077,9 @@ final class Services: ObservableObject {
         // Starting again begins by re-reading Health, not by sending what is
         // already marked. That is what makes a separate "read and send now"
         // unnecessary: one button does both.
+        rereading = true
         Task { [weak self] in
+            defer { self?.rereading = false }
             await self?.refreshNow()
             await self?.sendNow()
         }
