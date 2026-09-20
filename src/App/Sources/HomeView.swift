@@ -231,12 +231,16 @@ struct HomeView: View {
                 }
                 .buttonStyle(.plain)
 
-                if services.edits.unseen.applied > 0 {
+                if services.edits.unseen.written > 0 {
                     Palette.body.frame(height: 1)
                     Button {
-                        Task { await services.undoRecentRun() }
+                        Task { await services.actOnRecentRun() }
                     } label: {
-                        Legend("undo", size: 11, colour: Palette.accent)
+                        // The one key that cannot be named by an operation: a run
+                        // may hold both, so pressing this removes some records
+                        // and writes others back. It names the intent instead,
+                        // and each record's own page names the operation.
+                        Legend("take it all back", size: 11, colour: Palette.accent)
                             .frame(maxWidth: .infinity, minHeight: 46)
                             .contentShape(Rectangle())
                     }

@@ -358,7 +358,7 @@ final class ApplierTests: XCTestCase {
         XCTAssertEqual(rows.first?.displaced.first?.value, 520, "the meal it replaced")
         XCTAssertEqual(rows.first?.displaced.first?.day, "2025-09-07")
         XCTAssertEqual(rows.last?.displaced.first?.stage, "asleepCore", "the night it took away")
-        XCTAssertTrue(rows.allSatisfy(\.canBeUndone), "both can be put back")
+        XCTAssertTrue(rows.allSatisfy(\.personCanAct), "both can be put back")
     }
 
     /// An addition pushed nothing out, so there is nothing to keep: undo takes
@@ -369,9 +369,9 @@ final class ApplierTests: XCTestCase {
         _ = try applied(await world.applier().run())
 
         let row = try XCTUnwrap(world.store.recentEdits().first)
-        XCTAssertEqual(row.state, .applied)
+        XCTAssertEqual(row.state, .written)
         XCTAssertTrue(row.displaced.isEmpty)
-        XCTAssertTrue(row.canBeUndone)
+        XCTAssertTrue(row.personCanAct)
     }
 
     /// The version climbs on a change. HealthKit keeps the newest version it

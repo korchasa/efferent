@@ -232,6 +232,38 @@ account call for `subdomain/edge-preview` answers "No access to the specified re
 like the script being wrong rather than the token being narrow. Wrangler's own OAuth session opens
 it, so the probe runs with `CLOUDFLARE_API_TOKEN` unset.
 
+## The journal: what happened, and who asked
+
+The journal (`editLog`) is the only copy of what an agent ever did — the service is told counts and
+codes on purpose — so how a row is written down decides what can still be answered years later.
+Until build 21 one column held two different facts at once. `applied` and `deleted` said what the
+**agent** did; `undone` said what the **person** did and hid what had actually happened to the
+record, because taking back an addition removes it while taking back a removal or a replacement
+writes one. A reader could answer neither question.
+
+Since v8 the row carries two fields, and WORD-1 to WORD-4 are what they exist for.
+
+- `state` — what the record is: `written`, `removed`, `refused`, plus `waiting` and `declined`,
+  which no build produces any more and which are kept because a decision an older build recorded is
+  never reopened.
+- `askedBy` — `agent` or `person`. A row begins as the agent's and becomes the person's the moment
+  they change it; there is no third party and no third state.
+
+So the four cases read in one verb set: the agent wrote, the agent removed, the person removed what
+the agent wrote, the person wrote back what the agent removed or replaced. `EditWords` is where that
+becomes screen text, `Notices` says the same two verbs on the lock screen, and the key on a row is
+named for the operation the press performs rather than for the fact that it reverses something.
+
+**The migration reads each old row off its own evidence, and guesses at nothing.** `applied` and
+`deleted` map straight across, `refused`, `waiting` and `declined` are untouched, and an `undone` row
+becomes the person's with the operation worked out from the item: no metric means the item was a
+removal, so the person wrote a record back; a metric with nothing displaced means a plain addition,
+so they removed one; a metric with something displaced means a replacement, so they wrote the
+displaced record back. `undoneAt` is renamed `personActedAt` in the same step, because it never meant
+"undone" — it meant when the person acted. `EditLogTests` builds a database at v7 holding a row of
+every old state and asserts the whole mapping: this is the one migration where a mistake costs
+history rather than a redraw.
+
 ## Walking the screens before a release
 
 Every screen past setup needs an archive, claiming an archive needs App Attest, and App Attest
@@ -270,3 +302,6 @@ These are claims the design leans on and nobody has run.
 - The 15-second ticker is a guess at a person's patience, not a measurement.
 - Whether refusing the wake is a separate question to the person or rides on the notice permission
   they are already asked for.
+- Whether the swipe in the list should keep acting at once while the key on a record's own page asks
+  first. The two are the same operation, and only the page asks — which is defensible as a list
+  gesture against a deliberate press, and has not been decided.

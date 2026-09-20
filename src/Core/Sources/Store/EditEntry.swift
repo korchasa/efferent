@@ -8,16 +8,22 @@ import Foundation
 /// is an app nobody should trust with Health; and to be undone, because a
 /// record written under an id can be taken back out by that id.
 public struct EditEntry: Equatable, Hashable, Sendable, Identifiable {
-    /// What became of the item.
+    /// What the record is now.
+    ///
+    /// This app has two operations against Health and no more — writing a
+    /// record and removing one — and this says which of them the row ended on.
+    /// It deliberately says nothing about who asked: that is `askedBy`, and
+    /// keeping the two apart is the whole point. A row where the person took
+    /// out what the agent wrote is `removed` by the person, in exactly the same
+    /// words as a removal the agent asked for, because it is the same thing
+    /// happening to Health.
     public enum State: String, Sendable, CaseIterable {
-        /// A record written into Health, and still there.
-        case applied
+        /// A record stands in Health because of this row.
+        case written
+        /// The record is out of Health.
+        case removed
         /// Health never took it. `code` says why, in a word.
         case refused
-        /// A record the agent removed from Health.
-        case deleted
-        /// A record the agent wrote and the person took back out.
-        case undone
         /// A change or a removal the agent asked for and Health has not seen:
         /// it would alter or take away a record that stands there now, and that
         /// is the person's to allow. The item is kept here, whole, because the
@@ -25,6 +31,17 @@ public struct EditEntry: Equatable, Hashable, Sendable, Identifiable {
         case waiting
         /// One the person turned down. Health was never touched.
         case declined
+    }
+
+    /// Who asked for what the row now says.
+    ///
+    /// A row begins as the agent's and becomes the person's the moment they
+    /// change it — there is no third party and no third state. Nothing here
+    /// reaches the service or the archive: who acted is as private as what the
+    /// record held.
+    public enum Asker: String, Sendable, CaseIterable {
+        case agent
+        case person
     }
 
     public let id: Int64
@@ -36,6 +53,8 @@ public struct EditEntry: Equatable, Hashable, Sendable, Identifiable {
     /// opened at all, which has no items to speak of.
     public let recordID: String
     public let state: State
+    /// Who the state above is the doing of.
+    public let askedBy: Asker
     /// The metric's name on the wire. A deletion names none: the agent gives an
     /// id and nothing else, and the record is gone before anything can ask.
     public let metric: String?
@@ -48,9 +67,10 @@ public struct EditEntry: Equatable, Hashable, Sendable, Identifiable {
     public let day: String?
     /// Why it was refused, when it was.
     public let code: OutcomeCode?
-    /// When this phone applied it.
+    /// When this phone applied what the agent asked for.
     public let at: Date
-    public let undoneAt: Date?
+    /// When the person changed it, and nothing when they never have.
+    public let personActedAt: Date?
     /// What this item pushed out of Health, and what undo puts back. Empty when
     /// it pushed nothing out — an addition — and empty on every row written
     /// before the journal started keeping this.
@@ -62,6 +82,7 @@ public struct EditEntry: Equatable, Hashable, Sendable, Identifiable {
         item: Int,
         recordID: String,
         state: State,
+        askedBy: Asker = .agent,
         metric: String? = nil,
         start: Date? = nil,
         end: Date? = nil,
@@ -71,7 +92,7 @@ public struct EditEntry: Equatable, Hashable, Sendable, Identifiable {
         day: String? = nil,
         code: OutcomeCode? = nil,
         at: Date,
-        undoneAt: Date? = nil,
+        personActedAt: Date? = nil,
         displaced: [DisplacedRecord] = []
     ) {
         self.id = id
@@ -79,6 +100,7 @@ public struct EditEntry: Equatable, Hashable, Sendable, Identifiable {
         self.item = item
         self.recordID = recordID
         self.state = state
+        self.askedBy = askedBy
         self.metric = metric
         self.start = start
         self.end = end
@@ -88,21 +110,24 @@ public struct EditEntry: Equatable, Hashable, Sendable, Identifiable {
         self.day = day
         self.code = code
         self.at = at
-        self.undoneAt = undoneAt
+        self.personActedAt = personActedAt
         self.displaced = displaced
     }
 
-    /// Whether this one can be taken back.
+    /// Whether there is anything left for the person to do to this row.
     ///
-    /// An addition is taken back by removing it. A replacement and a removal
-    /// are taken back by putting `displaced` where it was. A row from before
-    /// the journal kept that — every deletion build 18 wrote — has nothing to
-    /// put back and says so rather than offering a button that empties a day.
-    public var canBeUndone: Bool {
-        guard !recordID.isEmpty else { return false }
+    /// A record the agent wrote is taken out by removing it; a record the agent
+    /// removed is brought back by writing what it displaced. A row from before
+    /// the journal kept that — every removal build 18 wrote — has nothing to
+    /// write back and says so rather than offering a key that empties a day.
+    ///
+    /// Only the agent's rows qualify: once the person has acted, the row says
+    /// what they left and there is no acting on it twice.
+    public var personCanAct: Bool {
+        guard !recordID.isEmpty, askedBy == .agent else { return false }
         switch state {
-        case .applied: return true
-        case .deleted: return !displaced.isEmpty
+        case .written: return true
+        case .removed: return !displaced.isEmpty
         default: return false
         }
     }
@@ -129,35 +154,54 @@ public struct EditEntry: Equatable, Hashable, Sendable, Identifiable {
 }
 
 /// How many items of each kind, over some stretch of time.
+///
+/// Counted by the pair the journal now keeps — what happened to the record, and
+/// who asked — because the screens ask both questions and neither answers the
+/// other. The strip across the everyday screen reports a run the agent made and
+/// nobody has looked at; the legend above the keys reports everything, the
+/// person's own corrections included.
 public struct EditTally: Equatable, Sendable {
-    public var applied = 0
+    /// Records the agent wrote that stand as the agent left them.
+    public var written = 0
+    /// Records the agent removed and the person has not brought back.
+    public var removed = 0
     public var refused = 0
-    public var deleted = 0
-    public var undone = 0
     public var waiting = 0
     public var declined = 0
+    /// Rows the person wrote back after the agent had removed or replaced them.
+    public var personWrote = 0
+    /// Rows the person took out of Health after the agent had written them.
+    public var personRemoved = 0
 
     public init(
-        applied: Int = 0,
+        written: Int = 0,
+        removed: Int = 0,
         refused: Int = 0,
-        deleted: Int = 0,
-        undone: Int = 0,
         waiting: Int = 0,
-        declined: Int = 0
+        declined: Int = 0,
+        personWrote: Int = 0,
+        personRemoved: Int = 0
     ) {
-        self.applied = applied
+        self.written = written
+        self.removed = removed
         self.refused = refused
-        self.deleted = deleted
-        self.undone = undone
         self.waiting = waiting
         self.declined = declined
+        self.personWrote = personWrote
+        self.personRemoved = personRemoved
     }
 
-    /// Everything the agent did, undone items included: they were done once.
-    /// What is waiting is left out on purpose — it is a question rather than
-    /// something that happened, and the screen asks it instead of counting it.
+    /// Everything the agent ever did here, the rows the person has since
+    /// changed included: those happened once. What is waiting is left out on
+    /// purpose — it is a question rather than something that happened, and the
+    /// screen asks it instead of counting it.
     public var total: Int {
-        applied + refused + deleted + undone + declined
+        written + removed + refused + declined + personWrote + personRemoved
+    }
+
+    /// What the person has since changed, whichever way round.
+    public var byPerson: Int {
+        personWrote + personRemoved
     }
 
     /// Whether the journal has anything at all to show for this stretch.
@@ -165,9 +209,10 @@ public struct EditTally: Equatable, Sendable {
         total + waiting > 0
     }
 
-    /// What is in Health because of the agent right now.
+    /// What is in Health because of the agent right now. A row the person took
+    /// out is not standing, and one they wrote back stands because of them.
     public var standing: Int {
-        applied
+        written
     }
 }
 

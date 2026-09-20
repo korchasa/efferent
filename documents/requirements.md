@@ -24,6 +24,10 @@ requirement says what must be true. How it is arranged is [`design.md`](design.m
 - **Pass** — the wider run delivery belongs to: edits first, then the days those edits changed.
 - **Notice** — the local notification this app puts on the lock screen.
 - **Strip** — the dark panel at the top of the everyday screen that counts what an agent changed.
+- **Write** — one of the app's two operations against Health: a record stands there afterwards.
+- **Remove** — the other: the record is out of Health afterwards.
+- **Journal** — the phone's own account of every item an agent applied, and of every one the person
+  has since changed. Nothing in it reaches the service.
 
 ## The agent starts the delivery
 
@@ -136,8 +140,10 @@ says nothing about what was sent, by whom, about which day, or about what the ph
 
 ## Notices
 
-**NOTICE-1 — A notice carries a count and nothing else.** Never a metric, never a value, never a
-day. It is read on a lock screen by whoever is holding the phone.
+**NOTICE-1 — A notice carries counts and the two verbs, and nothing else.** Never a metric, never a
+value, never a day. It says how many records were written and how many were removed, because those
+are the app's two operations and a person who reads "changed" cannot tell which happened; a run that
+did both says both. It is read on a lock screen by whoever is holding the phone.
 
 **NOTICE-2 — The phone writes every notice.** The service never composes text that reaches a lock
 screen: it knows a sealed edit arrived and nothing else, and a sentence about the person's health
@@ -159,6 +165,25 @@ open screen without the person leaving it and coming back.
 
 **NOTICE-7 — A delivery that stopped is visible on the screen.** What stopped it is said in one
 sentence where the person can see it, not only in the log.
+
+## What the journal says
+
+**WORD-1 — The app has two operations against Health and no more.** A record is written, or it is
+removed. Every screen, the journal, the notice and the key a person presses name the operation by
+one of those two words, and no layer invents a third.
+
+**WORD-2 — An operation is named the same whoever performed it.** The person taking a record out is
+the same thing happening to Health as the agent taking it out, so both are a removal. Undo is not an
+operation of its own; it is the person performing one of the two.
+
+**WORD-3 — What happened to the record and who asked are separate facts.** One field says which of
+the two operations the row ended on, another says whether the agent or the person asked for it. A
+row that carried both in one word could answer neither question: taking back an addition removes a
+record, while taking back a removal writes one.
+
+**WORD-4 — A key says the operation the press performs.** Reversing an addition removes the record
+and the key says so; reversing a removal writes the record back and the key says that instead. One
+word for both would hide which of the two is about to happen.
 
 ## What the app must be able to say about itself
 

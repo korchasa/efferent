@@ -1,5 +1,6 @@
 import CryptoKit
 @testable import Efferent
+import GRDB
 import XCTest
 
 /// The journal of what an agent changed.
@@ -27,7 +28,7 @@ final class EditLogTests: XCTestCase {
     func testAnAppliedItemComesBackSayingWhatItSaid() throws {
         let store = try Store.inMemory()
         try store.recordEdit(
-            lunch(), at: 0, in: "1757336400000-abcdefgh", state: .applied, day: "2025-09-08",
+            lunch(), at: 0, in: "1757336400000-abcdefgh", state: .written, day: "2025-09-08",
             at: Self.noon
         )
 
@@ -41,10 +42,10 @@ final class EditLogTests: XCTestCase {
         XCTAssertEqual(entry.day, "2025-09-08")
         XCTAssertEqual(entry.start, Date(timeIntervalSince1970: 1_757_336_400))
         XCTAssertEqual(entry.end, Date(timeIntervalSince1970: 1_757_337_300))
-        XCTAssertEqual(entry.state, .applied)
+        XCTAssertEqual(entry.state, .written)
         XCTAssertNil(entry.code)
-        XCTAssertNil(entry.undoneAt)
-        XCTAssertTrue(entry.canBeUndone)
+        XCTAssertNil(entry.personActedAt)
+        XCTAssertTrue(entry.personCanAct)
         XCTAssertEqual(try store.edit(entry.id), entry)
     }
 
@@ -58,7 +59,7 @@ final class EditLogTests: XCTestCase {
         let entry = try XCTUnwrap(store.recentEdits().first)
         XCTAssertEqual(entry.code, .unauthorized)
         // Nothing was written, so there is nothing to take back out.
-        XCTAssertFalse(entry.canBeUndone)
+        XCTAssertFalse(entry.personCanAct)
     }
 
     func testAnEditNobodyCouldOpenIsOneLineWithNoRecord() throws {
@@ -70,7 +71,7 @@ final class EditLogTests: XCTestCase {
         XCTAssertEqual(entry.code, .badSignature)
         XCTAssertEqual(entry.recordID, "")
         XCTAssertNil(entry.metric)
-        XCTAssertFalse(entry.canBeUndone)
+        XCTAssertFalse(entry.personCanAct)
     }
 
     // MARK: - The same item, again
@@ -78,32 +79,36 @@ final class EditLogTests: XCTestCase {
     func testTheSameItemAppliedAgainStaysOneRowAndComesBackStanding() throws {
         let store = try Store.inMemory()
         let name = "1757336400000-abcdefgh"
-        try store.recordEdit(lunch(), at: 0, in: name, state: .applied, day: "2025-09-08", at: Self.noon)
+        try store.recordEdit(lunch(), at: 0, in: name, state: .written, day: "2025-09-08", at: Self.noon)
         let first = try XCTUnwrap(store.recentEdits().first)
-        try store.markEditUndone(first.id, at: Self.noon.addingTimeInterval(60))
+        try store.recordPersonAction(first.id, left: .removed, at: Self.noon.addingTimeInterval(60))
 
-        XCTAssertEqual(try store.edit(first.id)?.state, .undone)
-        XCTAssertNotNil(try store.edit(first.id)?.undoneAt)
+        // The record is gone from Health and a person took it out, so the row
+        // says removal and says who did it.
+        XCTAssertEqual(try store.edit(first.id)?.state, .removed)
+        XCTAssertEqual(try store.edit(first.id)?.askedBy, .person)
+        XCTAssertNotNil(try store.edit(first.id)?.personActedAt)
 
         // A run that died between writing and answering applies the whole edit
         // again. The record is back in Health, so the line must say so.
         try store.recordEdit(
-            lunch(), at: 0, in: name, state: .applied, day: "2025-09-08",
+            lunch(), at: 0, in: name, state: .written, day: "2025-09-08",
             at: Self.noon.addingTimeInterval(120)
         )
 
         let entries = try store.recentEdits()
         XCTAssertEqual(entries.count, 1, "the same item stood twice in the journal")
-        XCTAssertEqual(entries.first?.state, .applied)
-        XCTAssertNil(entries.first?.undoneAt)
+        XCTAssertEqual(entries.first?.state, .written)
+        XCTAssertEqual(entries.first?.askedBy, .agent, "the agent wrote it, again")
+        XCTAssertNil(entries.first?.personActedAt)
     }
 
     func testTwoItemsOfOneEditAreTwoLines() throws {
         let store = try Store.inMemory()
         let name = "1757336400000-abcdefgh"
-        try store.recordEdit(lunch(), at: 0, in: name, state: .applied, day: "2025-09-08", at: Self.noon)
+        try store.recordEdit(lunch(), at: 0, in: name, state: .written, day: "2025-09-08", at: Self.noon)
         try store.recordEdit(
-            lunch(id: "agent:meal:2"), at: 1, in: name, state: .applied, day: "2025-09-08",
+            lunch(id: "agent:meal:2"), at: 1, in: name, state: .written, day: "2025-09-08",
             at: Self.noon
         )
 
@@ -112,9 +117,9 @@ final class EditLogTests: XCTestCase {
 
     func testTheNewestIsFirst() throws {
         let store = try Store.inMemory()
-        try store.recordEdit(lunch(), at: 0, in: "a", state: .applied, day: "2025-09-07", at: Self.noon)
+        try store.recordEdit(lunch(), at: 0, in: "a", state: .written, day: "2025-09-07", at: Self.noon)
         try store.recordEdit(
-            lunch(id: "agent:meal:2"), at: 0, in: "b", state: .applied, day: "2025-09-08",
+            lunch(id: "agent:meal:2"), at: 0, in: "b", state: .written, day: "2025-09-08",
             at: Self.noon.addingTimeInterval(3600)
         )
 
@@ -127,39 +132,39 @@ final class EditLogTests: XCTestCase {
         let store = try Store.inMemory()
         let old = Self.noon
         let fresh = Self.noon.addingTimeInterval(3600)
-        try store.recordEdit(lunch(), at: 0, in: "a", state: .applied, day: "2025-09-08", at: old)
+        try store.recordEdit(lunch(), at: 0, in: "a", state: .written, day: "2025-09-08", at: old)
         try store.recordEdit(
-            lunch(id: "agent:meal:2"), at: 1, in: "a", state: .applied, day: "2025-09-08", at: fresh
+            lunch(id: "agent:meal:2"), at: 1, in: "a", state: .written, day: "2025-09-08", at: fresh
         )
         try store.recordEdit(
             lunch(id: "agent:meal:3"), at: 2, in: "a", state: .refused, day: nil,
             code: .badRange, at: fresh
         )
         try store.recordEdit(
-            .delete(id: "agent:meal:9"), at: 3, in: "a", state: .deleted, day: "2025-09-08", at: fresh
+            .delete(id: "agent:meal:9"), at: 3, in: "a", state: .removed, day: "2025-09-08", at: fresh
         )
 
         let summary = try store.editSummary(
             seenAt: old, todayFrom: Self.noon.addingTimeInterval(-13 * 3600)
         )
         XCTAssertEqual(summary.ever.total, 4)
-        XCTAssertEqual(summary.ever.applied, 2)
+        XCTAssertEqual(summary.ever.written, 2)
         XCTAssertEqual(summary.ever.standing, 2)
         XCTAssertEqual(summary.today.total, 4)
         // The one written at the watermark itself has been seen.
         XCTAssertEqual(summary.unseen.total, 3)
-        XCTAssertEqual(summary.unseen.applied, 1)
+        XCTAssertEqual(summary.unseen.written, 1)
         XCTAssertEqual(summary.unseen.refused, 1)
-        XCTAssertEqual(summary.unseen.deleted, 1)
+        XCTAssertEqual(summary.unseen.removed, 1)
     }
 
     func testNothingLookedAtYetCountsTheWholeJournalAsUnseen() throws {
         let store = try Store.inMemory()
-        try store.recordEdit(lunch(), at: 0, in: "a", state: .applied, day: "2025-09-08", at: Self.noon)
+        try store.recordEdit(lunch(), at: 0, in: "a", state: .written, day: "2025-09-08", at: Self.noon)
 
         XCTAssertNil(try store.editsSeenAt())
         let summary = try store.editSummary(seenAt: nil, todayFrom: Self.noon.addingTimeInterval(-3600))
-        XCTAssertEqual(summary.unseen.applied, 1)
+        XCTAssertEqual(summary.unseen.written, 1)
 
         try store.recordEditsSeen(at: Self.noon.addingTimeInterval(60))
         XCTAssertEqual(
@@ -179,7 +184,7 @@ final class EditLogTests: XCTestCase {
     func testAnotherArchiveEmptiesTheJournal() throws {
         let store = try Store.inMemory()
         XCTAssertTrue(try store.activateArchive("aaaaaaaaaaaaaaaaaaaaaaaaaa"))
-        try store.recordEdit(lunch(), at: 0, in: "a", state: .applied, day: "2025-09-08", at: Self.noon)
+        try store.recordEdit(lunch(), at: 0, in: "a", state: .written, day: "2025-09-08", at: Self.noon)
         try store.recordEditsSeen(at: Self.noon)
 
         XCTAssertTrue(try store.activateArchive("bbbbbbbbbbbbbbbbbbbbbbbbbb"))
@@ -213,10 +218,10 @@ final class EditLogTests: XCTestCase {
         // anything could ask it anything.
         XCTAssertNil(removed.metric)
         XCTAssertNil(removed.day)
-        XCTAssertFalse(removed.canBeUndone)
+        XCTAssertFalse(removed.personCanAct)
 
         let meal = try XCTUnwrap(entries.first { $0.editName == written && $0.item == 0 })
-        XCTAssertEqual(meal.state, .applied)
+        XCTAssertEqual(meal.state, .written)
         XCTAssertEqual(meal.metric, "dietaryEnergy")
         XCTAssertEqual(meal.value, 520)
         XCTAssertEqual(meal.unit, "kcal")
@@ -258,7 +263,7 @@ final class EditLogTests: XCTestCase {
         let entry = try XCTUnwrap(store.recentEdits().first)
         XCTAssertEqual(entry.state, .waiting)
         XCTAssertEqual(entry.code, .awaitingApproval)
-        XCTAssertFalse(entry.canBeUndone, "nothing was ever written")
+        XCTAssertFalse(entry.personCanAct, "nothing was ever written")
         XCTAssertEqual(entry.asItem, lunch())
     }
 
@@ -312,14 +317,14 @@ final class EditLogTests: XCTestCase {
             day: "2025-09-08"
         )
         try store.recordEdit(
-            lunch(), at: 0, in: "a", state: .applied, day: "2025-09-08",
+            lunch(), at: 0, in: "a", state: .written, day: "2025-09-08",
             displaced: [meal], at: Self.noon
         )
 
         let entry = try XCTUnwrap(store.recentEdits().first)
         XCTAssertEqual(entry.displaced, [meal])
         XCTAssertEqual(entry.displaced.first?.asPut(id: entry.recordID).value, 520)
-        XCTAssertTrue(entry.canBeUndone)
+        XCTAssertTrue(entry.personCanAct)
     }
 
     /// A deletion an older build wrote down kept nothing, so there is nothing
@@ -327,13 +332,13 @@ final class EditLogTests: XCTestCase {
     func testADeletionWithNothingKeptCannotBeUndone() throws {
         let store = try Store.inMemory()
         try store.recordEdit(
-            .delete(id: "agent:meal:1"), at: 0, in: "a", state: .deleted, day: "2025-09-08",
+            .delete(id: "agent:meal:1"), at: 0, in: "a", state: .removed, day: "2025-09-08",
             at: Self.noon
         )
 
         let entry = try XCTUnwrap(store.recentEdits().first)
         XCTAssertTrue(entry.displaced.isEmpty)
-        XCTAssertFalse(entry.canBeUndone)
+        XCTAssertFalse(entry.personCanAct)
     }
 
     /// A deletion that kept what it removed can be undone: writing that record
@@ -341,7 +346,7 @@ final class EditLogTests: XCTestCase {
     func testADeletionThatKeptWhatItRemovedCanBeUndone() throws {
         let store = try Store.inMemory()
         try store.recordEdit(
-            .delete(id: "agent:meal:1"), at: 0, in: "a", state: .deleted, day: "2025-09-08",
+            .delete(id: "agent:meal:1"), at: 0, in: "a", state: .removed, day: "2025-09-08",
             displaced: [DisplacedRecord(
                 metric: "dietaryEnergy",
                 start: Self.noon,
@@ -354,22 +359,22 @@ final class EditLogTests: XCTestCase {
         )
 
         let entry = try XCTUnwrap(store.recentEdits().first)
-        XCTAssertTrue(entry.canBeUndone)
+        XCTAssertTrue(entry.personCanAct)
         XCTAssertEqual(entry.displaced.first?.asPut(id: "agent:meal:1").metric, "dietaryEnergy")
     }
 
     func testAnEditComesBackWholeSoAnOutcomeCanBeRebuilt() throws {
         let store = try Store.inMemory()
-        try store.recordEdit(lunch(), at: 0, in: "a", state: .applied, day: "2025-09-08", at: Self.noon)
+        try store.recordEdit(lunch(), at: 0, in: "a", state: .written, day: "2025-09-08", at: Self.noon)
         try store.recordEdit(
             lunch(id: "agent:meal:2"), at: 1, in: "a", state: .waiting, day: "2025-09-08",
             code: .awaitingApproval, at: Self.noon
         )
-        try store.recordEdit(lunch(id: "agent:meal:3"), at: 0, in: "b", state: .applied, day: "2025-09-08", at: Self.noon)
+        try store.recordEdit(lunch(id: "agent:meal:3"), at: 0, in: "b", state: .written, day: "2025-09-08", at: Self.noon)
 
         let rows = try store.edits(of: "a")
         XCTAssertEqual(rows.map(\.item), [0, 1], "in the order the items arrived in")
-        XCTAssertEqual(rows.map(\.state), [.applied, .waiting])
+        XCTAssertEqual(rows.map(\.state), [.written, .waiting])
         XCTAssertEqual(try store.edits(of: "b").count, 1, "one edit's rows, not another's")
     }
 
@@ -385,6 +390,102 @@ final class EditLogTests: XCTestCase {
         _ = try await world.applier().run()
 
         XCTAssertEqual(try world.store.recentEdits().count, 1)
-        XCTAssertEqual(try world.store.recentEdits().first?.state, .applied)
+        XCTAssertEqual(try world.store.recentEdits().first?.state, .written)
+    }
+
+    // MARK: - The v8 migration
+
+    /// A row of every state an older build could write, carried across the
+    /// split of `state` into what happened to the record and who asked for it.
+    ///
+    /// The journal is the only copy there is — the service is told counts and
+    /// codes and nothing else — so a mistake in this mapping is history lost in
+    /// silence, on a phone that has just updated. Each old `undone` row is read
+    /// off its own evidence: no metric means the item was a removal, so taking
+    /// it back wrote a record; a metric with nothing displaced means a plain
+    /// addition, so taking it back removed one.
+    func testEveryStateAnOlderBuildWroteIsMappedOntoAnOperationAndAnActor() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("editlog-v7-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let kept = DisplacedRecord(
+            metric: "dietaryEnergy",
+            start: Self.noon,
+            end: Self.noon.addingTimeInterval(900),
+            value: 410,
+            unit: "kcal",
+            day: "2025-09-08"
+        )
+        let displaced = try XCTUnwrap(String(data: JSONEncoder().encode([kept]), encoding: .utf8))
+        let took = Self.noon.addingTimeInterval(3600).timeIntervalSince1970
+
+        // The shape the journal had before this migration, filled by hand: the
+        // point is to read what an older build actually wrote, not what today's
+        // writer would produce.
+        do {
+            let queue = try DatabaseQueue(path: url.path)
+            try Database.migrator().migrate(queue, upTo: "v7.editLog.owed.goes")
+            try queue.write { db in
+                func row(
+                    _ item: Int, _ state: String, metric: String?, code: String? = nil,
+                    displaced: String? = nil, undoneAt: Double? = nil
+                ) throws {
+                    try db.execute(
+                        sql: """
+                        INSERT INTO editLog
+                            (editName, item, recordId, state, metric, startAt, endAt, value, unit,
+                             stage, day, code, appliedAt, undoneAt, displaced)
+                        VALUES ('a', ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
+                        """,
+                        arguments: [
+                            item, "agent:meal:\(item)", state, metric,
+                            metric == nil ? nil : Self.noon.timeIntervalSince1970,
+                            metric == nil ? nil : Self.noon.addingTimeInterval(900).timeIntervalSince1970,
+                            metric == nil ? nil : 520, metric == nil ? nil : "kcal",
+                            "2025-09-08", code, Self.noon.timeIntervalSince1970, undoneAt, displaced,
+                        ]
+                    )
+                }
+                try row(0, "applied", metric: "dietaryEnergy")
+                try row(1, "deleted", metric: nil, displaced: displaced)
+                try row(2, "refused", metric: "dietaryEnergy", code: "unauthorized")
+                try row(3, "waiting", metric: "dietaryEnergy", code: "awaitingApproval")
+                try row(4, "declined", metric: "dietaryEnergy", code: "declined")
+                try row(5, "undone", metric: "dietaryEnergy", undoneAt: took)
+                try row(6, "undone", metric: "dietaryEnergy", displaced: displaced, undoneAt: took)
+                try row(7, "undone", metric: nil, displaced: displaced, undoneAt: took)
+                try row(8, "deleted", metric: nil)
+            }
+        }
+
+        let rows = try Store(url: url).edits(of: "a")
+        XCTAssertEqual(rows.count, 9, "the migration dropped a row")
+        XCTAssertEqual(
+            rows.map { "\($0.state.rawValue)/\($0.askedBy.rawValue)" },
+            [
+                "written/agent",
+                "removed/agent",
+                "refused/agent",
+                "waiting/agent",
+                "declined/agent",
+                // The person took out an addition, which is a removal.
+                "removed/person",
+                // The person put back what a replacement pushed out.
+                "written/person",
+                // The person put back what a removal took away.
+                "written/person",
+                "removed/agent",
+            ]
+        )
+
+        // The moment they acted came across with the column's new name.
+        XCTAssertEqual(rows[5].personActedAt?.timeIntervalSince1970, took)
+        XCTAssertNil(rows[0].personActedAt)
+        // What was displaced still reads, and still says what can be done next.
+        XCTAssertEqual(rows[1].displaced, [kept])
+        XCTAssertTrue(rows[1].personCanAct, "a removal that kept what it took can be written back")
+        XCTAssertFalse(rows[8].personCanAct, "a removal that kept nothing has nothing to write back")
+        XCTAssertFalse(rows[5].personCanAct, "the person has already had their say")
     }
 }

@@ -53,6 +53,10 @@ public final class Applier {
         public var edits = 0
         public var items = 0
         public var refused = 0
+        /// The two operations, counted apart, because the notice says them in
+        /// the same words the journal does.
+        public var written = 0
+        public var removed = 0
         /// The days Health changed on, to be marked and rebuilt.
         public var days: Set<String> = []
         /// Why the run stopped before the queue was empty, when it did. The
@@ -273,9 +277,13 @@ public final class Applier {
     }
 
     private struct Result {
-        let applied: Int
+        let written: Int
+        let removed: Int
         let refused: [Efferent.Outcome.Refusal]
         let days: Set<String>
+        var applied: Int {
+            written + removed
+        }
     }
 
     /// One edit: fetched, checked, opened, applied, answered. Nothing is
@@ -302,7 +310,7 @@ public final class Applier {
         case let .refused(code):
             log.debug("\(name): refused whole, \(code.rawValue)")
             try store.recordUnopenedEdit(name, code: code, at: now())
-            result = Result(applied: 0, refused: [.init(item: 0, code: code)], days: [])
+            result = Result(written: 0, removed: 0, refused: [.init(item: 0, code: code)], days: [])
         }
 
         applied.days.formUnion(result.days)
@@ -310,6 +318,8 @@ public final class Applier {
         applied.edits += 1
         applied.items += result.applied + result.refused.count
         applied.refused += result.refused.count
+        applied.written += result.written
+        applied.removed += result.removed
         log.debug(
             "\(name): \(answer.body.count) bytes, \(result.applied) applied"
                 + (result.refused.isEmpty
@@ -360,7 +370,8 @@ public final class Applier {
     /// anything else — a locked phone, a ledger that will not write — stops
     /// the run, and the edit is applied again next time.
     private func write(_ items: [EditItem], of name: String) async throws -> Result {
-        var applied = 0
+        var written = 0
+        var removed = 0
         var refused: [Efferent.Outcome.Refusal] = []
         var days: Set<String> = []
         // What this phone already did with this very edit. An edit is applied
@@ -391,7 +402,10 @@ public final class Applier {
                     item, at: index, in: name, state: Self.state(of: item), day: landed.day,
                     displaced: landed.written.displaced, at: now()
                 )
-                applied += 1
+                switch item {
+                case .put: written += 1
+                case .delete: removed += 1
+                }
             } catch let WriteRefused.code(code) {
                 refused.append(.init(item: index, code: code))
                 try store.recordEdit(
@@ -399,7 +413,7 @@ public final class Applier {
                 )
             }
         }
-        return Result(applied: applied, refused: refused, days: days)
+        return Result(written: written, removed: removed, refused: refused, days: days)
     }
 
     /// Write one item into Health, without writing anything down: the two
@@ -432,10 +446,13 @@ public final class Applier {
         return Day.of(Date(timeIntervalSince1970: TimeInterval(put.start)), in: calendar)
     }
 
+    /// What the record is once the item has landed, in the app's two
+    /// operations. Who asked is not in question here — every row the applier
+    /// writes is the agent's, and the store says so.
     private static func state(of item: EditItem) -> EditEntry.State {
         switch item {
-        case .put: .applied
-        case .delete: .deleted
+        case .put: .written
+        case .delete: .removed
         }
     }
 

@@ -11,7 +11,8 @@ final class EditWordsTests: XCTestCase {
     static let utc = Day.calendar(timeZone: TimeZone(secondsFromGMT: 0)!)
 
     private func made(
-        state: EditEntry.State = .applied,
+        state: EditEntry.State = .written,
+        askedBy: EditEntry.Asker = .agent,
         recordID: String = "agent:meal:1",
         metric: String? = "dietaryEnergy",
         start: Double? = 1_757_336_400,
@@ -21,7 +22,7 @@ final class EditWordsTests: XCTestCase {
         stage: String? = nil,
         day: String? = "2025-09-08",
         code: OutcomeCode? = nil,
-        undoneAt: Double? = nil,
+        personActedAt: Double? = nil,
         displaced: [DisplacedRecord] = []
     ) -> EditEntry {
         EditEntry(
@@ -30,6 +31,7 @@ final class EditWordsTests: XCTestCase {
             item: 0,
             recordID: recordID,
             state: state,
+            askedBy: askedBy,
             metric: metric,
             start: start.map { Date(timeIntervalSince1970: $0) },
             end: end.map { Date(timeIntervalSince1970: $0) },
@@ -39,7 +41,7 @@ final class EditWordsTests: XCTestCase {
             day: day,
             code: code,
             at: Date(timeIntervalSince1970: 1_757_337_360),
-            undoneAt: undoneAt.map { Date(timeIntervalSince1970: $0) },
+            personActedAt: personActedAt.map { Date(timeIntervalSince1970: $0) },
             displaced: displaced
         )
     }
@@ -84,7 +86,7 @@ final class EditWordsTests: XCTestCase {
 
     func testARemovalAndAnUnreadableEditSayWhatTheyAre() {
         XCTAssertEqual(
-            EditWords.title(made(state: .deleted, metric: nil, start: nil, end: nil, value: nil, unit: nil)),
+            EditWords.title(made(state: .removed, metric: nil, start: nil, end: nil, value: nil, unit: nil)),
             "A record your agent removed"
         )
         XCTAssertEqual(
@@ -99,17 +101,27 @@ final class EditWordsTests: XCTestCase {
     func testTheDetailSaysWhenItArrivedAndWhatItDid() {
         XCTAssertEqual(
             EditWords.detail(made(), in: Self.utc),
-            "13:16 · for 8 Sep 2025, 13:00 – 13:15"
+            "Agent wrote at 13:16 · for 8 Sep 2025, 13:00 – 13:15"
         )
         XCTAssertEqual(
             EditWords.detail(made(state: .refused, code: .unauthorized), in: Self.utc),
             "13:16 · writing this is switched off in Health"
         )
+        // The person's own row says the operation and who performed it, in the
+        // same two verbs the agent's rows use.
         XCTAssertEqual(
             EditWords.detail(
-                made(state: .undone, undoneAt: 1_757_340_000), in: Self.utc
+                made(state: .removed, askedBy: .person, personActedAt: 1_757_340_000),
+                in: Self.utc
             ),
-            "13:16 · undone at 14:00"
+            "You removed it at 14:00"
+        )
+        XCTAssertEqual(
+            EditWords.detail(
+                made(state: .written, askedBy: .person, personActedAt: 1_757_340_000),
+                in: Self.utc
+            ),
+            "You wrote it back at 14:00"
         )
     }
 
@@ -128,22 +140,22 @@ final class EditWordsTests: XCTestCase {
 
     func testARunIsCountedAsASentence() {
         var tally = EditTally()
-        tally.applied = 1
-        XCTAssertEqual(EditWords.summary(tally), "Your agent changed 1 record in Health.")
-        tally.deleted = 2
+        tally.written = 1
+        XCTAssertEqual(EditWords.summary(tally), "Your agent wrote 1 record in Health.")
+        tally.removed = 2
         tally.refused = 1
         XCTAssertEqual(
             EditWords.summary(tally),
-            "Your agent changed 1 record, removed 2 records and had 1 record refused in Health."
+            "Your agent wrote 1 record, removed 2 records and had 1 record refused in Health."
         )
         XCTAssertEqual(EditWords.summary(EditTally()), "Your agent changed nothing.")
     }
 
     func testTheLegendCountsEveryStateAndSaysSoWhenThereAreNone() {
         var tally = EditTally()
-        tally.applied = 3
-        tally.undone = 1
-        XCTAssertEqual(EditWords.counted(tally), "3 applied, 1 undone")
+        tally.written = 3
+        tally.personRemoved = 1
+        XCTAssertEqual(EditWords.counted(tally), "3 written, 1 removed by you")
         XCTAssertEqual(EditWords.counted(EditTally()), "no edits")
     }
 
@@ -154,7 +166,7 @@ final class EditWordsTests: XCTestCase {
         let names = fields.map(\.name)
         // No "day" line: the record landed on the day it began on, and the
         // instants above have already said which day that is.
-        XCTAssertEqual(names, ["metric", "value", "from", "to", "written", "agent's id"])
+        XCTAssertEqual(names, ["metric", "value", "from", "to", "agent acted", "agent's id"])
         XCTAssertEqual(fields.first?.value, "Energy")
         XCTAssertEqual(fields[1].value, "520 kcal")
         XCTAssertEqual(fields[2].value, "8 Sep 2025 13:00")
@@ -166,7 +178,7 @@ final class EditWordsTests: XCTestCase {
 
     func testTheDayIsPrintedWhenTheInstantsCannotSayIt() {
         let removed = made(
-            state: .deleted, metric: nil, start: nil, end: nil, value: nil, unit: nil,
+            state: .removed, metric: nil, start: nil, end: nil, value: nil, unit: nil,
             day: "2025-09-08"
         )
         XCTAssertTrue(
@@ -211,7 +223,7 @@ final class EditWordsTests: XCTestCase {
                 .contains { $0.name == "your answer" && $0.value == "never given" }
         )
         XCTAssertFalse(EditWords.fields(waiting, in: Self.utc).contains { $0.name == "refused" })
-        XCTAssertFalse(waiting.canBeUndone, "its own page offers nothing to press")
+        XCTAssertFalse(waiting.personCanAct, "its own page offers nothing to press")
     }
 
     func testARemovalLeftWaitingReadsInThePastTense() {
@@ -241,12 +253,12 @@ final class EditWordsTests: XCTestCase {
             EditWords.fields(no, in: Self.utc)
                 .contains { $0.name == "your answer" && $0.value == "no" }
         )
-        XCTAssertFalse(no.canBeUndone)
+        XCTAssertFalse(no.personCanAct)
     }
 
     func testARowThatWasNeverAnsweredIsCountedApartFromTheRest() {
         XCTAssertEqual(
-            EditWords.counted(EditTally(applied: 2, waiting: 1)), "1 never answered, 2 applied"
+            EditWords.counted(EditTally(written: 2, waiting: 1)), "1 never answered, 2 written"
         )
     }
 
@@ -257,9 +269,9 @@ final class EditWordsTests: XCTestCase {
     func testTakingBackAnAdditionIsARemovalAndSaysSo() {
         let added = made()
         XCTAssertFalse(EditWords.restores(added))
-        XCTAssertEqual(EditWords.undoWord(added), "Undo")
-        XCTAssertEqual(EditWords.undoAction(added), "Remove from Health")
-        XCTAssertEqual(EditWords.undoQuestion(added), "Remove this record?")
+        XCTAssertEqual(EditWords.actionWord(added), "Remove")
+        XCTAssertEqual(EditWords.actionKey(added), "Remove the record")
+        XCTAssertEqual(EditWords.actionQuestion(added), "Remove this record?")
         XCTAssertEqual(
             EditWords.consequence(added),
             "The energy record leaves Health, and 8 Sep 2025 goes to the archive again."
@@ -272,26 +284,28 @@ final class EditWordsTests: XCTestCase {
     func testTakingBackAChangePutsTheOldRecordBackAndSaysSo() {
         let changed = made(displaced: [pushedOut()])
         XCTAssertTrue(EditWords.restores(changed))
-        XCTAssertEqual(EditWords.undoWord(changed), "Put back")
-        XCTAssertEqual(EditWords.undoAction(changed), "Put back what was there")
-        XCTAssertEqual(EditWords.undoQuestion(changed), "Put the record back?")
+        XCTAssertEqual(EditWords.actionWord(changed), "Write back")
+        XCTAssertEqual(EditWords.actionKey(changed), "Write the record back")
+        XCTAssertEqual(EditWords.actionQuestion(changed), "Write the record back?")
         XCTAssertEqual(
             EditWords.consequence(changed),
             "Health goes back to the energy record that was there before, and 8 Sep 2025 goes to "
                 + "the archive again."
         )
-        XCTAssertTrue(EditWords.note(changed, in: Self.utc).hasPrefix("Putting it back writes"))
+        XCTAssertTrue(
+            EditWords.note(changed, in: Self.utc).hasPrefix("Writing the old record back")
+        )
     }
 
     /// A removal that kept what it took out can be put back; one an older build
     /// wrote down cannot, and the page says so instead of offering a key.
     func testARemovalCanBePutBackOnlyIfSomethingWasKept() {
-        let kept = made(state: .deleted, displaced: [pushedOut()])
-        XCTAssertTrue(kept.canBeUndone)
-        XCTAssertTrue(EditWords.note(kept, in: Self.utc).hasPrefix("Putting it back writes the record"))
+        let kept = made(state: .removed, displaced: [pushedOut()])
+        XCTAssertTrue(kept.personCanAct)
+        XCTAssertTrue(EditWords.note(kept, in: Self.utc).hasPrefix("Writing it back puts the record"))
 
-        let nothingKept = made(state: .deleted)
-        XCTAssertFalse(nothingKept.canBeUndone)
+        let nothingKept = made(state: .removed)
+        XCTAssertFalse(nothingKept.personCanAct)
         XCTAssertTrue(
             EditWords.note(nothingKept, in: Self.utc).hasPrefix("This was removed by a version")
         )

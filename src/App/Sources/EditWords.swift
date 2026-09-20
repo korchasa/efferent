@@ -18,13 +18,17 @@ enum EditWords {
 
     /// The dial's own vocabulary: accent for what is standing, alarm for what
     /// was turned away, legend for what is no longer there.
+    ///
+    /// It reads the state alone and never who asked, which is exactly right: a
+    /// record stands or it does not, and whose doing that was makes no
+    /// difference to the colour.
     static func colour(_ state: EditEntry.State) -> Color {
         switch state {
-        case .applied: Palette.accent
+        case .written: Palette.accent
         case .refused: Palette.alarm
         // Waiting is among them now: an older version of the app held items
         // back for an answer, and those rows are history like the rest.
-        case .deleted, .undone, .declined, .waiting: Palette.legend
+        case .removed, .declined, .waiting: Palette.legend
         }
     }
 
@@ -33,11 +37,11 @@ enum EditWords {
     /// What a run did, for the strip across the top of the everyday screen.
     static func summary(_ tally: EditTally) -> String {
         var parts: [String] = []
-        if tally.applied > 0 {
-            parts.append("changed \(records(tally.applied))")
+        if tally.written > 0 {
+            parts.append("wrote \(records(tally.written))")
         }
-        if tally.deleted > 0 {
-            parts.append("removed \(records(tally.deleted))")
+        if tally.removed > 0 {
+            parts.append("removed \(records(tally.removed))")
         }
         if tally.refused > 0 {
             parts.append("had \(records(tally.refused)) refused")
@@ -53,11 +57,11 @@ enum EditWords {
         if tally.waiting > 0 {
             parts.append("\(tally.waiting) never answered")
         }
-        if tally.applied > 0 {
-            parts.append("\(tally.applied) applied")
+        if tally.written > 0 {
+            parts.append("\(tally.written) written")
         }
-        if tally.deleted > 0 {
-            parts.append("\(tally.deleted) removed")
+        if tally.removed > 0 {
+            parts.append("\(tally.removed) removed")
         }
         if tally.refused > 0 {
             parts.append("\(tally.refused) refused")
@@ -65,8 +69,13 @@ enum EditWords {
         if tally.declined > 0 {
             parts.append("\(tally.declined) turned down")
         }
-        if tally.undone > 0 {
-            parts.append("\(tally.undone) undone")
+        // The person's own corrections, in the same two verbs the agent's rows
+        // use, because they are the same two things happening to Health.
+        if tally.personRemoved > 0 {
+            parts.append("\(tally.personRemoved) removed by you")
+        }
+        if tally.personWrote > 0 {
+            parts.append("\(tally.personWrote) written back by you")
         }
         return parts.isEmpty ? "no edits" : parts.joined(separator: ", ")
     }
@@ -93,9 +102,12 @@ enum EditWords {
             if entry.recordID.isEmpty {
                 return "An edit this phone could not read"
             }
-            switch entry.state {
-            case .waiting: return "A record your agent wanted to remove"
-            case .declined: return "A removal you turned down"
+            switch (entry.state, entry.askedBy) {
+            case (.waiting, _): return "A record your agent wanted to remove"
+            case (.declined, _): return "A removal you turned down"
+            // Written, with no metric to name it by, is a removal the person
+            // took back: what came back is the displaced record, not the item.
+            case (.written, _): return "A record you wrote back"
             default: return "A record your agent removed"
             }
         }
@@ -109,18 +121,26 @@ enum EditWords {
         return "\(name) · \(figure(value))" + (entry.unit.map { " " + $0 } ?? "")
     }
 
-    /// When the edit arrived, and what it did — or why it did not.
+    /// Who did what, and when — or why nothing was done.
+    ///
+    /// One verb set throughout, whoever acted: a record is written or it is
+    /// removed, and the line names the one who asked for it. The person's rows
+    /// are stamped with the moment they acted rather than the moment the
+    /// agent's item arrived, because that is the part they are looking for.
     static func detail(_ entry: EditEntry, in calendar: Calendar) -> String {
         let arrived = clock(entry.at, in: calendar)
+        if entry.askedBy == .person {
+            let moment = entry.personActedAt.map { " at \(clock($0, in: calendar))" } ?? ""
+            return entry.state == .removed
+                ? "You removed it\(moment)"
+                : "You wrote it back\(moment)"
+        }
         switch entry.state {
-        case .undone:
-            guard let undoneAt = entry.undoneAt else { return "\(arrived) · undone" }
-            return "\(arrived) · undone at \(clock(undoneAt, in: calendar))"
         case .refused:
             return "\(arrived) · " + (entry.code.map(reason) ?? "refused")
-        case .deleted:
-            guard let day = entry.day else { return "\(arrived) · removed a record" }
-            return "\(arrived) · removed a record from \(spoken(day: day))"
+        case .removed:
+            guard let day = entry.day else { return "Agent removed at \(arrived)" }
+            return "Agent removed at \(arrived) · a record from \(spoken(day: day))"
         case .declined:
             return "\(arrived) · you turned this down"
         case .waiting:
@@ -131,9 +151,9 @@ enum EditWords {
             // about what it would take away.
             guard let day = entry.day else { return "\(arrived) · never written" }
             return "\(arrived) · a record from \(spoken(day: day))"
-        case .applied:
-            guard let span = span(entry, in: calendar) else { return arrived }
-            return "\(arrived) · \(span)"
+        case .written:
+            guard let span = span(entry, in: calendar) else { return "Agent wrote at \(arrived)" }
+            return "Agent wrote at \(arrived) · \(span)"
         }
     }
 
@@ -182,9 +202,12 @@ enum EditWords {
             default: fields.append(Field(name: "refused", value: reason(code)))
             }
         }
-        fields.append(Field(name: "written", value: stamp(entry.at, in: calendar)))
-        if let undoneAt = entry.undoneAt {
-            fields.append(Field(name: "undone", value: stamp(undoneAt, in: calendar)))
+        fields.append(Field(name: "agent acted", value: stamp(entry.at, in: calendar)))
+        if let personActedAt = entry.personActedAt {
+            fields.append(Field(
+                name: entry.state == .removed ? "you removed" : "you wrote back",
+                value: stamp(personActedAt, in: calendar)
+            ))
         }
         // Only when it says something the instants above do not: an item that
         // landed on the day it began on has already said which day that is.
@@ -201,29 +224,33 @@ enum EditWords {
     /// there is nothing to take back.
     static func note(_ entry: EditEntry, in calendar: Calendar) -> String {
         let day = entry.day.map(spoken(day:)) ?? "the day it is on"
+        if entry.askedBy == .person {
+            let moment = entry.personActedAt.map { stamp($0, in: calendar) } ?? "earlier"
+            return entry.state == .removed
+                ? "You removed it on \(moment), so it is out of Health. Your agent can write it "
+                + "again."
+                : "You wrote the record back on \(moment), so Health holds it again. Your agent "
+                + "can change it again."
+        }
         switch entry.state {
-        case .applied where restores(entry):
-            return "Putting it back writes the record that was there before into Health again, "
+        case .written where restores(entry):
+            return "Writing the old record back puts what was there before into Health again, "
                 + "and sends \(day) to the archive, so the archive stops showing this one."
-        case .applied where entry.canBeUndone:
+        case .written where entry.personCanAct:
             return "Removing it takes the record out of Health and sends \(day) to the archive "
                 + "again, so the archive stops showing it too."
-        case .applied:
+        case .written:
             return "This record is in Health."
         case .refused:
             return "Nothing was written, so there is nothing to take back. Your agent can send it "
                 + "again once the reason is gone."
-        case .deleted where restores(entry):
-            return "Putting it back writes the record into Health again and sends \(day) to the "
+        case .removed where restores(entry):
+            return "Writing it back puts the record into Health again and sends \(day) to the "
                 + "archive, so the archive shows it once more."
-        case .deleted:
+        case .removed:
             return "This was removed by a version of the app that kept nothing of what it took "
                 + "out, so there is nothing to write back. Ask your agent to write the record "
                 + "again if it should be there."
-        case .undone:
-            let moment = entry.undoneAt.map { stamp($0, in: calendar) } ?? "earlier"
-            return "You put Health back the way it was on \(moment). Your agent can write it "
-                + "again."
         case .waiting:
             return "An older version of this app held changes back for your answer, and this one "
                 + "was never answered. Health was never touched. Your agent can send it again, "
@@ -234,32 +261,37 @@ enum EditWords {
         }
     }
 
-    // MARK: - Taking one back
+    // MARK: - What the person can do about it
 
-    /// Whether taking this one back puts a record there rather than removing
-    /// one. An addition displaced nothing, so undoing it is a removal; a change
-    /// and a removal both have a record waiting in the journal.
+    /// Whether the person's own action here writes a record rather than
+    /// removing one. An addition displaced nothing, so taking it back is a
+    /// removal; a change and a removal both have a record waiting in the
+    /// journal, so taking either back is a write.
+    ///
+    /// Every key below is named for the operation the press performs, in the
+    /// app's two verbs, because the consequence really is different and a
+    /// single word for both would hide which one is about to happen.
     static func restores(_ entry: EditEntry) -> Bool {
         !entry.displaced.isEmpty
     }
 
     /// The row in the list, where there is room for two words.
-    static func undoWord(_ entry: EditEntry) -> String {
-        restores(entry) ? "Put back" : "Undo"
+    static func actionWord(_ entry: EditEntry) -> String {
+        restores(entry) ? "Write back" : "Remove"
     }
 
     /// The key at the foot of a record's own page.
-    static func undoAction(_ entry: EditEntry) -> String {
-        restores(entry) ? "Put back what was there" : "Remove from Health"
+    static func actionKey(_ entry: EditEntry) -> String {
+        restores(entry) ? "Write the record back" : "Remove the record"
     }
 
     /// What the alert asks, and the word on the key that answers it.
-    static func undoQuestion(_ entry: EditEntry) -> String {
-        restores(entry) ? "Put the record back?" : "Remove this record?"
+    static func actionQuestion(_ entry: EditEntry) -> String {
+        restores(entry) ? "Write the record back?" : "Remove this record?"
     }
 
-    static func undoConfirmation(_ entry: EditEntry) -> String {
-        restores(entry) ? "Put back" : "Remove"
+    static func actionAnswer(_ entry: EditEntry) -> String {
+        restores(entry) ? "Write back" : "Remove"
     }
 
     /// What the alert says will happen, in the same words as the note.
@@ -473,11 +505,17 @@ enum EditWords {
     /// needs to tell minutes from days — not to read a clock.
     static func ago(_ moment: Date, now: Date = Date()) -> String {
         let seconds = Int(now.timeIntervalSince(moment))
-        if seconds < 90 { return "just now" }
+        if seconds < 90 {
+            return "just now"
+        }
         let minutes = seconds / 60
-        if minutes < 60 { return "\(minutes) min ago" }
+        if minutes < 60 {
+            return "\(minutes) min ago"
+        }
         let hours = minutes / 60
-        if hours < 24 { return hours == 1 ? "1 hour ago" : "\(hours) hours ago" }
+        if hours < 24 {
+            return hours == 1 ? "1 hour ago" : "\(hours) hours ago"
+        }
         let days = hours / 24
         return days == 1 ? "yesterday" : "\(days) days ago"
     }

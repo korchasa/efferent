@@ -171,6 +171,45 @@ enum Database {
             }
         }
 
+        // One column was carrying two facts. `applied` and `deleted` said what
+        // the agent did; `undone` said what the person did and hid what had
+        // actually happened to the record — taking back an addition removes it,
+        // while taking back a removal or a replacement writes a record again.
+        // So a reader could answer neither question, and the two words sat in
+        // the same place on the row. `state` now says only what the record is,
+        // in the app's two operations and no others, and `askedBy` says who.
+        //
+        // Every old row maps without a guess, because the row already carries
+        // the evidence. An `undone` one is the person's, and what they did is
+        // read off the item: no metric means the item was a removal, so taking
+        // it back wrote the record again; a metric with nothing displaced means
+        // a plain addition, so taking it back removed it; a metric with
+        // something displaced means a replacement, so taking it back wrote the
+        // displaced record. The journal is the only copy of what an agent ever
+        // did — the service is told counts and codes and nothing else — so this
+        // must lose nothing, and `EditLogTests` holds a row of every old state
+        // against this mapping.
+        //
+        // The column is `askedBy` rather than `by` because `BY` is SQL.
+        migrator.registerMigration("v8.editLog.whoAndWhat") { db in
+            try db.alter(table: "editLog") { table in
+                table.add(column: "askedBy", .text).notNull().defaults(to: "agent")
+                table.rename(column: "undoneAt", to: "personActedAt")
+            }
+            try db.execute(sql: "UPDATE editLog SET state = 'written' WHERE state = 'applied'")
+            try db.execute(sql: "UPDATE editLog SET state = 'removed' WHERE state = 'deleted'")
+            try db.execute(sql: """
+            UPDATE editLog SET
+                askedBy = 'person',
+                state = CASE
+                    WHEN metric IS NULL THEN 'written'
+                    WHEN displaced IS NULL OR displaced IN ('', '[]') THEN 'removed'
+                    ELSE 'written'
+                END
+            WHERE state = 'undone'
+            """)
+        }
+
         return migrator
     }
 

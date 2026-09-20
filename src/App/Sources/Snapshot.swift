@@ -70,7 +70,7 @@ enum Snapshot {
         // The one that is in Health: this screen is that record and the way
         // back out of it.
         guard let lunch = journal.first(where: {
-            $0.metric == "dietaryEnergy" && $0.state == .applied
+            $0.metric == "dietaryEnergy" && $0.state == .written
         }) else {
             throw SnapshotError.notRendered("05-edit")
         }
@@ -147,7 +147,7 @@ enum Snapshot {
                     start: seconds(at(morning, 13)), end: seconds(at(morning, 13.25)),
                     value: 520, unit: "kcal", stage: nil
                 )),
-                state: .applied, day: today, at: at(morning, 13.4)
+                state: .written, day: today, at: at(morning, 13.4)
             ),
             .init(
                 item: .put(.init(
@@ -155,7 +155,7 @@ enum Snapshot {
                     start: seconds(at(morning, 13)), end: seconds(at(morning, 13.25)),
                     value: 31, unit: "g", stage: nil
                 )),
-                state: .applied, day: today, at: at(morning, 13.4)
+                state: .written, day: today, at: at(morning, 13.4)
             ),
             .init(
                 item: .put(.init(
@@ -163,7 +163,7 @@ enum Snapshot {
                     start: seconds(at(morning, 13)), end: seconds(at(morning, 13.25)),
                     value: 18, unit: "g", stage: nil
                 )),
-                state: .applied, day: today, at: at(morning, 13.4)
+                state: .written, day: today, at: at(morning, 13.4)
             ),
             .init(
                 item: .put(.init(
@@ -171,7 +171,7 @@ enum Snapshot {
                     start: seconds(at(morning, 16)), end: seconds(at(morning, 16)),
                     value: 300, unit: "mL", stage: nil
                 )),
-                state: .applied, day: today, at: at(morning, 16.1)
+                state: .written, day: today, at: at(morning, 16.1)
             ),
             .init(
                 item: .put(.init(
@@ -179,7 +179,7 @@ enum Snapshot {
                     start: seconds(at(before, 23.5)), end: seconds(at(morning, 6.6)),
                     value: nil, unit: nil, stage: "asleepCore"
                 )),
-                state: .applied, day: yesterday, at: at(morning, 8.2)
+                state: .written, day: yesterday, at: at(morning, 8.2)
             ),
             .init(
                 item: .put(.init(
@@ -187,7 +187,7 @@ enum Snapshot {
                     start: seconds(at(morning, 11.5)), end: seconds(at(morning, 11.5)),
                     value: 500, unit: "mL", stage: nil
                 )),
-                state: .applied, day: today, at: at(morning, 11.6)
+                state: .written, day: today, at: at(morning, 11.6)
             ),
             .init(
                 item: .put(.init(
@@ -195,7 +195,7 @@ enum Snapshot {
                     start: seconds(at(morning, 8)), end: seconds(at(morning, 8)),
                     value: 78.4, unit: "kg", stage: nil
                 )),
-                state: .applied, day: today, at: at(morning, 8.2)
+                state: .written, day: today, at: at(morning, 8.2)
             ),
             .init(
                 item: .put(.init(
@@ -203,7 +203,7 @@ enum Snapshot {
                     start: seconds(at(before, 21.6)), end: seconds(at(before, 21.6)),
                     value: 250, unit: "mL", stage: nil
                 )),
-                state: .undone, day: yesterday, at: at(before, 21.7)
+                state: .removed, askedBy: .person, day: yesterday, at: at(before, 21.7)
             ),
             .init(
                 item: .put(.init(
@@ -217,7 +217,7 @@ enum Snapshot {
             // removal does now: its page offers to put the record back.
             .init(
                 item: .delete(id: "agent:meal:0"),
-                state: .deleted, day: yesterday,
+                state: .removed, day: yesterday,
                 displaced: [DisplacedRecord(
                     metric: "dietaryEnergy",
                     start: at(before, 8.5),

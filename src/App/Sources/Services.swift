@@ -187,7 +187,11 @@ final class Services: ObservableObject {
     /// One line of a demonstration's agent run.
     struct DemoEdit {
         let item: EditItem
+        /// What the record is at the end of the demonstration.
         let state: EditEntry.State
+        /// Whose doing that is. A person's row is written twice: the agent's
+        /// own outcome first, then the person's action over it.
+        var askedBy: EditEntry.Asker = .agent
         var day: String?
         var code: OutcomeCode?
         /// What it pushed out of Health, as the real thing carries it — which
@@ -205,18 +209,24 @@ final class Services: ObservableObject {
         guard demonstration else { return }
         do {
             for (index, edit) in run.enumerated() {
+                // A row the person ended up changing is written the way the app
+                // writes it — as the agent's — and then changed, because that
+                // is the only way the journal ever gets one.
+                let agentLeft: EditEntry.State = edit.askedBy == .agent
+                    ? edit.state
+                    : (edit.state == .removed ? .written : .removed)
                 try store.recordEdit(
                     edit.item, at: index, in: "1757336400000-abcdefgh",
-                    // An undone row is an applied one somebody took back, so it
-                    // is written the way the app writes it and then undone.
-                    state: edit.state == .undone ? .applied : edit.state,
+                    state: agentLeft,
                     day: edit.day, code: edit.code, displaced: edit.displaced, at: edit.at
                 )
             }
             let written = try store.recentEdits()
-            for edit in run where edit.state == .undone {
+            for edit in run where edit.askedBy == .person {
                 guard let row = written.first(where: { $0.recordID == edit.item.id }) else { continue }
-                try store.markEditUndone(row.id, at: edit.at.addingTimeInterval(240))
+                try store.recordPersonAction(
+                    row.id, left: edit.state, at: edit.at.addingTimeInterval(240)
+                )
             }
             edits = try store.editSummary(seenAt: nil, todayFrom: calendar.startOfDay(for: Date()))
         } catch {
@@ -746,7 +756,8 @@ final class Services: ObservableObject {
             // one nobody is looking at. The screen learns the same fact from
             // the journal the next time it refreshes.
             await Notices.tell(
-                applied: applied.items - applied.refused,
+                written: applied.written,
+                removed: applied.removed,
                 refused: applied.refused
             )
         } catch where HealthReader.isLocked(error) {
@@ -772,7 +783,9 @@ final class Services: ObservableObject {
     /// anything: every other outcome either emptied the queue or never reached
     /// it, and a stale count is worse than none.
     private static func heldByLock(in outcome: Applier.Outcome) -> Int {
-        if case let .locked(waiting) = outcome { return waiting }
+        if case let .locked(waiting) = outcome {
+            return waiting
+        }
         return 0
     }
 
@@ -805,8 +818,8 @@ final class Services: ObservableObject {
     /// itself, which is also the limit on what an agent could do in the first
     /// place. A record already gone is not a failure — the journal simply
     /// catches up with Health, which is the one that decides.
-    func undo(_ entry: EditEntry) async {
-        await takeOut(entry)
+    func act(on entry: EditEntry) async {
+        await carryOut(entry)
         refreshStats()
         // The day is owed now, and the person is watching: a day that went up
         // on the next delivery would leave the archive disagreeing with Health
@@ -818,35 +831,41 @@ final class Services: ObservableObject {
     ///
     /// The whole run at once, because that is what the strip on the everyday
     /// screen is about: a batch that has just arrived and is not wanted. A
-    /// refusal has nothing to take back, and neither has a deletion an older
-    /// build wrote down without keeping what it removed; both are passed over
+    /// refusal has nothing to take back, and neither has a removal an older
+    /// build wrote down without keeping what it took out; both are passed over
     /// rather than reported as failures.
-    func undoRecentRun() async {
+    func actOnRecentRun() async {
         let seen = (try? store.editsSeenAt()) ?? .distantPast
-        for entry in recentEdits() where entry.canBeUndone && entry.at > seen {
-            await takeOut(entry)
+        for entry in recentEdits() where entry.personCanAct && entry.at > seen {
+            await carryOut(entry)
         }
         markEditsSeen()
         await sendNow()
     }
 
-    private func takeOut(_ entry: EditEntry) async {
-        guard entry.canBeUndone else { return }
+    /// Do to Health whatever this row leaves for the person, and write down
+    /// which of the app's two operations that turned out to be. A row that
+    /// displaced something is put right by writing that record back; a plain
+    /// addition is put right by removing it.
+    private func carryOut(_ entry: EditEntry) async {
+        guard entry.personCanAct else { return }
+        let left: EditEntry.State = entry.displaced.isEmpty ? .removed : .written
         do {
             let days = try await put(entry)
-            try store.markEditUndone(entry.id)
+            try store.recordPersonAction(entry.id, left: left)
             let marked = try store.markDirty(days)
             log.info(
-                "undid an edit: \(days.count) days changed, \(marked) newly waiting"
+                "the person \(left == .removed ? "removed" : "wrote back") a record: "
+                    + "\(days.count) days changed, \(marked) newly waiting"
             )
             lastError = nil
         } catch WriteRefused.code(.notFound) {
             // Health has not got it, so there is nothing to take out and
             // nothing to mark: the day it was on changed when it went.
-            do { try store.markEditUndone(entry.id) } catch {
+            do { try store.recordPersonAction(entry.id, left: left) } catch {
                 lastError = String(describing: error)
             }
-            log.info("undid an edit Health no longer had")
+            log.info("the person changed a record Health no longer had")
         } catch where HealthReader.isLocked(error) {
             lastError = "Unlock the phone and try again — Health is sealed while it is locked."
         } catch {

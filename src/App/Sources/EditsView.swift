@@ -14,7 +14,7 @@ struct EditsView: View {
     /// On for the store screenshot: an image renderer draws a list, a scroll
     /// view and a navigation stack as nothing at all, so the same rows are
     /// printed straight onto the shell instead. The app itself is never flat —
-    /// the swipe that undoes a row is the list's own.
+    /// the swipe that acts on a row is the list's own.
     private let flat: Bool
 
     /// The rows are read when the screen appears, which an offscreen renderer
@@ -52,7 +52,7 @@ struct EditsView: View {
                 }
             }
             .navigationDestination(for: EditEntry.self) { entry in
-                EditDetailView(entry: entry, calendar: services.calendar) { undo(entry) }
+                EditDetailView(entry: entry, calendar: services.calendar) { act(on: entry) }
             }
         }
         .task {
@@ -120,8 +120,8 @@ struct EditsView: View {
                         // than it was meant to is exactly how that happens by
                         // accident; the button has to be pressed.
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            if entry.canBeUndone {
-                                Button(EditWords.undoWord(entry)) { undo(entry) }
+                            if entry.personCanAct {
+                                Button(EditWords.actionWord(entry)) { act(on: entry) }
                                     .tint(Palette.alarm)
                             }
                         }
@@ -178,9 +178,9 @@ struct EditsView: View {
         entries = services.recentEdits()
     }
 
-    private func undo(_ entry: EditEntry) {
+    private func act(on entry: EditEntry) {
         Task {
-            await services.undo(entry)
+            await services.act(on: entry)
             reload()
         }
     }
@@ -201,8 +201,11 @@ struct EditRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(EditWords.title(entry))
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(entry.state == .undone ? Palette.legend : Palette.ink)
-                    .strikethrough(entry.state == .undone, color: Palette.legend)
+                    // Struck through when no record stands, whoever took it
+                    // out. The colour already reads the state alone, and so
+                    // does this: who asked changes nothing about what is there.
+                    .foregroundStyle(entry.state == .removed ? Palette.legend : Palette.ink)
+                    .strikethrough(entry.state == .removed, color: Palette.legend)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(EditWords.detail(entry, in: calendar))
                     .font(.system(size: 13))
@@ -245,8 +248,8 @@ struct EditDetailView: View {
         .pageBackground()
         .navigationTitle("Edit")
         .navigationBarTitleDisplayMode(.inline)
-        .alert(EditWords.undoQuestion(entry), isPresented: $confirming) {
-            Button(EditWords.undoConfirmation(entry), role: .destructive) {
+        .alert(EditWords.actionQuestion(entry), isPresented: $confirming) {
+            Button(EditWords.actionAnswer(entry), role: .destructive) {
                 remove()
                 dismiss()
             }
@@ -286,7 +289,7 @@ struct EditDetailView: View {
     private var note: some View {
         Text(EditWords.note(entry, in: calendar))
             .font(.system(size: 13))
-            .foregroundStyle(entry.state == .deleted ? Palette.alarm : Palette.body)
+            .foregroundStyle(entry.state == .removed ? Palette.alarm : Palette.body)
             .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -296,18 +299,18 @@ struct EditDetailView: View {
     /// that was there. A removal an older build wrote down kept nothing, so it
     /// gets the sentence instead of a key that could only fail.
     @ViewBuilder private var way: some View {
-        if entry.canBeUndone {
+        if entry.personCanAct {
             VStack(spacing: 0) {
                 RowDivider()
-                Button(EditWords.undoAction(entry)) { confirming = true }
+                Button(EditWords.actionKey(entry)) { confirming = true }
                     .buttonStyle(DangerButton())
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 12)
-        } else if entry.state == .deleted {
+        } else if entry.state == .removed {
             VStack(spacing: 0) {
                 RowDivider()
-                Legend("cannot be undone", size: 11, colour: Palette.tick)
+                Legend("nothing to write back", size: 11, colour: Palette.tick)
                     .frame(maxWidth: .infinity, minHeight: 46)
             }
             .padding(.horizontal, 20)

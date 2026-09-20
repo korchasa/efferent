@@ -33,12 +33,12 @@ enum Notices {
     }
 
     /// Say what a run did, if there is anybody to say it to.
-    static func tell(applied: Int, refused: Int) async {
-        guard applied + refused > 0 else { return }
+    static func tell(written: Int, removed: Int, refused: Int) async {
+        guard written + removed + refused > 0 else { return }
         guard await status() == .authorized else { return }
         let content = UNMutableNotificationContent()
         content.title = "Efferent"
-        content.body = sentence(applied: applied, refused: refused)
+        content.body = sentence(written: written, removed: removed, refused: refused)
         content.sound = .default
         do {
             try await UNUserNotificationCenter.current().add(
@@ -57,14 +57,32 @@ enum Notices {
     /// any more, so the one thing this notice is for is letting somebody who is
     /// not looking at the phone know that their Health changed — and, if they
     /// did not want it, open the app and take it back.
-    static func sentence(applied: Int, refused: Int) -> String {
-        if refused == 0 {
-            return "Your agent changed \(records(applied)) in Health."
-        }
-        if applied == 0 {
+    ///
+    /// The two operations are named by the same two verbs the journal and the
+    /// list use, and a run that did both says both: one word for what happened
+    /// to a record, wherever a person meets it.
+    static func sentence(written: Int, removed: Int, refused: Int) -> String {
+        if written + removed == 0 {
             return "Your agent sent \(records(refused)) this phone could not write."
         }
-        return "Your agent changed \(records(applied)) in Health, and \(refused) were refused."
+        if refused == 0 {
+            return "Your agent changed Health: \(operations(written: written, removed: removed))."
+        }
+        return "Your agent changed Health: "
+            + "\(operations(written: written, removed: removed)), and \(refused) refused."
+    }
+
+    /// "2 records written", "1 record removed", "2 written, 1 removed" — the
+    /// unit is said once, and a mixed run lists both rather than folding them
+    /// into a word that names neither.
+    private static func operations(written: Int, removed: Int) -> String {
+        if removed == 0 {
+            return "\(records(written)) written"
+        }
+        if written == 0 {
+            return "\(records(removed)) removed"
+        }
+        return "\(written) written, \(removed) removed"
     }
 
     private static func records(_ count: Int) -> String {

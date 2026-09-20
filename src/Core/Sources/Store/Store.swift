@@ -659,8 +659,8 @@ public final class Store {
     /// id, so the two ways the same row comes round again both land on it: a
     /// run that died between writing and answering applies the whole edit
     /// again, and an agent correcting its own record reuses the id on purpose.
-    /// A re-applied item is the same item, so `undoneAt` is cleared with it —
-    /// the record is back in Health, whatever the person did last time.
+    /// A re-applied item is the same item, so `personActedAt` is cleared with
+    /// it — the record is back in Health, whatever the person did last time.
     public func recordEdit(
         _ item: EditItem,
         at index: Int,
@@ -725,12 +725,13 @@ public final class Store {
             try db.execute(
                 sql: """
                 INSERT INTO editLog
-                    (editName, item, recordId, state, metric, startAt, endAt, value, unit, stage,
-                     day, code, displaced, appliedAt, undoneAt)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                    (editName, item, recordId, state, askedBy, metric, startAt, endAt, value,
+                     unit, stage, day, code, displaced, appliedAt, personActedAt)
+                VALUES (?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                 ON CONFLICT(editName, item) DO UPDATE SET
                     recordId = excluded.recordId,
                     state = excluded.state,
+                    askedBy = 'agent',
                     metric = excluded.metric,
                     startAt = excluded.startAt,
                     endAt = excluded.endAt,
@@ -741,7 +742,7 @@ public final class Store {
                     code = excluded.code,
                     displaced = excluded.displaced,
                     appliedAt = excluded.appliedAt,
-                    undoneAt = NULL
+                    personActedAt = NULL
                 """,
                 arguments: [
                     editName, item, recordID, state.rawValue, metric, start, end, value, unit,
@@ -785,12 +786,25 @@ public final class Store {
         }
     }
 
-    /// The record is out of Health again, by the person's own hand.
-    public func markEditUndone(_ id: Int64, at moment: Date = Date()) throws {
+    /// The person changed what the agent had done, and this is what they left.
+    ///
+    /// `state` is the same vocabulary the agent's own rows use — the record is
+    /// written or it is removed — because it is the same thing happening to
+    /// Health. Only `askedBy` differs, and the caller knows which of the two it
+    /// performed: taking back an addition removes, taking back a removal or a
+    /// replacement writes.
+    public func recordPersonAction(
+        _ id: Int64, left state: EditEntry.State, at moment: Date = Date()
+    ) throws {
         try dbQueue.write { db in
             try db.execute(
-                sql: "UPDATE editLog SET state = ?, undoneAt = ? WHERE id = ?",
-                arguments: [EditEntry.State.undone.rawValue, moment.timeIntervalSince1970, id]
+                sql: """
+                UPDATE editLog SET state = ?, askedBy = ?, personActedAt = ? WHERE id = ?
+                """,
+                arguments: [
+                    state.rawValue, EditEntry.Asker.person.rawValue,
+                    moment.timeIntervalSince1970, id,
+                ]
             )
         }
     }
@@ -827,19 +841,26 @@ public final class Store {
         var tally = EditTally()
         let rows = try Row.fetchAll(
             db,
-            sql: "SELECT state, COUNT(*) AS n FROM editLog WHERE appliedAt > ? GROUP BY state",
+            sql: """
+            SELECT state, askedBy, COUNT(*) AS n FROM editLog
+            WHERE appliedAt > ? GROUP BY state, askedBy
+            """,
             arguments: [moment ?? -1]
         )
         for row in rows {
             let count: Int = row["n"]
-            switch EditEntry.State(rawValue: row["state"]) {
-            case .applied: tally.applied = count
-            case .refused: tally.refused = count
-            case .deleted: tally.deleted = count
-            case .undone: tally.undone = count
-            case .waiting: tally.waiting = count
-            case .declined: tally.declined = count
-            case nil: break
+            let asker = EditEntry.Asker(rawValue: row["askedBy"]) ?? .agent
+            switch (EditEntry.State(rawValue: row["state"]), asker) {
+            case (.written, .agent): tally.written = count
+            case (.removed, .agent): tally.removed = count
+            case (.written, .person): tally.personWrote = count
+            case (.removed, .person): tally.personRemoved = count
+            // The three that Health never took are the agent's by construction:
+            // nothing the person does produces one.
+            case (.refused, _): tally.refused = count
+            case (.waiting, _): tally.waiting = count
+            case (.declined, _): tally.declined = count
+            case (nil, _): break
             }
         }
         return tally
@@ -856,6 +877,7 @@ public final class Store {
             item: row["item"],
             recordID: row["recordId"],
             state: state,
+            askedBy: EditEntry.Asker(rawValue: row["askedBy"]) ?? .agent,
             metric: row["metric"],
             start: instant("startAt"),
             end: instant("endAt"),
@@ -865,7 +887,7 @@ public final class Store {
             day: row["day"],
             code: (row["code"] as String?).flatMap(OutcomeCode.init(rawValue:)),
             at: Date(timeIntervalSince1970: row["appliedAt"]),
-            undoneAt: instant("undoneAt"),
+            personActedAt: instant("personActedAt"),
             displaced: decode(row["displaced"])
         )
     }

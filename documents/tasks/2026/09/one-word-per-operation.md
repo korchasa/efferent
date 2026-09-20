@@ -74,17 +74,39 @@ Eight files of code: `EditEntry`, `Store`, `Database` (a v8 migration),
 offscreen mode. New wording means re-rendering and re-uploading them, which is
 store-visible and needs its own go-ahead.
 
-## Still to decide, before any code
+## Decided by the owner, 2026-09-20
 
-1. The words on screen for each of the four cases, and what the key that reverses
-   a row says in each. This is screen copy, so it is the owner's.
-2. Whether `undoneAt` is renamed. It now means "when the person acted", and the
-   ruling says the vocabulary is the same at every level; the rename is one more
-   line in the same migration.
-3. What the notice says. It reads "3 records changed" today — a third verb, which
-   the ruling did not sanction. A run that both wrote and removed needs an answer.
-4. Whether the swipe in the list keeps removing at once while the key on an edit's
-   page still asks first.
+1. **A row reads as a verb and the one who acted**: `Agent wrote`, `Agent
+   removed`, `You removed`, `You wrote it back`. One verb set, whoever acted.
+2. **The key says the operation it will perform**: `Remove the record` when
+   reversing an addition or a replacement, `Write the record back` when
+   reversing a removal. It changes per row because the consequence does.
+3. **The notice uses the same two verbs**, and a mixed run lists both:
+   `2 records written`, `1 record removed`, `2 written, 1 removed`. Still counts
+   only — no metric, no value, no day.
+4. `undoneAt` is renamed, because the ruling is that the vocabulary is the same
+   at every level.
+
+## Still open
+
+1. Whether the swipe in the list keeps acting at once while the key on a record's
+   own page asks first. Both perform the same operation, and only the page asks.
+   Left as it was and written down in `documents/design.md` under open decisions.
+
+## Done, 2026-09-20
+
+The code, the migration and the tests are in: `EditEntry` carries `state` and
+`askedBy`, `Store.markEditUndone` became `recordPersonAction`, the v8 migration
+maps every old row and renames `undoneAt` to `personActedAt`, `Applier` counts
+writes and removals apart, and the notice says both. `documents/requirements.md`
+gained WORD-1 to WORD-4 and a rewritten NOTICE-1; `documents/design.md` gained
+the section describing the two fields and the migration. `deno task check` and
+`deno task test` are green, 207 Swift tests where there were 206 — the new one
+builds a v7 database holding a row of every old state and asserts the mapping.
+
+Not done, and needing their own go-ahead: build 22, re-rendering the store
+screenshots `04-edits.png` and `05-edit.png`, the TestFlight upload, and the
+acceptance walk on the new build.
 
 ## What this does not change
 
