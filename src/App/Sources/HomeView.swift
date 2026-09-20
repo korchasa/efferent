@@ -21,8 +21,8 @@ struct HomeView: View {
     @State private var reachingBack = false
     @State private var explainingAccess = false
     @State private var confirmingDisconnect = false
-    @State private var earliest: String?
-    @State private var probed = false
+    /// Health's own first record, looked at again each time the sheet opens.
+    @StateObject private var earliest = EarliestDay()
     @State private var reachSelection: RangeSelection = .everything
     @State private var readingLog = false
     @State private var readingEdits = false
@@ -457,7 +457,11 @@ struct HomeView: View {
                             .font(.system(size: 15))
                             .foregroundStyle(Palette.body)
                             .fixedSize(horizontal: false, vertical: true)
-                        RangePicker(earliest: earliest, probed: probed, selection: $reachSelection)
+                        RangePicker(
+                            earliest: earliest.day,
+                            probed: earliest.looked,
+                            selection: $reachSelection
+                        )
                     }
                     .padding(.horizontal, 20)
                     .padding(.top, 8)
@@ -467,7 +471,7 @@ struct HomeView: View {
 
                 Button("Reach back to here") {
                     let day = RangePicker.startDay(
-                        for: reachSelection, earliest: earliest, calendar: services.calendar
+                        for: reachSelection, earliest: earliest.day, calendar: services.calendar
                     )
                     reachingBack = false
                     Task { await services.exportHistory(from: day) }
@@ -486,12 +490,11 @@ struct HomeView: View {
                 }
             }
         }
-        .task {
-            if !probed {
-                earliest = await services.firstDayInHealth()
-                probed = true
-            }
-        }
+        // Asked every time the sheet opens. Health may have been answered
+        // since the last look — or since a look the walkthrough took before its
+        // own Health sheet was shown — and a remembered "nothing" would go on
+        // offering a range this phone has already outgrown.
+        .task { await earliest.look { await services.firstDayInHealth() } }
     }
 
     // MARK: - Health access

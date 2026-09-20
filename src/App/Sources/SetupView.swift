@@ -17,8 +17,8 @@ struct SetupView: View {
     private enum Step { case welcome, access, notices, range, preparing }
 
     @State private var step: Step = .welcome
-    @State private var earliest: String?
-    @State private var probed = false
+    /// Health's own first record, looked at again by every screen that shows it.
+    @StateObject private var earliest = EarliestDay()
     @State private var selection: RangeSelection = .everything
 
     var body: some View {
@@ -33,13 +33,18 @@ struct SetupView: View {
         }
         .pageBackground()
         .task {
-            // Asked once, early, so the third screen can already name a real
-            // date instead of a spinner by the time anybody reaches it.
-            if !probed {
-                earliest = await services.firstDayInHealth()
-                probed = true
-            }
+            // Asked early, so the last screen can already name a real date
+            // instead of a spinner by the time anybody reaches it. This answer
+            // is taken before the Health sheet has been shown, so it is a head
+            // start and never the answer that screen shows.
+            await lookAtHealth()
         }
+    }
+
+    /// Ask Health how far back it goes, through the screen's own services so a
+    /// demonstration run answers with its own figures.
+    private func lookAtHealth() async {
+        await earliest.look { await services.firstDayInHealth() }
     }
 
     // MARK: - What this is
@@ -235,7 +240,7 @@ struct SetupView: View {
             blurb: "Efferent takes every day from the one you choose up to today. You can reach "
                 + "further back later."
         ) {
-            RangePicker(earliest: earliest, probed: probed, selection: $selection)
+            RangePicker(earliest: earliest.day, probed: earliest.looked, selection: $selection)
         } actions: {
             VStack(spacing: 12) {
                 note(summary)
@@ -253,6 +258,10 @@ struct SetupView: View {
                 .buttonStyle(ProminentButton())
             }
         }
+        // Asked again here, and not once for the whole walkthrough. The Health
+        // sheet is two steps back, and an answer taken before it was shown says
+        // Health has nothing however much of it there is.
+        .task { await lookAtHealth() }
     }
 
     /// The small printed remark beside a control, with the indicator dot that
@@ -279,7 +288,7 @@ struct SetupView: View {
     }
 
     private var startDay: String? {
-        RangePicker.startDay(for: selection, earliest: earliest, calendar: Services.shared.calendar)
+        RangePicker.startDay(for: selection, earliest: earliest.day, calendar: services.calendar)
     }
 
     private var summary: String {
@@ -287,7 +296,7 @@ struct SetupView: View {
             // Nothing to promise: Health either has no history or is not
             // sharing it. Saying "everything goes up now" here would be a
             // sentence about an archive that stays empty.
-            return probed
+            return earliest.looked
                 ? "Health has nothing to send yet. New readings go up as they arrive."
                 : "Working out how far back Health goes…"
         }

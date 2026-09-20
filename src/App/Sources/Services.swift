@@ -1011,9 +1011,14 @@ final class Services: ObservableObject {
     func firstDayInHealth() async -> String? {
         do {
             let day = try await health.firstDay()
+            // Every look leaves a line, because the defect this replaced was
+            // invisible from the outside: a screen showing an answer taken
+            // three screens ago looks exactly like a screen that just asked.
+            log.info("Health goes back to \(day ?? "no day at all")")
             lastError = nil
             return day
         } catch {
+            log.info("Health would not say how far back it goes: \(error)")
             lastError = HealthReader.hasNotBeenAsked(error)
                 ? nil
                 : "Could not work out how far back Health goes. (\(error))"
