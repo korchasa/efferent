@@ -126,7 +126,9 @@ final class Services: ObservableObject {
         setupComplete = defaults.object(forKey: Self.setupKey) as? Bool ?? (loaded != nil)
         var archiveNeedsRewrite = false
         do {
-            deployment = try Deployment.load()
+            // A debug run may have been pointed at a service on this machine;
+            // every other build sends where its own build says.
+            deployment = try Rehearsal.deployment() ?? Deployment.load()
             deploymentError = nil
         } catch {
             deployment = nil
@@ -262,7 +264,12 @@ final class Services: ObservableObject {
                 endpoint: deployment.serviceURL,
                 readingPublicKey: readingKey.publicKey.rawRepresentation
             )
-            try await ArchiveCreator.create(destination: created, identity: identity)
+            if Rehearsal.isPretending() {
+                log.info("claiming without App Attest: this run stands in for Apple")
+            }
+            try await ArchiveCreator.create(
+                destination: created, identity: identity, attester: Rehearsal.attester()
+            )
             _ = try store.activateArchive(created.bucket)
             _ = try store.activateSealingVersion(Int64(SealedBox.version))
             _ = try store.activateDayFormat(Int64(dayFormatVersion))

@@ -26,6 +26,7 @@
     "server:types": "wrangler types server/worker-configuration.d.ts --config server/wrangler.jsonc",
     "server:types:check": "wrangler types server/worker-configuration.d.ts --config server/wrangler.jsonc --check",
     "server:dev": "wrangler dev --config server/wrangler.jsonc",
+    "server:dev:simulator": "wrangler dev --config server/wrangler.jsonc --local-upstream localhost --var UNATTESTED_CLAIMS:yes",
     "server:deploy": "wrangler deploy --config server/wrangler.jsonc",
     "efferent": "deno run -A scripts/reader-run.ts efferent",
     "interop": "deno run -A scripts/interop.ts",

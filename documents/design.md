@@ -298,6 +298,29 @@ of what an agent changed and the screen for one change are reachable. Nothing re
 in-memory store, no Health, no Keychain, no network, no Apple — and the launch says so in its own
 log. It sits beside `--snapshot`, which the release binary already carries.
 
+Made-up figures are enough for a walk over the layout and nothing like enough for the path this app
+exists to run: read Health, seal a day, send it, hear what the archive says. Two more flags open that
+path on a simulator, against a service running on the same machine. `--service <url>` moves both
+addresses this run uses — where days are sent and where an agent is told to read — because a handoff
+that named the live service while the days went somewhere else would hand an agent an archive
+holding none of them. `--pretend-attested` stands in for Apple: `Rehearsal.attester` hands back a
+`PretendedAttester` whose bytes are only the shape a claim travels in. Both live in
+`src/App/Sources/Rehearsal.swift` and both are compiled out of a release binary — `#if DEBUG` makes
+`isPretending` a compile-time `false`, so there is nothing in a shipped build to switch on.
+
+The service has to agree, and only a copy on this machine will. `deno task server:dev:simulator`
+runs `wrangler dev` with `UNATTESTED_CLAIMS=yes`, and `attestedClaim` takes an unattested claim only
+when that variable is set *and* the request arrived at a loopback address. The live service refuses
+such a claim however its variables end up, because a Worker with a route answers at its hostname and
+never at loopback. The task also passes `--local-upstream localhost`: without it wrangler rewrites
+every local request to the production hostname from `routes`, the address half of the check is never
+true, and the claim is refused with "this service cannot check attestations" — which reads like a
+missing secret rather than a rewritten address.
+
+Walked end to end on 2026-09-20 against a simulator seeded with 90 days of Health: the claim was
+taken (201), 91 days were built, sealed and accepted, and `efferent status` on this machine answered
+"91 days, 0.1 MiB, 2026-06-22 … 2026-09-20" from that same archive.
+
 Two things the walk on 2026-09-19 settled. The palette is pinned to light at the root
 (`RootView.preferredColorScheme(.light)`), and that pin holds everywhere it was checked, including
 sheets and the system alert — so dark mode is not half-supported, it is not used. And the app's own
