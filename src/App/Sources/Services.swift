@@ -80,7 +80,8 @@ final class Services: ObservableObject {
 
     private var uploader: Uploader?
     private var applier: Applier?
-    /// The one way into Health's write side. Undo uses it as the applier does,
+    /// The one way into Health's write side. A person's own correction uses it
+    /// as the applier does,
     /// because taking a record back out is the same operation the agent's own
     /// `delete` performs.
     private lazy var healthWriter = HealthKitWriter(calendar: calendar)
@@ -865,12 +866,20 @@ final class Services: ObservableObject {
             do { try store.recordPersonAction(entry.id, left: left) } catch {
                 lastError = String(describing: error)
             }
-            log.info("the person changed a record Health no longer had")
+            log.info(
+                "the person \(left == .removed ? "removed" : "wrote back") "
+                    + "a record Health no longer had"
+            )
         } catch where HealthReader.isLocked(error) {
             lastError = "Unlock the phone and try again — Health is sealed while it is locked."
         } catch {
-            log.error("undoing an edit failed: \(String(describing: error))")
-            lastError = "That record could not be taken out of Health. (\(error))"
+            log.error(
+                "the person's \(left == .removed ? "removal" : "write back") failed: "
+                    + String(describing: error)
+            )
+            lastError = left == .removed
+                ? "That record could not be taken out of Health. (\(error))"
+                : "That record could not be written back into Health. (\(error))"
         }
     }
 
@@ -888,8 +897,8 @@ final class Services: ObservableObject {
     /// The version is drawn fresh and the `written` ledger is left alone on the
     /// restoring path. HealthKit keeps the newest version it has seen for a
     /// sync identifier, so a restore written under a version it has already
-    /// passed would be quietly ignored — which would read as an undo that did
-    /// nothing at all.
+    /// passed would be quietly ignored — which would read as a write back that
+    /// did nothing at all.
     private func put(_ entry: EditEntry) async throws -> Set<String> {
         guard !entry.displaced.isEmpty else {
             let written = try await healthWriter.remove(id: entry.recordID)

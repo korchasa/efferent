@@ -132,7 +132,7 @@ public final class Store {
                 ]
             )
             // The journal describes one agent's work on one archive. Another
-            // archive is another agent, and a list of edits nobody can undo any
+            // archive is another agent, and a list of edits nobody can act on any
             // more — the ids in it name records this phone no longer tracks.
             try db.execute(sql: "DELETE FROM editLog")
             try Self.setString(db, MetaKey.archiveBucket.rawValue, bucket)

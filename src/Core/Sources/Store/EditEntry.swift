@@ -5,8 +5,8 @@ import Foundation
 /// The service keeps counts and codes and forgets the rest on purpose, so this
 /// is the only place the contents of an edit survive at all. It exists for two
 /// reasons: to be read on screen, because an app that changes Health silently
-/// is an app nobody should trust with Health; and to be undone, because a
-/// record written under an id can be taken back out by that id.
+/// is an app nobody should trust with Health; and to be changed by the person,
+/// because a record written under an id can be reached again by that id.
 public struct EditEntry: Equatable, Hashable, Sendable, Identifiable {
     /// What the record is now.
     ///
@@ -71,9 +71,9 @@ public struct EditEntry: Equatable, Hashable, Sendable, Identifiable {
     public let at: Date
     /// When the person changed it, and nothing when they never have.
     public let personActedAt: Date?
-    /// What this item pushed out of Health, and what undo puts back. Empty when
-    /// it pushed nothing out — an addition — and empty on every row written
-    /// before the journal started keeping this.
+    /// What this item pushed out of Health, and what a write back puts there
+    /// again. Empty when it pushed nothing out — an addition — and empty on
+    /// every row written before the journal started keeping this.
     public let displaced: [DisplacedRecord]
 
     public init(

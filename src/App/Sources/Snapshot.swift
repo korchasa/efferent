@@ -213,6 +213,22 @@ enum Snapshot {
                 )),
                 state: .refused, code: .unauthorized, at: at(before, 21.7)
             ),
+            // One the person has already written back: the record stands in
+            // Health again because of them, and the row has to say so in the
+            // same two verbs the agent's rows use.
+            .init(
+                item: .delete(id: "agent:water:0"),
+                state: .written, askedBy: .person, day: yesterday,
+                displaced: [DisplacedRecord(
+                    metric: "dietaryWater",
+                    start: at(before, 7.2),
+                    end: at(before, 7.2),
+                    value: 200,
+                    unit: "mL",
+                    day: yesterday
+                )],
+                at: at(before, 7.4)
+            ),
             // A removal that kept what it took away, which is what every
             // removal does now: its page offers to put the record back.
             .init(

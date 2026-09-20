@@ -103,7 +103,8 @@ enum Database {
         // it cannot say what an edit contained — which leaves this the only
         // place the contents survive. Two things read it: the screen, because
         // an app that changes Health silently is an app nobody should trust
-        // with Health, and undo, which takes a record back out by its id.
+        // with Health, and the person's own corrections, which reach a record by
+        // its id.
         //
         // Keyed by (editName, item) rather than by the agent's id. An edit is
         // applied again whenever a run dies between writing and answering, and
@@ -145,15 +146,15 @@ enum Database {
             }
         }
 
-        // What an item pushed out of Health, so undo can put it back rather
-        // than only take the agent's record out. Health hands a displaced
+        // What an item pushed out of Health, so the person can write it back
+        // rather than only take the agent's record out. Health hands a displaced
         // record over at the moment of the change and never again.
         //
         // JSON rather than a parallel set of columns: an id is the agent's to
         // choose, nothing stops it naming records under two metrics, and a
         // removal searches every writable metric for it. Null on every row
-        // written before this, which is why undo of a deletion asks whether
-        // there is anything to put back instead of assuming there is.
+        // written before this, which is why a removal asks whether there is
+        // anything to write back instead of assuming there is.
         migrator.registerMigration("v6.editLog.displaced") { db in
             try db.alter(table: "editLog") { table in
                 table.add(column: "displaced", .text)

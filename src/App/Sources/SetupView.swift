@@ -196,8 +196,9 @@ struct SetupView: View {
                 )
                 numbered(
                     "02", "A count, never a reading",
-                    "The notice says how many records changed and stops there — no metric, "
-                        + "no value, no day. A lock screen is read by whoever holds the phone."
+                    "The notice says how many records were written and how many removed, and "
+                        + "stops there — no metric, no value, no day. A lock screen is read by "
+                        + "whoever holds the phone."
                 )
                 numbered(
                     "03", "Nothing until an agent is connected",

@@ -79,9 +79,9 @@ public struct WritableMetric: Sendable {
 ///
 /// Kept because Health hands it over once and never again: a removed record
 /// is gone before anything could ask about it, and a replaced one goes the
-/// instant the new sample lands. Without it the only thing undo could do
+/// instant the new sample lands. Without it the only thing a person could do
 /// was take the agent's record out, which leaves nothing where something
-/// stood, and a deletion could not be undone at all.
+/// stood, and a removal could not be reversed at all.
 ///
 /// A list rather than one record, because an id is the agent's to choose:
 /// nothing stops it reusing one across metrics, and a removal searches
@@ -322,7 +322,7 @@ public struct HealthKitWriter: HealthWriter {
     ///
     /// Nil for a sample whose shape the catalogue cannot describe. It is not a
     /// case that should arise — the sync identifier names this app's own writes
-    /// — and a record nobody can name is one undo must not offer to put back.
+    /// — and a record nobody can name is one the app must not offer to write back.
     private static func record(
         _ sample: HKSample, metric: WritableMetric, calendar: Calendar
     ) -> DisplacedRecord? {

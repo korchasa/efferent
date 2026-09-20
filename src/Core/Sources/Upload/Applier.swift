@@ -26,8 +26,8 @@ import os
 /// only the records this app itself wrote — they carry its own sync identifier,
 /// and HealthKit will not let one app delete another's — so nothing an agent
 /// sends can touch the watch's sleep or another app's data. What a change
-/// pushes out of Health is read in the same breath and kept in the journal, and
-/// undo puts it back. Asking first was the older rule; it guarded the agent's
+/// pushes out of Health is read in the same breath and kept in the journal, so
+/// the person can write it back. Asking first was the older rule; it guarded the agent's
 /// own past work against the agent, and cost a decision for every correction.
 ///
 /// Rows a build before that still holds in `waiting` can be answered as they
@@ -395,7 +395,7 @@ public final class Applier {
                 // identifier, and HealthKit refuses to let one app delete
                 // another's — so what a change can spoil is the agent's own
                 // past work. What makes that safe to allow is that the writer
-                // hands back whatever it pushed out, and undo puts it back.
+                // hands back whatever it pushed out, and the person can write it back.
                 let landed = try await land(item)
                 days.formUnion(landed.written.days)
                 try store.recordEdit(
@@ -435,7 +435,7 @@ public final class Applier {
             try store.forgetWritten(id)
             // A deletion names no metric and no instant: the agent gave an id.
             // The day it was in is all there is to say about where it went —
-            // what it held travels separately, as the record undo puts back.
+            // what it held travels separately, as the record a write back restores.
             return (written.days.sorted().first, written)
         }
     }

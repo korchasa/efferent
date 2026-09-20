@@ -87,11 +87,12 @@ store-visible and needs its own go-ahead.
 4. `undoneAt` is renamed, because the ruling is that the vocabulary is the same
    at every level.
 
-## Still open
+## Nothing left open
 
-1. Whether the swipe in the list keeps acting at once while the key on a record's
-   own page asks first. Both perform the same operation, and only the page asks.
-   Left as it was and written down in `documents/design.md` under open decisions.
+The last question — whether the swipe in the list should ask as the key on a
+record's page does — was answered by the owner on 2026-09-20: it stays as it is.
+A swipe is a gesture aimed at one row, the key is the end of reading about it,
+and only the key asks. Written into `documents/design.md`.
 
 ## Done, 2026-09-20
 

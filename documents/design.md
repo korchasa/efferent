@@ -297,11 +297,13 @@ These are claims the design leans on and nobody has run.
   is already running, and on 2026-09-19 a phone unlocked at about 20:58 delivered it at 21:00:22 —
   when something else had launched the app. So it is a trigger for a running app and not a way in.
 
+**A swipe acts, a key asks.** The two are the same operation, and they are deliberately reached
+differently: a swipe in the list is a gesture aimed at one row, while the key at the foot of a
+record's own page is the end of reading about it. Only the page asks first. Decided by the owner on
+2026-09-20, after the verbs were settled.
+
 ## Open decisions
 
 - The 15-second ticker is a guess at a person's patience, not a measurement.
 - Whether refusing the wake is a separate question to the person or rides on the notice permission
   they are already asked for.
-- Whether the swipe in the list should keep acting at once while the key on a record's own page asks
-  first. The two are the same operation, and only the page asks — which is defensible as a list
-  gesture against a deliberate press, and has not been decided.

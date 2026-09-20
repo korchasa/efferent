@@ -307,7 +307,11 @@ struct EditDetailView: View {
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 12)
-        } else if entry.state == .removed {
+        } else if entry.state == .removed, entry.askedBy == .agent {
+            // Only for the agent's own removals, which is where a person might
+            // look for a way back. On a row they removed themselves there is
+            // nothing left to do either, but saying "nothing to write back"
+            // there reads as if the app had mislaid the record.
             VStack(spacing: 0) {
                 RowDivider()
                 Legend("nothing to write back", size: 11, colour: Palette.tick)
