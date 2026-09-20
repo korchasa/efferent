@@ -35,7 +35,19 @@ enum Notices {
     /// Say what a run did, if there is anybody to say it to.
     static func tell(written: Int, removed: Int, failed: Int) async {
         guard written + removed + failed > 0 else { return }
-        guard await status() == .authorized else { return }
+        let standing = await status()
+        // The one silence that used to leave no trace. A phone nobody ever
+        // asked and a phone that said no both dropped every notice without a
+        // word, so the log — the only account of a launch nobody watched —
+        // could not tell the two apart, or tell either from an agent that had
+        // written nothing at all.
+        guard standing == .authorized else {
+            log.info(
+                "said nothing about \(written + removed + failed) records: "
+                    + "notices are \(String(describing: standing))"
+            )
+            return
+        }
         let content = UNMutableNotificationContent()
         content.title = "Efferent"
         content.body = sentence(written: written, removed: removed, failed: failed)

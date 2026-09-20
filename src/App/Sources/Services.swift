@@ -939,8 +939,16 @@ final class Services: ObservableObject {
     /// first edit — the one a person most wants to hear about — always landed
     /// in silence, because the permission was still being asked for. A
     /// connected agent is a thing that has just happened, and that is enough.
+    ///
+    /// The flag alone was not enough, though: it records that the setup text
+    /// left this phone through this app's own share sheet, and an agent can be
+    /// connected without that ever happening — the text was carried across from
+    /// an older install, or typed over from another screen. Such a phone was
+    /// never asked about notices at all, and every edit its agent made landed in
+    /// a silence nothing explained. A journal with agent edits in it is the
+    /// proof the flag was standing in for, so it asks too.
     func askForNoticesIfNeeded() async {
-        guard agentConnected else { return }
+        guard agentConnected || edits.ever.total > 0 else { return }
         await askForNotices()
     }
 
