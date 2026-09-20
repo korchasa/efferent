@@ -271,3 +271,16 @@ the same way and the re-uploaded day carried no water record. Closes DoD-4 and D
 One defect found on the way: the write-permission sheet was requested from
 `applicationDidBecomeActive`, which an app built on SwiftUI scenes never receives; fixed in
 `f490083` by asking from `scenePhase` and right after the archive is created.
+
+## Verified on the phone (2026-09-20)
+
+Build 25 as the dev copy (`dev.korchasa.efferent.dev`, dev service), after the fix in `0e67bda`:
+a day an edit changed is sent as soon as the edit is applied, instead of waiting for the next
+unrelated wake. A `put` of 15 mL water for 2026-09-20 was submitted at 19:59:58.559Z and the day
+came back to the archive at 20:00:02.508Z — four seconds, with the app in the background and
+nothing else asking it to do anything. The `delete` of the same id, applied when the app was next
+opened, re-uploaded the day at 20:03:52.707Z with no water record in it and 37 bytes less.
+
+What it replaced, from the owner's log of 2026-09-19: the same marking took 53 seconds to reach a
+pass in one case, because it waited for Health to wake the app about active energy, and in the
+other case the log ends with the day still marked and nothing carrying it.
