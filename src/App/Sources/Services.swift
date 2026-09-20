@@ -761,9 +761,10 @@ final class Services: ObservableObject {
                 deliveryStop = Self.stopped(by: outcome)
             }
             guard case let .applied(applied) = outcome else { return }
+            var owed = 0
             if !applied.days.isEmpty {
-                let marked = try store.markDirty(applied.days)
-                log.info("\(applied.days.count) days changed by edits, \(marked) newly waiting")
+                owed = try store.markDirty(applied.days)
+                log.info("\(applied.days.count) days changed by edits, \(owed) newly waiting")
             }
             // Said once per run, from the launch that did it — which is usually
             // one nobody is looking at. The screen learns the same fact from
@@ -773,6 +774,19 @@ final class Services: ObservableObject {
                 removed: applied.removed,
                 failed: applied.failed
             )
+            // Marking a day is not sending it, and of the five paths that
+            // deliver edits only two send afterwards: an edit applied on a
+            // push wake, on a relaunch for finished transfers, on coming to
+            // the front, or on this screen's own ticker left its day marked
+            // and nothing carried it. The dial then read "1 day waiting ·
+            // sending" and stood still until Health happened to wake the app
+            // about something else — which on the owner's phone was minutes
+            // (2026-09-20). Only when something was newly marked: a pass over
+            // a day already in the queue is the caller's business, not this
+            // one's, and the pass lock turns away whatever overlaps.
+            if owed > 0 {
+                await sendNow()
+            }
         } catch where HealthReader.isLocked(error) {
             log.debug("the phone is locked, so no edit could be applied; they wait")
             // The count is unknown here — the run failed on the way to it — so
