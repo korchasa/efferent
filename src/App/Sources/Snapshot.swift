@@ -66,11 +66,11 @@ enum Snapshot {
         )
         let sending = try Self.sending()
         sending.demonstrate(Self.run())
-        let journal = sending.recentEdits()
+        let journal = sending.recentRecords()
         // The one that is in Health: this screen is that record and the way
         // back out of it.
         guard let lunch = journal.first(where: {
-            $0.metric == "dietaryEnergy" && $0.state == .written
+            $0.current.metric == "dietaryEnergy" && $0.current.state == .written
         }) else {
             throw SnapshotError.notRendered("05-edit")
         }
@@ -79,7 +79,7 @@ enum Snapshot {
             ("02-sending", AnyView(HomeView().environmentObject(sending))),
             ("03-connect", AnyView(ConnectScreen().environmentObject(sending))),
             ("04-edits", AnyView(EditsScreen(journal: journal).environmentObject(sending))),
-            ("05-edit", AnyView(EditScreen(entry: lunch, calendar: sending.calendar))),
+            ("05-edit", AnyView(EditScreen(record: lunch, calendar: sending.calendar))),
         ]
         for screen in screens {
             let renderer = ImageRenderer(content: screen.view.frame(width: size.width, height: size.height))
@@ -148,6 +148,22 @@ enum Snapshot {
                     value: 520, unit: "kcal", stage: nil
                 )),
                 state: .written, day: today, at: at(morning, 13.4)
+            ),
+            // The same record written again, which is how an agent corrects
+            // itself: one record in Health, two items in its history, and one
+            // line on screen carrying the newer figure.
+            .init(
+                item: .put(.init(
+                    id: "agent:meal:1", metric: "dietaryEnergy",
+                    start: seconds(at(morning, 13)), end: seconds(at(morning, 13.25)),
+                    value: 610, unit: "kcal", stage: nil
+                )),
+                state: .written, day: today,
+                displaced: [DisplacedRecord(
+                    metric: "dietaryEnergy", start: at(morning, 13), end: at(morning, 13.25),
+                    value: 520, unit: "kcal", stage: nil, day: today
+                )],
+                at: at(morning, 14.2)
             ),
             .init(
                 item: .put(.init(
@@ -255,7 +271,7 @@ enum SnapshotError: Error {
 /// The journal as a whole screen: the same rows under a title row of its own,
 /// because an image renderer presents no navigation.
 private struct EditsScreen: View {
-    let journal: [EditEntry]
+    let journal: [RecordHistory]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -272,7 +288,7 @@ private struct EditsScreen: View {
 /// One edit as a whole screen: the same content under a title row of its own,
 /// because an image renderer presents no navigation.
 private struct EditScreen: View {
-    let entry: EditEntry
+    let record: RecordHistory
     let calendar: Calendar
 
     var body: some View {
@@ -281,7 +297,7 @@ private struct EditScreen: View {
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(Palette.ink)
                 .frame(height: 52)
-            EditDetailView(entry: entry, calendar: calendar, remove: {}, scrolls: false)
+            EditDetailView(record: record, calendar: calendar, remove: {}, scrolls: false)
         }
         .pageBackground()
     }

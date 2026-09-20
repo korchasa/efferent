@@ -131,10 +131,24 @@ public struct EditEntry: Equatable, Hashable, Sendable, Identifiable {
         guard !recordID.isEmpty, askedBy == .agent else { return false }
         switch state {
         case .written: return true
-        case .removed: return !displaced.isEmpty
+        case .removed: return personRestores
         default: return false
         }
     }
+
+    /// Whether the person's action here writes a record rather than removing
+    /// one. The two are named apart everywhere because the consequence really
+    /// is different, and one word for both would hide which is about to
+    /// happen.
+    ///
+    /// Only a record that is out of Health is written back. One that stands
+    /// has a single honest action, and it is to remove it — whatever this item
+    /// displaced on its way in. What an earlier item held is a value the agent
+    /// chose and the person never saw, and offering to restore it is how two
+    /// items over one id came to carry contradictory keys: the earlier one
+    /// removed the later one's record, and the later one offered to write the
+    /// earlier one back (2026-09-20).
+    public var personRestores: Bool { state == .removed && !displaced.isEmpty }
 
     /// The item this row came from.
     ///

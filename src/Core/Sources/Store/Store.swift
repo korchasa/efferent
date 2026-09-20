@@ -766,6 +766,53 @@ public final class Store {
         }
     }
 
+    /// The end of the journal as records rather than as items, newest first.
+    ///
+    /// Grouped by the agent's id, because that is what Health keys a record
+    /// by: two `put`s under one id leave one record and two rows, and a screen
+    /// that put a key on each of them would offer two answers about one record,
+    /// one of which could only fail. A row that never became a record — an edit
+    /// nobody could open — stands on its own under a key made from its row id.
+    ///
+    /// The limit counts records rather than rows, so the newest ones arrive
+    /// whole: a record corrected five times is one entry with five items in it,
+    /// not five entries and not a history missing its beginning.
+    public func recordHistories(limit: Int = 300) throws -> [RecordHistory] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                WITH keyed AS (
+                    SELECT *, CASE WHEN recordId <> '' THEN 'id:' || recordId
+                                   ELSE 'row:' || id END AS groupKey
+                    FROM editLog
+                )
+                SELECT * FROM keyed WHERE groupKey IN (
+                    SELECT groupKey FROM keyed
+                    GROUP BY groupKey ORDER BY MAX(appliedAt) DESC, MAX(id) DESC LIMIT ?
+                )
+                ORDER BY appliedAt DESC, id DESC
+                """,
+                arguments: [limit]
+            )
+            // The rows arrive newest first, so a key's first appearance is its
+            // newest item — which is both the order the list wants and the
+            // item that speaks for the record.
+            var order: [String] = []
+            var items: [String: [EditEntry]] = [:]
+            for row in rows {
+                guard let entry = Self.entry(row) else { continue }
+                let key: String = row["groupKey"]
+                if items[key] == nil { order.append(key) }
+                items[key, default: []].append(entry)
+            }
+            return order.compactMap { key in
+                guard let held = items[key], !held.isEmpty else { return nil }
+                return RecordHistory(id: key, items: held)
+            }
+        }
+    }
+
     public func edit(_ id: Int64) throws -> EditEntry? {
         try dbQueue.read { db in
             try Row.fetchOne(db, sql: "SELECT * FROM editLog WHERE id = ?", arguments: [id])
@@ -837,12 +884,18 @@ public final class Store {
 
     /// Nothing has been seen when nothing has ever been looked at, which is why
     /// a nil moment counts the whole journal rather than none of it.
+    /// Records, not items: an agent that wrote a record and then corrected it
+    /// wrote one record, and a strip saying two would be counting its own
+    /// journal rather than Health. Same grouping as `recordHistories`, so the
+    /// number over the list and the length of the list cannot disagree.
     private static func tally(_ db: GRDB.Database, after moment: Double?) throws -> EditTally {
         var tally = EditTally()
         let rows = try Row.fetchAll(
             db,
             sql: """
-            SELECT state, askedBy, COUNT(*) AS n FROM editLog
+            SELECT state, askedBy, COUNT(DISTINCT
+                CASE WHEN recordId <> '' THEN 'id:' || recordId ELSE 'row:' || id END
+            ) AS n FROM editLog
             WHERE appliedAt > ? GROUP BY state, askedBy
             """,
             arguments: [moment ?? -1]

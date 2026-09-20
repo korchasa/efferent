@@ -250,9 +250,9 @@ Since v8 the row carries two fields, and WORD-1 to WORD-4 are what they exist fo
   they change it; there is no third party and no third state.
 
 So the four cases read in one verb set: the agent wrote, the agent removed, the person removed what
-the agent wrote, the person wrote back what the agent removed or replaced. `EditWords` is where that
-becomes screen text, `Notices` says the same two verbs on the lock screen, and the key on a row is
-named for the operation the press performs rather than for the fact that it reverses something.
+the agent wrote, the person wrote back what the agent removed. `EditWords` is where that becomes
+screen text, `Notices` says the same two verbs on the lock screen, and the key on a row is named for
+the operation the press performs rather than for the fact that it reverses something.
 
 **The migration reads each old row off its own evidence, and guesses at nothing.** `applied` and
 `deleted` map straight across, `refused`, `waiting` and `declined` keep their meaning, and an `undone` row
@@ -273,6 +273,19 @@ reads — and the word `refused` is left only where somebody really did refuse: 
 request away, Apple turning an attestation down, the system turning down a wake, and the code
 `healthRefused`. The service reads the old metadata key as well as the new one, because an outcome
 stored before the rename is a real answer and reading it as zero would call a failed edit applied.
+
+**The rows are written per item and read per record.** The key has to stay `(editName, item)`:
+an edit applied twice must land on the row the first attempt made. Health, though, keeps one record
+per id, and a second `put` under an id replaces the sample rather than adding one — which is how an
+agent corrects a record it wrote before. So two rows can describe one record, and a screen that drew
+both put a key on each: the earlier one removed the later one's record, and the later one offered to
+write the earlier one's value back. The owner met that on 2026-09-20 as a record they could not
+remove. `Store.recordHistories` gathers the rows by id and hands out a `RecordHistory` — every item
+that named the record, newest first, with `current` the one that speaks for it. The list draws one
+line per record, the line's key follows what stands in Health (`EditEntry.personRestores`: only a
+record that is out is written back), and the earlier items are read on the record's own page under
+"before this". Going back to a value an earlier item held is not offered as a key at all: it is a
+value the agent chose and the person never saw. WORD-6.
 
 ## Walking the screens before a release
 

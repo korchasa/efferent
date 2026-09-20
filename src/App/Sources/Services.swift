@@ -828,6 +828,17 @@ final class Services: ObservableObject {
         }
     }
 
+    /// The same end of the journal gathered by record, which is what the list
+    /// shows and what the person acts on.
+    func recentRecords() -> [RecordHistory] {
+        do {
+            return try store.recordHistories()
+        } catch {
+            lastError = String(describing: error)
+            return []
+        }
+    }
+
     /// The person has looked. What lands after this moment is what the dark
     /// strip on the everyday screen counts.
     func markEditsSeen() {
@@ -863,8 +874,13 @@ final class Services: ObservableObject {
     /// rather than reported as failures.
     func actOnRecentRun() async {
         let seen = (try? store.editsSeenAt()) ?? .distantPast
-        for entry in recentEdits() where entry.personCanAct && entry.at > seen {
-            await carryOut(entry)
+        // By record, not by item: a record an agent wrote and then corrected
+        // has two rows in the journal and one sample in Health, and acting on
+        // both of them would remove it once and then fail looking for it.
+        for record in recentRecords()
+            where record.personCanAct && record.current.at > seen
+        {
+            await carryOut(record.current)
         }
         markEditsSeen()
         await sendNow()
@@ -876,7 +892,7 @@ final class Services: ObservableObject {
     /// addition is put right by removing it.
     private func carryOut(_ entry: EditEntry) async {
         guard entry.personCanAct else { return }
-        let left: EditEntry.State = entry.displaced.isEmpty ? .removed : .written
+        let left: EditEntry.State = entry.personRestores ? .written : .removed
         do {
             let days = try await put(entry)
             try store.recordPersonAction(entry.id, left: left)
@@ -926,7 +942,7 @@ final class Services: ObservableObject {
     /// passed would be quietly ignored — which would read as a write back that
     /// did nothing at all.
     private func put(_ entry: EditEntry) async throws -> Set<String> {
-        guard !entry.displaced.isEmpty else {
+        guard entry.personRestores else {
             let written = try await healthWriter.remove(id: entry.recordID)
             try store.forgetWritten(entry.recordID)
             return written.days

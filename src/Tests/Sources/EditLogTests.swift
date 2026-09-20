@@ -23,6 +23,120 @@ final class EditLogTests: XCTestCase {
         ))
     }
 
+    // MARK: - A record, gathered from the items that named it
+
+    /// Two `put`s under one id are one record in Health, so they are one line
+    /// on screen with one key on it.
+    ///
+    /// Reusing an id is how an agent corrects a record it wrote before, and
+    /// the journal keeps a row per item — so the screen used to draw both and
+    /// offer a key on each. Pressing one took the record out and pressing the
+    /// other went looking for a record that was no longer there. The owner met
+    /// it as a record that could not be removed at all (2026-09-20).
+    func testTwoItemsUnderOneIdAreOneRecordWithOneKey() throws {
+        let store = try Store.inMemory()
+        let later = Self.noon.addingTimeInterval(240)
+        try store.recordEdit(
+            lunch(), at: 0, in: "1757336400000-aaaaaaaa", state: .written, day: "2025-09-08",
+            at: Self.noon
+        )
+        try store.recordEdit(
+            lunch(), at: 0, in: "1757336400000-bbbbbbbb", state: .written, day: "2025-09-08",
+            displaced: [Self.displacedLunch], at: later
+        )
+
+        let records = try store.recordHistories()
+        XCTAssertEqual(records.count, 1, "one record, however many items named it")
+        let record = try XCTUnwrap(records.first)
+        XCTAssertEqual(record.id, "id:agent:meal:1")
+        XCTAssertEqual(record.items.count, 2)
+        XCTAssertEqual(record.current.at, later, "the newest item speaks for the record")
+        XCTAssertEqual(record.earlier.map(\.at), [Self.noon])
+        XCTAssertTrue(record.personCanAct)
+        // The record stands, so the one thing to do to it is take it out —
+        // never write back what the correction displaced.
+        XCTAssertFalse(record.current.personRestores)
+    }
+
+    /// The strip over the everyday screen counts records too. An agent that
+    /// wrote a record and then corrected it wrote one record, and a count of
+    /// two would be counting the journal's own rows rather than Health.
+    func testARecordWrittenTwiceIsCountedOnce() throws {
+        let store = try Store.inMemory()
+        try store.recordEdit(
+            lunch(), at: 0, in: "1757336400000-aaaaaaaa", state: .written, day: "2025-09-08",
+            at: Self.noon
+        )
+        try store.recordEdit(
+            lunch(), at: 0, in: "1757336400000-bbbbbbbb", state: .written, day: "2025-09-08",
+            displaced: [Self.displacedLunch], at: Self.noon.addingTimeInterval(240)
+        )
+
+        let summary = try store.editSummary(
+            seenAt: nil, todayFrom: Self.noon.addingTimeInterval(-3600)
+        )
+        XCTAssertEqual(summary.today.written, 1)
+        XCTAssertEqual(summary.ever.written, 1)
+    }
+
+    /// Two records are two lines, newest first, and neither swallows the other.
+    func testEachRecordIsItsOwnLineNewestFirst() throws {
+        let store = try Store.inMemory()
+        try store.recordEdit(
+            lunch(), at: 0, in: "1757336400000-aaaaaaaa", state: .written, day: "2025-09-08",
+            at: Self.noon
+        )
+        try store.recordEdit(
+            lunch(id: "agent:meal:2"), at: 1, in: "1757336400000-aaaaaaaa", state: .written,
+            day: "2025-09-08", at: Self.noon.addingTimeInterval(60)
+        )
+
+        let records = try store.recordHistories()
+        XCTAssertEqual(records.map(\.current.recordID), ["agent:meal:2", "agent:meal:1"])
+        XCTAssertTrue(records.allSatisfy { $0.earlier.isEmpty })
+    }
+
+    /// An edit nobody could open names no record, so it cannot be gathered by
+    /// id — it stands on its own line, and several of them stay several.
+    func testEditsWithNoRecordStayApart() throws {
+        let store = try Store.inMemory()
+        try store.recordUnopenedEdit("1757336400000-aaaaaaaa", code: .badSignature, at: Self.noon)
+        try store.recordUnopenedEdit(
+            "1757336400000-bbbbbbbb", code: .badSignature, at: Self.noon.addingTimeInterval(60)
+        )
+
+        let records = try store.recordHistories()
+        XCTAssertEqual(records.count, 2)
+        XCTAssertTrue(records.allSatisfy { $0.items.count == 1 })
+        XCTAssertTrue(records.allSatisfy { !$0.personCanAct })
+    }
+
+    /// The limit counts records, not rows: the newest ones arrive whole rather
+    /// than with their beginnings cut off.
+    func testTheLimitCountsRecordsAndKeepsThemWhole() throws {
+        let store = try Store.inMemory()
+        for index in 0 ..< 3 {
+            for attempt in 0 ..< 2 {
+                try store.recordEdit(
+                    lunch(id: "agent:meal:\(index)"), at: 0,
+                    in: "1757336400000-\(index)\(attempt)aaaaaa", state: .written,
+                    day: "2025-09-08",
+                    at: Self.noon.addingTimeInterval(Double(index * 100 + attempt))
+                )
+            }
+        }
+
+        let records = try store.recordHistories(limit: 2)
+        XCTAssertEqual(records.count, 2)
+        XCTAssertEqual(records.map(\.items.count), [2, 2])
+    }
+
+    static let displacedLunch = DisplacedRecord(
+        metric: "dietaryEnergy", start: Date(timeIntervalSince1970: 1_757_336_400),
+        end: Date(timeIntervalSince1970: 1_757_337_300), value: 420, unit: "kcal", stage: nil,
+        day: "2025-09-08"
+    )
+
     // MARK: - One item, written down and read back
 
     func testAnAppliedItemComesBackSayingWhatItSaid() throws {

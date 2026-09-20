@@ -157,6 +157,13 @@ enum EditWords {
         }
     }
 
+    /// How many items a record has behind its newest one, for the line under
+    /// a row in the list. A count and never a list: the row says the record
+    /// has a past, and the record's own page is where the past is read.
+    static func earlier(_ count: Int) -> String {
+        count == 1 ? "1 earlier change" : "\(count) earlier changes"
+    }
+
     /// "today", "yesterday", or the date itself.
     static func when(_ day: String, in calendar: Calendar) -> String {
         let today = Day.of(Date(), in: calendar)
@@ -233,9 +240,6 @@ enum EditWords {
                 + "can change it again."
         }
         switch entry.state {
-        case .written where restores(entry):
-            return "Writing the old record back puts what was there before into Health again, "
-                + "and sends \(day) to the archive, so the archive stops showing this one."
         case .written where entry.personCanAct:
             return "Removing it takes the record out of Health and sends \(day) to the archive "
                 + "again, so the archive stops showing it too."
@@ -272,7 +276,7 @@ enum EditWords {
     /// app's two verbs, because the consequence really is different and a
     /// single word for both would hide which one is about to happen.
     static func restores(_ entry: EditEntry) -> Bool {
-        !entry.displaced.isEmpty
+        entry.personRestores
     }
 
     /// The row in the list, where there is room for two words.

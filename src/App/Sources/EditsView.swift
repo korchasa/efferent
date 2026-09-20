@@ -10,7 +10,11 @@ struct EditsView: View {
     @EnvironmentObject private var services: Services
     @Environment(\.dismiss) private var dismiss
 
-    @State private var entries: [EditEntry]
+    /// One line per record, not per item of an edit. Two `put`s under one id
+    /// leave one record in Health and two rows in the journal, and a list that
+    /// drew both would offer two keys about one record — one of which could
+    /// only fail.
+    @State private var records: [RecordHistory]
     /// On for the store screenshot: an image renderer draws a list, a scroll
     /// view and a navigation stack as nothing at all, so the same rows are
     /// printed straight onto the shell instead. The app itself is never flat —
@@ -20,8 +24,8 @@ struct EditsView: View {
     /// The rows are read when the screen appears, which an offscreen renderer
     /// never does — the screenshot run hands them in instead. The app itself
     /// starts empty and reads them, as it did before.
-    init(showing entries: [EditEntry] = [], flat: Bool = false) {
-        _entries = State(initialValue: entries)
+    init(showing records: [RecordHistory] = [], flat: Bool = false) {
+        _records = State(initialValue: records)
         self.flat = flat
     }
 
@@ -36,7 +40,7 @@ struct EditsView: View {
     private var presented: some View {
         NavigationStack {
             Group {
-                if entries.isEmpty {
+                if records.isEmpty {
                     nothing
                 } else {
                     journal
@@ -51,8 +55,8 @@ struct EditsView: View {
                         .foregroundStyle(Palette.accent)
                 }
             }
-            .navigationDestination(for: EditEntry.self) { entry in
-                EditDetailView(entry: entry, calendar: services.calendar) { act(on: entry) }
+            .navigationDestination(for: RecordHistory.self) { record in
+                EditDetailView(record: record, calendar: services.calendar) { act(on: record) }
             }
         }
         .task {
@@ -75,8 +79,8 @@ struct EditsView: View {
                     Legend(title, size: 9)
                         .padding(.top, 18)
                         .padding(.bottom, 2)
-                case let .entry(entry):
-                    EditRow(entry: entry, calendar: services.calendar)
+                case let .record(record):
+                    EditRow(record: record, calendar: services.calendar)
                     RowDivider()
                 }
             }
@@ -110,8 +114,10 @@ struct EditsView: View {
                         .listRowBackground(Palette.shell)
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 18, leading: 20, bottom: 2, trailing: 20))
-                case let .entry(entry):
-                    NavigationLink(value: entry) { EditRow(entry: entry, calendar: services.calendar) }
+                case let .record(record):
+                    NavigationLink(value: record) {
+                        EditRow(record: record, calendar: services.calendar)
+                    }
                         .listRowBackground(Palette.shell)
                         .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
                         .listRowSeparatorTint(Palette.hairline)
@@ -120,8 +126,8 @@ struct EditsView: View {
                         // than it was meant to is exactly how that happens by
                         // accident; the button has to be pressed.
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            if entry.personCanAct {
-                                Button(EditWords.actionWord(entry)) { act(on: entry) }
+                            if record.personCanAct {
+                                Button(EditWords.actionWord(record.current)) { act(on: record) }
                                     .tint(Palette.alarm)
                             }
                         }
@@ -150,37 +156,41 @@ struct EditsView: View {
     /// page rather than a bar over it.
     private enum Line: Identifiable, Hashable {
         case day(String)
-        case entry(EditEntry)
+        case record(RecordHistory)
 
         var id: String {
             switch self {
             case let .day(title): "day:" + title
-            case let .entry(entry): "entry:\(entry.id)"
+            case let .record(record): "record:" + record.id
             }
         }
     }
 
+    /// The day a record sits under is the day it last changed, which is what
+    /// the list is ordered by. A record written last week and corrected today
+    /// belongs under today: it is today that something happened to it, and the
+    /// week is in its own history.
     private var lines: [Line] {
         var lines: [Line] = []
         var last: String?
-        for entry in entries {
-            let day = Day.of(entry.at, in: services.calendar)
+        for record in records {
+            let day = Day.of(record.current.at, in: services.calendar)
             if day != last {
                 lines.append(.day(EditWords.when(day, in: services.calendar)))
                 last = day
             }
-            lines.append(.entry(entry))
+            lines.append(.record(record))
         }
         return lines
     }
 
     private func reload() {
-        entries = services.recentEdits()
+        records = services.recentRecords()
     }
 
-    private func act(on entry: EditEntry) {
+    private func act(on record: RecordHistory) {
         Task {
-            await services.act(on: entry)
+            await services.act(on: record.current)
             reload()
         }
     }
@@ -190,8 +200,10 @@ struct EditsView: View {
 
 /// The walkthrough's numbered row, with the state where the number was.
 struct EditRow: View {
-    let entry: EditEntry
+    let record: RecordHistory
     let calendar: Calendar
+
+    private var entry: EditEntry { record.current }
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
@@ -211,6 +223,12 @@ struct EditRow: View {
                     .font(.system(size: 13))
                     .foregroundStyle(Palette.body)
                     .fixedSize(horizontal: false, vertical: true)
+                // Only when there is one, and never a count of items: what the
+                // person is being told is that this record has a past, and the
+                // page is where the past is.
+                if !record.earlier.isEmpty {
+                    Legend(EditWords.earlier(record.earlier.count), size: 9)
+                }
             }
             Spacer(minLength: 0)
         }
@@ -223,9 +241,13 @@ struct EditRow: View {
 /// Every field of one item, printed as the welcome screen prints what the app
 /// is made of: the name on the left, the value on the right, a line between.
 struct EditDetailView: View {
-    let entry: EditEntry
+    /// The record, not one item of it: what stands in Health is the newest
+    /// item, and the ones behind it are why it says what it says.
+    let record: RecordHistory
     let calendar: Calendar
     let remove: () -> Void
+
+    private var entry: EditEntry { record.current }
     /// Off for the store screenshot: an image renderer draws a scroll view as
     /// nothing at all, and one edit's fields fit the screen without one.
     var scrolls = true
@@ -280,10 +302,39 @@ struct EditDetailView: View {
             }
             note
                 .padding(.top, 14)
+            if !record.earlier.isEmpty {
+                earlier
+                    .padding(.top, 22)
+            }
         }
         .padding(.horizontal, 20)
         .padding(.top, 8)
         .padding(.bottom, 18)
+    }
+
+    /// What the agent did to this record before the item above.
+    ///
+    /// Health keeps one record per id and a second write replaces it, so
+    /// these are not other records: they are earlier versions of this one, and
+    /// the only place they survive at all. They are read, never pressed —
+    /// going back to a value the agent chose and the person never saw is not
+    /// an action anybody asked for, while hiding that it existed makes the
+    /// record's own value look like it came from nowhere.
+    private var earlier: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Legend("before this", size: 9)
+                .padding(.bottom, 6)
+            ForEach(record.earlier) { item in
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Legend(EditWords.stamp(item.at, in: calendar), size: 9)
+                    Spacer(minLength: 8)
+                    Legend(EditWords.title(item), size: 9, colour: Palette.ink)
+                        .multilineTextAlignment(.trailing)
+                }
+                .padding(.vertical, 9)
+                RowDivider()
+            }
+        }
     }
 
     private var note: some View {

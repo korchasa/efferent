@@ -191,7 +191,10 @@ record, while taking back a removal writes one.
 
 **WORD-4 — A key says the operation the press performs.** Reversing an addition removes the record
 and the key says so; reversing a removal writes the record back and the key says that instead. One
-word for both would hide which of the two is about to happen.
+word for both would hide which of the two is about to happen. What the record stands as now decides
+which of the two is offered, and nothing else: a record in Health is removed, whatever an earlier
+write held under the same id, because that earlier value is one the agent chose and the person
+never saw.
 
 **WORD-5 — An item that did not happen failed; it was not refused.** Eleven words say why an item
 did not land, and nine of them are nothing anybody decided: a metric this app does not write, a unit
@@ -200,6 +203,14 @@ not open or would not parse. Calling those a refusal reads as a decision somebod
 that something is wrong. The word is the same on the screen, in the journal, in the answer the phone
 sends the service and in what an agent reads back — and it is the word the whole edit already
 carried when one of its items did not land.
+
+**WORD-6 — One record is one line, and it carries one key.** Health keeps one record per id and a
+second write under that id replaces it, which is how an agent corrects itself; the journal keeps a
+row per item of per edit, which is what an edit applied twice must land on. So the rows are
+gathered by id before anything is shown. The newest item says what the record is and carries the
+only key; the earlier ones are readable history and carry none. Two keys over one record are two
+answers to one question, and one of them can only fail — which is what the owner met on
+2026-09-20 as a record that could not be removed at all.
 
 ## What the app must be able to say about itself
 

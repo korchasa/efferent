@@ -99,3 +99,44 @@ materialises a record's own history, so the key on a row is computed from one
 item in ignorance of every other item that touched the same id. The v4 comment
 shows this was not the intent — the implementation has quietly disagreed with
 its own stated contract since the journal was written.
+
+## The fix the owner chose (2026-09-20, "B, сейчас")
+
+The journal on screen becomes a list of **records**, not of items. The table
+underneath does not change: `editLog` is the audit of what each item of each
+edit did, it is rebuilt into outcomes by `edits(of:)`, and a re-applied edit
+must keep landing on the row it made the first time. What changes is that the
+app finally holds the thing it never had — a record's own history — and reads
+the screen off that.
+
+### Shape
+
+- `Store.recordHistories(limit:)` groups `editLog` rows by `recordId`, newest
+  first by the last time anything touched the id. Each group carries every item
+  that ever named that id and names one of them **current**: the newest by
+  `appliedAt`, then by row id.
+- A row's key comes from the record's state, which is the current item's state,
+  and nothing else. The record stands → *Remove the record*. The record is out
+  and the agent is what took it out → *Write the record back*. Only the current
+  item may act; the older ones are history and carry no key.
+- The record's page shows what stands in Health now, then every item that
+  touched the id, oldest last: when it arrived, what it did, what it displaced.
+- Rows that never became a record — an item that failed, an edit that would not
+  open — keep their own line, one per item, as today.
+
+### The one thing this is narrower than the sketch
+
+Going back to a value an earlier edit held is **not** offered as a key. A
+standing record has one honest action, which is to remove it: the older value
+is another agent's record that the person never chose, and offering to restore
+it is exactly what confused the owner tonight. The older values stay visible in
+the record's history, so nothing is hidden — only the key is gone. Raise it
+again if a corrected record turns out to want an undo in daily use.
+
+### Order of work
+
+`Store.recordHistories` with its tests → `EditsView` list and detail on the new
+shape → `Snapshot` data for the store screenshots → the invariant test (two
+edits over one id give one actionable row, and the key says *Remove*) → a walk
+of the history screen in both appearances, including a record with two items
+and a failed item.

@@ -358,7 +358,7 @@ final class ApplierTests: XCTestCase {
         XCTAssertEqual(rows.first?.displaced.first?.value, 520, "the meal it replaced")
         XCTAssertEqual(rows.first?.displaced.first?.day, "2025-09-07")
         XCTAssertEqual(rows.last?.displaced.first?.stage, "asleepCore", "the night it took away")
-        XCTAssertTrue(rows.allSatisfy(\.personCanAct), "both can be put back")
+        XCTAssertTrue(rows.allSatisfy(\.personCanAct), "the person can act on both")
     }
 
     /// An addition pushed nothing out, so there is nothing to keep: undo takes

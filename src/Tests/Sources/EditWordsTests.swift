@@ -279,21 +279,28 @@ final class EditWordsTests: XCTestCase {
         XCTAssertTrue(EditWords.note(added, in: Self.utc).hasPrefix("Removing it takes the record"))
     }
 
-    /// A change pushed a record out, so taking it back puts that record where
-    /// it was — which is a different thing, and must not be called removing.
-    func testTakingBackAChangePutsTheOldRecordBackAndSaysSo() {
+    /// A record that stands in Health has one action, and it is to remove it —
+    /// whatever the item displaced on its way in.
+    ///
+    /// It used to offer to write the displaced record back, and that is how
+    /// two items over one id came to carry contradictory keys: the earlier one
+    /// removed the later one's record, and the later one offered to restore
+    /// the earlier one. The owner met it as a record they could not remove
+    /// (2026-09-20). What an earlier item held is a value the agent chose and
+    /// the person never saw; it stays readable in the record's history and is
+    /// not a key.
+    func testAStandingRecordIsRemovedEvenWhenItReplacedAnother() {
         let changed = made(displaced: [pushedOut()])
-        XCTAssertTrue(EditWords.restores(changed))
-        XCTAssertEqual(EditWords.actionWord(changed), "Write back")
-        XCTAssertEqual(EditWords.actionKey(changed), "Write the record back")
-        XCTAssertEqual(EditWords.actionQuestion(changed), "Write the record back?")
+        XCTAssertFalse(EditWords.restores(changed))
+        XCTAssertEqual(EditWords.actionWord(changed), "Remove")
+        XCTAssertEqual(EditWords.actionKey(changed), "Remove the record")
+        XCTAssertEqual(EditWords.actionQuestion(changed), "Remove this record?")
         XCTAssertEqual(
             EditWords.consequence(changed),
-            "Health goes back to the energy record that was there before, and 8 Sep 2025 goes to "
-                + "the archive again."
+            "The energy record leaves Health, and 8 Sep 2025 goes to the archive again."
         )
         XCTAssertTrue(
-            EditWords.note(changed, in: Self.utc).hasPrefix("Writing the old record back")
+            EditWords.note(changed, in: Self.utc).hasPrefix("Removing it takes the record")
         )
     }
 

@@ -221,6 +221,15 @@ enum Database {
             try db.execute(sql: "UPDATE editLog SET state = 'failed' WHERE state = 'refused'")
         }
 
+        // The screen reads the journal by record now, not by item: what the
+        // person is shown and may act on is one record's whole history, and
+        // the id is what gathers it. The key stays (editName, item) — that is
+        // what an edit applied twice must land on — so this is the second way
+        // in rather than a new one.
+        migrator.registerMigration("v10.editLog.byRecord") { db in
+            try db.create(index: "editLog_on_record", on: "editLog", columns: ["recordId"])
+        }
+
         return migrator
     }
 
