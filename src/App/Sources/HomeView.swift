@@ -43,11 +43,22 @@ struct HomeView: View {
             // carries far more than the top, so a dial centred on the screen
             // sits visibly low in the space it actually occupies.
             //
-            // The line under it still hangs off the dial as an overlay, which
-            // takes no room in this stack. A caption that runs to three lines
-            // therefore grows down into the gap below instead of shoving the
-            // dial upwards, and the dial holds still while the words change.
-            instrument.overlay(alignment: .top) { caption.offset(y: 286) }
+            // The line under it used to hang off the dial as an overlay so a
+            // long caption could not shove the dial upwards. On a phone shorter
+            // than the one it was written on that backfired: an overlay takes
+            // no room at all, the two spacers above and below collapsed to
+            // nothing, and "up to date" — the one state that carries a second
+            // line — was drawn straight over the footer, illegibly. Found on
+            // the owner's phone, 2026-09-20, in the state a healthy phone sits
+            // in nearly all the time. The words are in the stack now and
+            // reserve the room they need. `captionRoom` is what the tallest
+            // ordinary caption takes, so the dial still holds still while the
+            // words change; only something longer than that moves it, and
+            // moving the dial is better than writing over the lines below.
+            VStack(spacing: 22) {
+                instrument
+                caption.frame(minHeight: Self.captionRoom, alignment: .top)
+            }
 
             Spacer(minLength: 0)
 
@@ -353,6 +364,10 @@ struct HomeView: View {
     }
 
     // MARK: - The line under the dial
+
+    /// The room kept under the dial for the words, whatever they turn out to
+    /// be: one line of legend, and the sentence "up to date" adds beneath it.
+    private static let captionRoom: CGFloat = 58
 
     private var caption: some View {
         VStack(spacing: 8) {
