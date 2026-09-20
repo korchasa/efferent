@@ -2,6 +2,8 @@ import Foundation
 
 /// The first day Health has anything about, as a screen knows it.
 ///
+/// SETUP-1 and SETUP-2 are what this type is for.
+///
 /// Health never says whether it will answer. A phone nobody has been asked
 /// about yet and a phone whose Health is empty both come back with nothing, so
 /// this is not a fact that can be fetched once and kept — it is only ever what

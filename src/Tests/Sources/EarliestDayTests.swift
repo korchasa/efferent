@@ -1,7 +1,7 @@
 @testable import Efferent
 import XCTest
 
-/// How far back the range screens say Health goes.
+/// How far back the range screens say Health goes: SETUP-1 and SETUP-2.
 ///
 /// The screens cannot ask Apple whether reading was allowed — nothing can — so
 /// the only thing that separates a phone with no history from a phone that has

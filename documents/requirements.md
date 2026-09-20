@@ -3,10 +3,10 @@
 ## Scope
 
 This document says what the app must do. It is written one subsystem at a time, as each is worked
-through; today it covers one of them — how an edit an agent asked for reaches the phone, and how the
-person learns that it did. The rest of the app is described in `README.md` and governed by
-`AGENTS.md`. A subsystem missing from this document has not been written down yet; that is not a
-claim that it has no requirements.
+through; today it covers two of them — how an edit an agent asked for reaches the phone and how the
+person learns that it did, and what the walkthrough must have asked before the first export leaves.
+The rest of the app is described in `README.md` and governed by `AGENTS.md`. A subsystem missing
+from this document has not been written down yet; that is not a claim that it has no requirements.
 
 Every requirement carries an identifier so a task, a commit or a design note can point at it. A
 requirement says what must be true. How it is arranged is [`design.md`](design.md).
@@ -28,6 +28,10 @@ requirement says what must be true. How it is arranged is [`design.md`](design.m
 - **Remove** — the other: the record is out of Health afterwards.
 - **Journal** — the phone's own account of every item an agent applied, and of every one the person
   has since changed. Nothing in it reaches the service.
+- **Walkthrough** — the four screens a phone shows before it has an archive: what this app is, what
+  it reads, what it may put on a lock screen, and how far back to go.
+- **First day** — the earliest day Health has anything at all about. It is the floor of every range
+  the walkthrough offers and of the first export.
 
 ## The agent starts the delivery
 
@@ -211,6 +215,30 @@ gathered by id before anything is shown. The newest item says what the record is
 only key; the earlier ones are readable history and carry none. Two keys over one record are two
 answers to one question, and one of them can only fail — which is what the owner met on
 2026-09-20 as a record that could not be removed at all.
+
+## What the walkthrough must ask
+
+**SETUP-1 — A screen that names a day from Health asks Health as it appears.** Not once for the
+walkthrough and not at the moment a Health sheet was dismissed. The question is answered differently
+before and after the person has ticked anything, and an answer taken on an earlier screen is an
+answer to a question nobody is now asking. This is what the range step of the walkthrough got wrong:
+it asked on the first screen, three steps early, and then offered "everything Health has" while
+printing that Health had nothing to read — on a phone holding 90 days of readings (owner,
+2026-09-20).
+
+**SETUP-2 — Nothing is claimed about Health until Health has been looked at.** A phone with no
+history and a phone that has not been asked yet both come back with nothing, so a screen has three
+states and not two: still working it out, Health has nothing, and a real first day. Reading the
+second out of the first tells somebody their history is missing.
+
+**SETUP-3 — A range never promises history the archive cannot hold.** A day chosen earlier than the
+first day is offered as the first day, and marking history clamps to it in any case. What the screen
+promises and what the export queues are the same span.
+
+**SETUP-4 — The walkthrough never claims access it cannot see.** Apple does not tell an app what was
+allowed, so no screen says access was granted; the walkthrough says where the switches live instead.
+Walking past the Health step is an answer the walkthrough takes, and "not now" shows no system sheet
+at all, so the question stays open for the screen that asks it again later.
 
 ## What the app must be able to say about itself
 
