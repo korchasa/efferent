@@ -47,14 +47,15 @@ struct HomeView: View {
             // long caption could not shove the dial upwards. On a phone shorter
             // than the one it was written on that backfired: an overlay takes
             // no room at all, the two spacers above and below collapsed to
-            // nothing, and "up to date" — the one state that carries a second
-            // line — was drawn straight over the footer, illegibly. Found on
-            // the owner's phone, 2026-09-20, in the state a healthy phone sits
-            // in nearly all the time. The words are in the stack now and
-            // reserve the room they need. `captionRoom` is what the tallest
-            // ordinary caption takes, so the dial still holds still while the
-            // words change; only something longer than that moves it, and
-            // moving the dial is better than writing over the lines below.
+            // nothing, and the caption was drawn straight over the footer,
+            // illegibly. Found on the owner's phone, 2026-09-20, in the state a
+            // healthy phone sits in nearly all the time. The words are in the
+            // stack now and reserve `captionRoom` whatever they say, which is
+            // what keeps the dial still: a block centred between two spacers
+            // rises by half of whatever grows underneath it, so a caption that
+            // gained a line moved the figure on the face. Only something longer
+            // than the reserve moves it now, and moving the dial is better than
+            // writing over the lines below.
             VStack(spacing: 22) {
                 instrument
                 caption.frame(minHeight: Self.captionRoom, alignment: .top)
@@ -366,8 +367,10 @@ struct HomeView: View {
     // MARK: - The line under the dial
 
     /// The room kept under the dial for the words, whatever they turn out to
-    /// be: one line of legend, and the sentence "up to date" adds beneath it.
-    private static let captionRoom: CGFloat = 58
+    /// be. Two lines of legend, which is more than any ordinary caption takes
+    /// and enough that none of them moves the dial: a figure that shifts when
+    /// the words below it change reads as the figure changing.
+    private static let captionRoom: CGFloat = 34
 
     private var caption: some View {
         VStack(spacing: 8) {
@@ -388,12 +391,6 @@ struct HomeView: View {
             } else {
                 Legend(state.caption, size: 11, colour: Palette.ink)
                     .multilineTextAlignment(.center)
-            }
-
-            if let note = state.note {
-                Text(note)
-                    .font(.system(size: 13))
-                    .foregroundStyle(Palette.body)
             }
         }
         .frame(width: 330)
@@ -565,8 +562,6 @@ struct SyncState {
     let status: String
     /// The legend under the dial.
     let caption: String
-    /// The one plain sentence some states add under that legend.
-    let note: String?
     /// Something went wrong, in words a person can read.
     let problem: String?
     /// Everything Health has offered is in the archive, and that is good news.
@@ -593,7 +588,6 @@ struct SyncState {
             self.problem = problem
             status = "stopped"
             caption = ""
-            note = nil
             settled = false
             self.progress = progress
             mood = .stopped
@@ -604,7 +598,6 @@ struct SyncState {
         if paused {
             status = "paused"
             caption = "paused"
-            note = nil
             settled = false
             self.progress = progress
             mood = .resting
@@ -619,7 +612,6 @@ struct SyncState {
             // No estimate until the phone has watched enough days go to have
             // one. "Sending" is the honest thing to say meanwhile.
             caption = timeLeft.map { "\(spoken(duration: $0)) left" } ?? "sending"
-            note = nil
         } else if sentDays == 0 {
             // Not the same fact as "nothing waiting": nothing has ever gone,
             // and the usual reason is that Health is not sharing anything.
@@ -628,7 +620,6 @@ struct SyncState {
             mood = .resting
             status = "nothing sent"
             caption = "nothing sent yet · check health access"
-            note = nil
         } else if let last = stats?.lastUploadAt, let quiet = Self.daysQuiet(since: last) {
             // The screen does not report when the last day went — nobody acts
             // on that. It reports the silence, and only once the silence is
@@ -639,14 +630,12 @@ struct SyncState {
             mood = .resting
             status = "quiet"
             caption = "nothing sent for \(quiet) days"
-            note = nil
         } else {
             settled = true
             self.progress = 1
             mood = .alight
             status = "up to date"
             caption = "every day is in the archive"
-            note = "Efferent sends each new day by itself."
         }
     }
 
