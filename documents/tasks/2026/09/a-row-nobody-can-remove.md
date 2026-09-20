@@ -66,3 +66,36 @@ try. And the record in question is out of Health: the archive's copy of
 Read the two rows on the phone and confirm the words each shows → decide the
 question above with the owner → implement → walk the history screen in both
 appearances, with a pair of rows over one id among the data.
+
+## Five whys
+
+The failure, stated as the person met it: a record the agent wrote could not be
+removed from the app's own history.
+
+1. **Why?** The row for it offers no removal. Its key reads *Write the record
+   back*.
+2. **Why that key?** A row's action is chosen by one test — whether the item
+   displaced anything (`EditWords.restores` is `!entry.displaced.isEmpty`). That
+   item displaced 100 mL, so the app offers to put the 100 mL back.
+3. **Why did the item displace anything, when Health holds one record?** Two
+   edits four minutes apart carried one id, and a `put` under an id this app has
+   already written replaces the sample. That is the protocol working as
+   designed: reusing an id is how an agent corrects its own record.
+4. **Why does the journal then hold two rows with independent keys?** A row is
+   keyed by edit name and item index; Health keys a sample by id. Two edits over
+   one id are two rows, and neither knows the other exists.
+5. **Why is the row keyed that way?** For replay. An edit is applied again
+   whenever a run dies between writing and answering, and the repeat must land
+   on the row the first attempt made. The migration comment for `v4.editLog`
+   states the key also covers the correction case — "the same id is also how an
+   agent corrects a record it wrote before: both must land on one row, and the
+   second must not stand beside the first" — but the key cannot deliver that
+   half: a correction arrives in a **different** edit, so its name differs and
+   the row is new.
+
+**Root cause.** The journal records what each item of each edit did. The screen
+asks what the record is now and what may be done to it. Nothing in the app
+materialises a record's own history, so the key on a row is computed from one
+item in ignorance of every other item that touched the same id. The v4 comment
+shows this was not the intent — the implementation has quietly disagreed with
+its own stated contract since the journal was written.
