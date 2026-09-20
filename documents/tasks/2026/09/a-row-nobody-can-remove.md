@@ -1,52 +1,68 @@
-# A journal row whose record is already gone, and the only key on it always fails
+# Two journal rows over one record, and the keys they offer
 
 Opened 2026-09-20 on the owner's instruction, after they reported a water record
-dated 20 September 15:53 in the app's own history that cannot be removed. Every
-attempt answers the same way and the row stays where it is.
+of 20 September 15:53 in the app's own history that they could not remove.
+Rewritten the same evening once the cause was traced; the first draft guessed at
+it and guessed wrong.
 
-## What is known
+## How the record came about
 
-The record is not in Health any more, and it is not in the archive either. On
-2026-09-20 the dev archive's day for 20 September came back with no water events
-at all — the two the day did hold were written and removed by a check run the
-same evening, and nothing of the owner's was among them. So the row on screen
-outlived the thing it describes.
+Three edits were sent to the live bucket that afternoon while TestFlight wakes
+were being checked. Times are UTC; the owner is three hours ahead.
 
-The log says the same from the other side. Two runs tried to remove it:
+- `1789908242585-badzll7g`, 12:44:02Z — `put testflight-wake-2026-09-20`, water.
+- `1789908563103-fhnhqr3v`, 12:49:23Z — `put testflight-wake-2026-09-20-b`, 100 mL.
+- `1789908791213-k4p6oymf`, 12:53:11Z — `put testflight-wake-2026-09-20-b`, 150 mL.
 
-- `19:09:36 apply … 1 applied, failed 1:notFound`
-- `19:45:06 apply … 0 applied, failed 0:notFound`
+The last two carry **one id**. That was an oversight on the agent's side, but it
+is a case the protocol invites: reusing an id is how an agent corrects its own
+record, and the phone handles it exactly as designed — a higher version replaces
+the sample atomically, so Health ends with one record of 150 mL at 15:53 local.
 
-`notFound` is the phone answering that the id names no sample it wrote. That is
-the correct answer for a sample that is already gone; what is wrong is that the
-app keeps offering removal as the one thing you may do to the row, and says
-nothing about why it never works.
+The journal does not work that way. A row is written per edit and item index
+(`Store.recordEdit`, keyed by `editName` + `item`), while Health keys a sample
+by id. So one record left two rows on the history screen.
 
-## The suspected cause, not yet proved
+## What the app then offers on those two rows
 
-Two edits written during the earlier walk (`items2.json` and `items3.json`)
-reused one agent id. The phone keeps a version per id and replaces the sample
-atomically, so the second edit did not add a second sample — it replaced the
-first. The journal, though, records rows per edit, so one Health sample ended up
-with two rows behind it. Removing the sample satisfied the first row; the second
-row has nothing left to remove and answers `notFound` for good.
+The key on a row is chosen by what its item displaced (`EditWords.restores`,
+`EditEntry.personCanAct`):
 
-This has to be confirmed against the phone's journal before anything is built:
-if the two rows carry the same id, the cause is settled.
+- The 15:49 row displaced nothing, so its key is **Remove the record** — and
+  what it removes is whatever now stands under that id, which is the 15:53
+  record, not the one the row describes.
+- The 15:53 row displaced the 100 mL, so its key is **Write the record back** —
+  pressing it would put the 15:49 record into Health again, under the same id.
+
+That is why the owner found no way to remove the 15:53 row: the app does not
+offer removal there. It offers restoration of a record they never asked for.
+
+The rest follows from the same crossing. The log of that evening shows six
+person-initiated removals: five removed a record, and one at 19:17:31Z answered
+`the person removed a record Health no longer had` — the second row of the pair,
+acting on a sample its twin had already taken out. An agent `delete` of the id
+at 19:45:03Z (`1789933503858-lbkqtlha`) answered `notFound` for the same reason.
+
+## What is not wrong
+
+The removal path itself works. A water record written and removed straight
+afterwards on 2026-09-20 was answered `{"applied":1,"failed":[]}` on the first
+try. And the record in question is out of Health: the archive's copy of
+20 September, uploaded 19:47:35Z, carries no water at 12:49Z or 12:53Z.
 
 ## What a fix has to decide
 
-- Whether a row whose id is already gone should be shown as removed rather than
-  as removable. The record is gone either way — the row is the only thing left
-  that disagrees.
-- Whether two journal rows may ever describe one sample, or whether writing the
-  same id twice should collapse into the row that already exists.
-- What the app says when a removal answers `notFound`. Today it says nothing the
-  person can act on, which is why the same key was pressed twice, half an hour
-  apart.
+- Whether a journal row should be keyed by the record rather than by the item,
+  so that writing the same id twice adds to one row's history instead of making
+  a second row that speaks for the same sample.
+- If two rows stay, what each may offer. A row whose id another row has already
+  acted on must not offer a key that works on the other's record.
+- Whether "write the record back" should exist at all for a displacement the
+  person never saw. Restoring a 100 mL record from four minutes earlier is not
+  an undo of anything the person did.
 
 ## Order of work
 
-Confirm the cause on the phone (the two rows and their ids) → decide the
+Read the two rows on the phone and confirm the words each shows → decide the
 question above with the owner → implement → walk the history screen in both
-appearances, including a row in the new state.
+appearances, with a pair of rows over one id among the data.
