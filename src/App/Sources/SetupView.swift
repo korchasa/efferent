@@ -292,11 +292,23 @@ struct SetupView: View {
     }
 
     private var summary: String {
-        guard let day = startDay else {
+        Self.summary(startDay: startDay, firstDay: earliest.day, looked: earliest.looked)
+    }
+
+    /// The remark under the range, which has to agree with the rows above it.
+    ///
+    /// It follows Health's first day, not the chosen one. A preset or a chosen
+    /// day always resolves to a date, so with an empty Health — or one that is
+    /// not sharing, which looks the same — the remark used to promise
+    /// "everything since" that date while the row above it said Health had
+    /// nothing to read (walk of build 25, 2026-09-27). That is the screen an App
+    /// Review device with no Health history shows first.
+    static func summary(startDay: String?, firstDay: String?, looked: Bool) -> String {
+        guard firstDay != nil, let day = startDay else {
             // Nothing to promise: Health either has no history or is not
             // sharing it. Saying "everything goes up now" here would be a
             // sentence about an archive that stays empty.
-            return earliest.looked
+            return looked
                 ? "Health has nothing to send yet. New readings go up as they arrive."
                 : "Working out how far back Health goes…"
         }

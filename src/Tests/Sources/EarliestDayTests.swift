@@ -83,4 +83,23 @@ final class EarliestDayTests: XCTestCase {
             "with no first day known there is nothing to stop at"
         )
     }
+
+    /// SETUP-2 for the remark under the range. With an empty Health a preset or
+    /// a chosen day still resolves to a date, and the remark promised
+    /// "everything since" it while the row above said Health had nothing.
+    func testTheRemarkPromisesNothingWhileHealthHasNothing() {
+        let nothing = "Health has nothing to send yet. New readings go up as they arrive."
+
+        XCTAssertEqual(SetupView.summary(startDay: "2026-03-27", firstDay: nil, looked: true), nothing)
+        XCTAssertEqual(SetupView.summary(startDay: nil, firstDay: nil, looked: true), nothing)
+        XCTAssertEqual(
+            SetupView.summary(startDay: "2026-03-27", firstDay: nil, looked: false),
+            "Working out how far back Health goes…"
+        )
+        XCTAssertTrue(
+            SetupView.summary(startDay: "2026-06-23", firstDay: "2026-06-23", looked: true)
+                .hasPrefix("Everything since "),
+            "once Health has answered, the remark names the day"
+        )
+    }
 }
