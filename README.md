@@ -398,18 +398,17 @@ bound to the bucket whose writes its fingerprints describe: activating another p
 invalidates those claims and queues every known day again, while a legacy destination is adopted
 without a reset.
 
-`protocol/` describes these bytes in TypeScript and `src/Core` describes them again in Swift, so
+`src/Core` describes these bytes in Swift and the Python reader describes them again, so
 `deno task interop` exists to prove the two still agree: a Swift test packs, seals and signs a real
 request of two days, and the reader unpacks it, opens each day and checks the signature. Two days
 rather than one, because a batch of one would never cross the boundary where a framing disagreement
 would live. With `--post <url>` it also puts that request through a running service and reads both
 days back out separately.
 
-The service itself is a Cloudflare Worker over an R2 bucket, deployed with `deno task server:deploy`
-and answering at `api.efferentapp.com`. A second, separate copy of it — Worker environment `dev`,
-`deno task server:deploy -- --env dev`, answering at `api-dev.efferentapp.com` over its own bucket with its
-own `APP_ID` — exists for a development build of the app, so nothing a development build does lands
-beside a real archive. The service is open to the internet by design — there are no
+The service itself is a Cloudflare Worker over an R2 bucket, answering at `api.efferentapp.com`. It
+is operated separately from this repository and is not built here. A second, separate copy of it
+answers at `api-dev.efferentapp.com` over its own bucket, for a development build of the app, so
+nothing a development build does lands beside a real archive. The service is open to the internet by design — there are no
 accounts, and your bucket is safe because the first writer keeps it. Creating one, though, is what
 costs storage for years, so a bucket is created only for a caller Apple vouches for: the claim
 carries an App Attest attestation over the very bytes the writer key signs, and the service checks
@@ -422,10 +421,9 @@ be handed 512 MB and the service 100 GB in total, and claims and uploads are cou
 scale, an eleven-year archive of one person is 37 MB.
 
 Both of those tallies count bytes ever handed over and never come down, and the service says nothing
-before the end of one, where every upload is answered `507`. `deno task ceilings` is the cheap look
-at the service-wide one; `server/maintenance` is the whole answer, including per archive. That same
-tool is what removes an archive when its owner asks — the service has no delete route on purpose, so
-it runs on the machine of whoever is answering and is never deployed.
+before the end of one, where every upload is answered `507`. Removing an archive when its owner asks
+is done by a maintenance tool on the operator's own machine: the service has no delete route, on
+purpose.
 
 ## Commands
 
@@ -433,9 +431,9 @@ it runs on the machine of whoever is answering and is never deployed.
 deno task check
 ```
 
-- `check` — the secret scan, generated Cloudflare types, lint and types on the scripts, the protocol
-  and service tests, the Python reader's own format, lint and tests, then a simulator build.
-- `test` — protocol and service tests, then unit tests on any available iPhone simulator.
+- `check` — the secret scan, lint and types on the scripts, the Python reader's own format, lint
+  and tests, then a simulator build.
+- `test` — unit tests on any available iPhone simulator.
 - `dist` — unsigned App Store archive at `build/Efferent.xcarchive`.
 - `fmt` — format task scripts, and Swift if swiftformat is installed.
 - `secrets` — scan the working tree and the whole history for committed keys (`brew install
@@ -444,11 +442,6 @@ deno task check
 - `icons` — re-render the app icons from `documents/icon.svg`.
 - `screenshots <directory>` — the six store screenshots at 1290 × 2796, drawn offscreen by the app itself
   (`--snapshot <directory>`) from made-up figures and a key invented on the spot. No phone, no Health, no network.
-- `server:types` — regenerate the Worker bindings and runtime types from `server/wrangler.jsonc`.
-- `server:dev` / `server:deploy` — the bucket service and remote MCP, locally or on
-  Cloudflare.
-- `ceilings` — how much of the service-wide ceiling has been handed over, read straight out of R2.
-  Exits non-zero past the mark (`--warn <percent>`, 80 by default), so a scheduler can act on it.
 - `interop` — check that Swift and Python agree on request bytes, HPKE, the day's own layout and
   the phone handoff key, and that the phone opens and verifies an edit the reader sealed and signed.
   It runs the RFC 9180 self-test first, on the exact source `setup_guide` returns.
@@ -467,13 +460,8 @@ relative to the working directory, so a stale profile left in a checkout answers
 live one — with a retired bucket's days, a plausible day count and no error at all. Name the profile
 directory on every run, and keep retired profiles under a name the fallback cannot reach.
 
-Trying the phone-first path without a phone:
-
-```bash
-deno task server:dev
-```
-
-Create an archive in the app, share its four-field handoff into a private file, then set a fresh
+Trying the phone-first path without a phone needs a development copy of the service running
+somewhere you can reach. Create an archive in the app, share its four-field handoff into a private file, then set a fresh
 `EFFERENT_HOME` and run `deno task efferent connect --handoff <file>`. Delete the temporary file
 after import. `send` still stands in for a phone during protocol development and writes as many days
 in one request as are named.
@@ -495,8 +483,6 @@ certificate, and the archive path above is the whole of the agreement with whate
   applier that collects edits and reports what became of them.
 - `src/App/Sources` — the setup walkthrough, the everyday screen, the design, the composition root.
 - `src/Tests/Sources` — unit tests.
-- `protocol/` — bucket, day and edit names, the request frame, signing, sealed envelopes, edits.
-- `server/` — the bucket service, a Cloudflare Worker over R2.
 - `documents/server-costs.md` — the measured marginal storage and operation cost per user.
 - `documents/requirements.md` — what the app must do, subsystem by subsystem, with an
   identifier per requirement.

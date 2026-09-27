@@ -12,9 +12,8 @@ node_modules/
 *.xcuserdatad
 xcuserdata/
 
-# Local reading key and wrangler state — never committed.
+# Local reading key — never committed.
 .efferent*/
-.wrangler/
 
 # Machine-local build settings: the team id names the account, not the app.
 Configs/Local.xcconfig

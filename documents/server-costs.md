@@ -41,7 +41,7 @@ knowing what the service has been handed.
 
 ## Edits, the other direction
 
-Counted from `server/src/index.ts` on **2026-09-08**, when the write path landed; not yet measured
+Counted from the service's own source on **2026-09-08**, when the write path landed; not yet measured
 against a phone. An edit is one sealed object in `e/` until the phone answers for it, and then one
 small outcome in `o/` for good. In operations:
 
@@ -89,7 +89,7 @@ again.
 
 ## Two ceilings that bind before the money does
 
-Both counters in `server/src/index.ts` count **bytes handed over**, for the life of the counter, and
+Both counters the service keeps count **bytes handed over**, for the life of the counter, and
 never come down when data is replaced. That makes them budgets rather than sizes:
 
 - `MAX_BUCKET_BYTES` is 512 MiB. A user sending once a day spends it in about 73 years, which is

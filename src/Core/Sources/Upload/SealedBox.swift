@@ -6,8 +6,9 @@ import Foundation
 /// The phone holds only the recipient's public key. Every call creates and
 /// discards the sender's ephemeral key inside CryptoKit, so the phone cannot
 /// open either the new ciphertext or anything it uploaded before. This must
-/// stay byte-compatible with `protocol/sealedbox.ts` and the Python reference
-/// in the MCP setup guide.
+/// stay byte-compatible with the sealing the service describes and with the
+/// Python reference in the MCP setup guide — which is `reader/efferent_hpke.py`
+/// in this repository.
 public enum SealedBox {
     public static let version: UInt8 = 2
 

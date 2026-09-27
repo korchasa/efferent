@@ -19,9 +19,6 @@ async function anyAvailableIPhone(): Promise<string> {
   fail("no iPhone simulator is available — install one in Xcode");
 }
 
-section("Testing the protocol and the service");
-await run("deno", { args: ["test", "-A", "protocol/", "server/"] });
-
 await generate();
 
 const udid = await anyAvailableIPhone();

@@ -27,8 +27,9 @@ import Foundation
 /// could otherwise ask: which of two copies of a day wins. There is never a
 /// second copy.
 ///
-/// The other half of this lives in `protocol/batch.ts`, and `deno task interop`
-/// is what proves the two still write the same bytes.
+/// The other half of this lives with the service, in TypeScript, and
+/// `deno task interop` is what proves the implementations still write the same
+/// bytes — it checks this Swift against the Python reader in `reader/`.
 public enum Batch {
     /// How many days one request may carry: a month. The wire's limit, not this
     /// device's — every day in a batch is a separate write on the far side, and

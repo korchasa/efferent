@@ -3,7 +3,8 @@ import Foundation
 
 /// What an agent asked the phone to write into Health, in the shape it travels.
 ///
-/// The Swift half of `protocol/edits.ts`. An edit is a list of items: a `put`
+/// The Swift half of the edit format the service carries. An edit is a list of
+/// items: a `put`
 /// adds a sample or replaces the one this app wrote earlier under the same id,
 /// a `delete` removes that sample. The id is the agent's handle and becomes a
 /// HealthKit sync identifier; the version HealthKit wants beside it lives on
@@ -235,7 +236,7 @@ public enum EditName {
 /// goes into Health would be able to write into Health.
 public enum EditorSignature {
     /// The seven points of small order libsodium refuses, with the sign bit
-    /// cleared — the same list `protocol/signing.ts` carries.
+    /// cleared — the same list the service's signing module carries.
     private static let smallOrder: Set<Data> = [
         "0000000000000000000000000000000000000000000000000000000000000000",
         "0100000000000000000000000000000000000000000000000000000000000000",

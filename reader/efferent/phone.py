@@ -4,8 +4,9 @@ The reader never uploads a real day: the phone builds days, seals them to its
 own date, packs them into one request and signs the whole. This module is the
 same bytes for the `send` command that pretends to be a phone against a
 development service, and for the interop check that opens what a real phone's
-tests produced. It is a port of the TypeScript `protocol/day.ts`,
-`protocol/batch.ts` and `protocol/signing.ts`, byte for byte.
+tests produced. It is a port of the service's own TypeScript description of
+the day, the batch and the signing, byte for byte. That description lives with
+the service, in its own repository.
 """
 
 import hashlib

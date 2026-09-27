@@ -97,10 +97,9 @@ sends the registration only when the pair is news — `wake.registeredAs` in `me
 with Apple. A token Apple has retired answers 410, and the service deletes it rather than pushing at
 it forever.
 
-**The service rings the phone when it takes an edit.** `postEdit` in `server/src/index.ts` stores
-the sealed edit, then calls `wakeThePhone`, which hands the work to `ctx.waitUntil` — outside the
-response path, so an agent's write never waits on Apple and never fails because Apple did.
-`server/src/apns.ts` signs an ES256 provider token with the `.p8` and keeps it for the life of the
+**The service rings the phone when it takes an edit.** Taking an edit stores the sealed object and
+then hands the push to Cloudflare's `waitUntil` — outside the response path, so an agent's write
+never waits on Apple and never fails because Apple did. The service signs an ES256 provider token with the `.p8` and keeps it for the life of the
 isolate: Apple refuses a token over an hour old and one made seconds ago just as readily, so a token
 per push is both slower and worse. A service without the four secrets (`APNS_KEY`, `APNS_KEY_ID`,
 `APNS_TEAM_ID`, `APNS_HOST`) wakes nothing and says nothing — that is the state before deployment,
@@ -328,11 +327,11 @@ holding none of them. `--pretend-attested` stands in for Apple: `Rehearsal.attes
 `src/App/Sources/Rehearsal.swift` and both are compiled out of a release binary — `#if DEBUG` makes
 `isPretending` a compile-time `false`, so there is nothing in a shipped build to switch on.
 
-The service has to agree, and only a copy on this machine will. `deno task server:dev:simulator`
-runs `wrangler dev` with `UNATTESTED_CLAIMS=yes`, and `attestedClaim` takes an unattested claim only
-when that variable is set *and* the request arrived at a loopback address. The live service refuses
-such a claim however its variables end up, because a Worker with a route answers at its hostname and
-never at loopback. The task also passes `--local-upstream localhost`: without it wrangler rewrites
+The service has to agree, and only a copy on this machine will — the service has a task of its own
+for running that copy, with `UNATTESTED_CLAIMS=yes`. It takes an unattested claim only when that
+variable is set *and* the request arrived at a loopback address. The live service refuses such a
+claim however its variables end up, because a Worker with a route answers at its hostname and
+never at loopback. That task also passes `--local-upstream localhost`: without it wrangler rewrites
 every local request to the production hostname from `routes`, the address half of the check is never
 true, and the claim is refused with "this service cannot check attestations" — which reads like a
 missing secret rather than a rewritten address.

@@ -2,9 +2,11 @@ import CryptoKit
 @testable import Efferent
 import XCTest
 
-/// The Swift half of `protocol/edits.ts` and the edit part of `signing.ts`.
-/// The fixtures here are the same bytes `protocol/edits_test.ts` asserts, so
-/// a drift on either side fails a test before it fails a phone.
+/// The Swift half of the edit format and of the signing that carries it. The
+/// fixtures here are the same bytes the service's own edit tests assert — those
+/// tests live in the service's repository, so nothing checks the two against
+/// each other automatically any more, and a change to either set has to be
+/// made in both.
 final class EditsTests: XCTestCase {
     static let bucket = "abcdefghijklmnopqrstuvwxyz"
     static let name = "1757228400000-abcdefgh"

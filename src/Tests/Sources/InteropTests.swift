@@ -4,7 +4,7 @@ import XCTest
 
 /// Half of the cross-language check.
 ///
-/// The phone's framing, sealing and signing have to match `protocol/` byte for
+/// The phone's framing, sealing and signing have to match the wire byte for
 /// byte, and nothing on this side can prove that — Swift agreeing with Swift
 /// proves only that Swift is consistent. So this test produces a real request
 /// with the real code path and prints it; `scripts/interop.ts` then unpacks it,

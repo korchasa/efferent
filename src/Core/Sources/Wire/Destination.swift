@@ -151,12 +151,12 @@ public enum CanonicalRequest {
     /// Each of these names its purpose on its first line, so a captured
     /// message of one kind can never be replayed as another. The same strings
     /// as `canonicalEditorRegistration`, `canonicalEdit`, `canonicalOutcome`
-    /// and `canonicalFetch` in `protocol/signing.ts`.
+    /// and `canonicalFetch` in the service's signing module.
     public static func editorRegistration(bucket: String, timestamp: Int64, body: Data) -> Data {
         canonical(["\(protocolName) editor", bucket, String(timestamp)], body: body)
     }
 
-    /// The same string as `canonicalDeviceRegistration` in `protocol/signing.ts`.
+    /// The same string as `canonicalDeviceRegistration` on the service's side.
     public static func deviceRegistration(bucket: String, timestamp: Int64, body: Data) -> Data {
         canonical(["\(protocolName) device", bucket, String(timestamp)], body: body)
     }

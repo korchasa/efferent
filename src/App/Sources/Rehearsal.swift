@@ -16,10 +16,10 @@ import Foundation
 ///     --service http://localhost:8787   where to send instead of the build's address
 ///     --pretend-attested                claim without asking Apple
 ///
-/// The service has to agree, and only a copy on loopback will: `deno task
-/// server:dev:simulator` is the one that takes such a claim, and the live
-/// service refuses it whatever it is told, because a Worker with a route never
-/// answers at a loopback address.
+/// The service has to agree, and only a copy on loopback will: a development
+/// copy started with unattested claims switched on is the one that takes such a
+/// claim, and the live service refuses it whatever it is told, because a Worker
+/// with a route never answers at a loopback address.
 enum Rehearsal {
     /// Where this run sends, when the command line named somewhere.
     ///
