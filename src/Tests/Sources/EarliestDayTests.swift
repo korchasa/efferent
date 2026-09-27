@@ -56,4 +56,31 @@ final class EarliestDayTests: XCTestCase {
             "2026-06-23"
         )
     }
+
+    /// SETUP-3 for the presets, not only for a chosen day. A phone whose Health
+    /// began 97 days ago was offered "Last 12 months · 366 days" and told that
+    /// everything since a year ago would go up now — history that does not
+    /// exist. Once the first day is known, a preset reaching past it stops there.
+    func testAPresetNeverReachesPastHealthsFirstRecord() throws {
+        let utc = Day.calendar(timeZone: try XCTUnwrap(TimeZone(secondsFromGMT: 0)))
+        func daysAgo(_ n: Int) throws -> String {
+            Day.of(try XCTUnwrap(utc.date(byAdding: .day, value: -n, to: Date())), in: utc)
+        }
+        let recent = try daysAgo(96)
+
+        XCTAssertEqual(RangePicker.startDay(for: .lastYear, earliest: recent, calendar: utc), recent)
+        XCTAssertEqual(
+            RangePicker.startDay(for: .lastMonth, earliest: recent, calendar: utc),
+            try daysAgo(29),
+            "a preset inside Health's history is left alone"
+        )
+
+        let old = try daysAgo(1000)
+        XCTAssertEqual(RangePicker.startDay(for: .lastYear, earliest: old, calendar: utc), try daysAgo(365))
+        XCTAssertEqual(
+            RangePicker.startDay(for: .lastYear, earliest: nil, calendar: utc),
+            try daysAgo(365),
+            "with no first day known there is nothing to stop at"
+        )
+    }
 }

@@ -186,21 +186,25 @@ struct RangePicker: View {
         earliest: String?,
         calendar: Calendar
     ) -> String? {
+        let chosen: String?
         switch selection {
         case .everything:
             return earliest
         case .lastMonth:
-            return shifted(days: -29, calendar: calendar)
+            chosen = shifted(days: -29, calendar: calendar)
         case .lastYear:
-            return shifted(days: -365, calendar: calendar)
+            chosen = shifted(days: -365, calendar: calendar)
         case let .day(date):
-            let chosen = Day.of(date, in: calendar)
-            // A day before Health's own first record would promise history the
-            // archive cannot hold; the marking step clamps it too, and doing it
-            // here as well keeps the sentence under the button honest.
-            guard let earliest else { return chosen }
-            return max(earliest, chosen)
+            chosen = Day.of(date, in: calendar)
         }
+        // A day before Health's own first record would promise history the
+        // archive cannot hold (SETUP-3); the marking step clamps it too, and
+        // doing it here as well keeps the sentence under the button honest. The
+        // presets need it as much as a chosen day: on a phone with 97 days of
+        // Health, "Last 12 months" said 366 days back to a date nothing exists
+        // for (walk of build 25, 2026-09-27).
+        guard let earliest, let chosen else { return chosen }
+        return max(earliest, chosen)
     }
 
     private static func shifted(days: Int, calendar: Calendar) -> String? {
