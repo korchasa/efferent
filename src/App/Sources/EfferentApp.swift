@@ -31,6 +31,7 @@ struct EfferentApp: App {
         // delegate, so a request made there would never be made.
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
+            AppDelegate.noteFirstOnScreen()
             Task { @MainActor in
                 await services.askForWriteAccessIfNeeded()
                 // Second, and only ever after the first: two system sheets at
@@ -103,6 +104,26 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 
     private let log = Log(category: "app")
 
+    /// When this process started, for telling a launch somebody made from one
+    /// the system made in the background. Set by the launch itself: a static
+    /// `let` would only be computed on first use, which is the moment it is
+    /// meant to be measured against.
+    @MainActor private static var startedAt: TimeInterval = 0
+    @MainActor private static var firstOnScreen = true
+
+    /// Says once per process how long after the start the app first reached
+    /// the screen. A launch by hand reaches it within a second or two; a
+    /// background launch never does, or only much later when somebody opens
+    /// the app that is already running — which is why this reports the delay
+    /// rather than a verdict.
+    @MainActor
+    static func noteFirstOnScreen() {
+        guard firstOnScreen else { return }
+        firstOnScreen = false
+        let delay = ProcessInfo.processInfo.systemUptime - startedAt
+        Log(category: "app").info("on screen for the first time, \(String(format: "%.1f", delay)) s after launch")
+    }
+
     func application(
         _: UIApplication,
         didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]? = nil
@@ -111,7 +132,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // background with no interface; an observer registered from a `Task` or
         // when a view appears would not exist during that launch, and the
         // delivery that caused it would be lost.
-        log.info("launched \(UIApplication.shared.applicationState == .background ? "in the background" : "by hand")")
+        // Who launched the app cannot be read here. In an app built on scenes
+        // the application is still in the background at this point however it
+        // was started, and the line that asked said "in the background" for
+        // every launch, the hand-made ones included (walk of build 25,
+        // 2026-09-27). The scene answers it instead: see `firstOnScreen`.
+        Self.startedAt = ProcessInfo.processInfo.systemUptime
+        log.info("launched")
         log.debug(Self.situation())
         // A `--demo` launch is a walk over the screens, so nothing below it
         // should reach Health, the Keychain, the service or Apple.
