@@ -80,17 +80,40 @@ struct Dial: View {
     let progress: Double
     let mood: RingMood
     var side: CGFloat = 264
+    /// Waiting on something the scale cannot measure yet: the lit arc walks
+    /// round the dial instead of standing at a figure it does not have.
+    var waiting = false
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let marks = 60
 
     var body: some View {
         ZStack {
-            ForEach(0 ..< marks, id: \.self) { index in
-                Capsule(style: .continuous)
-                    .fill(colour(at: index))
-                    .frame(width: max(1.5, side * 0.0115), height: side * 0.054)
-                    .offset(y: -(side / 2 - side * 0.027))
-                    .rotationEffect(.degrees(Double(index) * 6))
+            // Driven by the clock only while waiting, and paused otherwise, so
+            // a dial at rest costs nothing a frame.
+            //
+            // Its own `ZStack`, because a timeline lays several children out
+            // in a column: without it the sixty marks were strung down the
+            // whole screen instead of printed round the face.
+            TimelineView(.animation(paused: !waiting)) { context in
+                let phase = phase(at: context.date)
+                ZStack {
+                    ForEach(0 ..< marks, id: \.self) { index in
+                        // An unlit mark with its lit self over it, so a mark
+                        // can be partly lit: that is what lets the sweep glide
+                        // instead of hopping from mark to mark.
+                        ZStack {
+                            Capsule(style: .continuous).fill(Palette.tick)
+                            Capsule(style: .continuous)
+                                .fill(litColour)
+                                .opacity(light(at: index, phase: phase))
+                        }
+                        .frame(width: max(1.5, side * 0.0115), height: side * 0.054)
+                        .offset(y: -(side / 2 - side * 0.027))
+                        .rotationEffect(.degrees(Double(index) * 6))
+                    }
+                }
             }
             // Every fifth mark is scaled, the way a dial is printed.
             ForEach(0 ..< (marks / 5), id: \.self) { index in
@@ -109,7 +132,41 @@ struct Dial: View {
                 .frame(width: side * 0.662)
         }
         .frame(width: side, height: side)
-        .animation(.easeInOut(duration: 0.45), value: progress)
+        .animation(Motion.smoothLong, value: progress)
+        .animation(Motion.smoothLong, value: mood)
+        // When the wait ends the arc does not jump back to twelve o'clock: its
+        // marks fade over to the ones the figure lights.
+        .animation(Motion.smoothLong, value: waiting)
+    }
+
+    /// How far round one turn of the wait is, from 0 to 1.
+    private func phase(at date: Date) -> Double {
+        date.timeIntervalSinceReferenceDate
+            .truncatingRemainder(dividingBy: Motion.sweepPeriod) / Motion.sweepPeriod
+    }
+
+    /// How brightly one mark is lit, from 0 to 1.
+    ///
+    /// Standing at a figure, the marks up to it are lit and the rest are not.
+    /// Waiting, the figure means nothing, so it is set aside: a short arc with
+    /// a bright head and a fading tail goes round on its own — a head, because
+    /// an even arc going round reads as the figure moving. The head's position
+    /// is continuous, so each mark brightens and dims by degrees and the arc
+    /// glides at any refresh rate. With Reduce Motion on nothing travels: the
+    /// figure's own arc stays put and breathes, which still says "working".
+    private func light(at index: Int, phase: Double) -> Double {
+        let lit = (0 ..< self.lit).contains(index) ? 1.0 : 0
+        guard waiting else { return lit }
+        if reduceMotion {
+            return lit * (0.6 + 0.4 * cos(phase * 2 * .pi))
+        }
+        let count = Double(marks)
+        let behind = (phase * count - Double(index)).truncatingRemainder(dividingBy: count)
+        let distance = behind < 0 ? behind + count : behind
+        // The mark the head is just reaching lights over its last step, rather
+        // than switching on at once.
+        if distance > count - 1 { return distance - (count - 1) }
+        return max(0, 1 - distance / Double(Motion.sweepTail))
     }
 
     /// How many marks are lit. Never quite none while something is moving: a
@@ -119,8 +176,7 @@ struct Dial: View {
         return max(1, min(marks, Int((Double(marks) * progress).rounded())))
     }
 
-    private func colour(at index: Int) -> Color {
-        guard index < lit else { return Palette.tick }
+    private var litColour: Color {
         switch mood {
         case .alight: return Palette.accent
         case .resting: return Palette.legend
@@ -143,8 +199,10 @@ struct StepBar: View {
                     .frame(width: 18, height: 4)
             }
             Legend(String(format: "%02d/%02d", step, total))
+                .contentTransition(.numericText())
                 .padding(.leading, 8)
         }
+        .animation(Motion.standard, value: step)
     }
 }
 
@@ -159,7 +217,7 @@ struct ProminentButton: ButtonStyle {
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity, minHeight: 54)
             .background(Palette.accent, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
-            .opacity(configuration.isPressed ? 0.85 : 1)
+            .pressed(configuration.isPressed)
     }
 }
 
@@ -178,7 +236,7 @@ struct ConnectButton: ButtonStyle {
             .foregroundStyle(Color.white)
             .frame(maxWidth: .infinity, minHeight: 54)
             .background(Palette.accent, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
-            .opacity(configuration.isPressed ? 0.85 : 1)
+            .pressed(configuration.isPressed)
     }
 }
 
@@ -192,7 +250,7 @@ struct QuietButton: ButtonStyle {
             .kerning(1.8)
             .foregroundStyle(Palette.legend)
             .frame(maxWidth: .infinity, minHeight: 46)
-            .opacity(configuration.isPressed ? 0.6 : 1)
+            .pressed(configuration.isPressed, dimmed: 0.6)
     }
 }
 
@@ -243,7 +301,7 @@ struct WideKeyButton: View {
             )
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableKey())
         .accessibilityLabel(label)
     }
 }
@@ -274,7 +332,7 @@ struct KeyButton: View {
                 Legend(label, size: 8)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableKey())
         .accessibilityLabel(label)
     }
 }
@@ -326,7 +384,7 @@ struct DangerButton: ButtonStyle {
             .kerning(2)
             .foregroundStyle(Palette.alarm)
             .frame(maxWidth: .infinity, minHeight: 54)
-            .opacity(configuration.isPressed ? 0.6 : 1)
+            .pressed(configuration.isPressed, dimmed: 0.6)
     }
 }
 

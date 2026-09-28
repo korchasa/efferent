@@ -23,6 +23,8 @@ struct RootView: View {
         // the text white and leaves it on a light background — words nobody can
         // read, which is exactly how a consent screen shipped blank once.
         .preferredColorScheme(.light)
-        .animation(.easeInOut(duration: 0.3), value: services.setupComplete)
+        // The walkthrough gives way to the everyday screen as one cross-fade:
+        // the two are different rooms, not one sliding into the other.
+        .animation(Motion.smoothLong, value: services.setupComplete)
     }
 }

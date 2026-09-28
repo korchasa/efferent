@@ -26,6 +26,8 @@ struct RangePicker: View {
     let probed: Bool
     @Binding var selection: RangeSelection
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     /// The archive's own zone, not the phone's current one: the days this
     /// picker names have to be the days that get sent.
     private var calendar: Calendar {
@@ -60,7 +62,24 @@ struct RangePicker: View {
                         .strokeBorder(Palette.hairline, lineWidth: 1)
                 )
                 .padding(.top, 6)
+                .transition(.arriving(reduced: reduceMotion))
             }
+        }
+        // A calendar opening under the fourth row pushes nothing off the
+        // screen at once: the rows below it make room at the same pace.
+        .animation(Motion.standard(reduced: reduceMotion), value: isChosenDay)
+        // A light tick when the choice moves to another row, and none while a
+        // day is being picked on the calendar — that has feedback of its own.
+        .sensoryFeedback(.selection, trigger: choice)
+    }
+
+    /// Which row is chosen, apart from the day inside the fourth one.
+    private var choice: Int {
+        switch selection {
+        case .lastMonth: 0
+        case .lastYear: 1
+        case .everything: 2
+        case .day: 3
         }
     }
 
@@ -74,7 +93,7 @@ struct RangePicker: View {
                 EmptyView()
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableKey())
     }
 
     private var chosenDayRow: some View {
@@ -88,9 +107,12 @@ struct RangePicker: View {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Palette.tick)
+                    // Turned down while the calendar is open under it, the
+                    // way a disclosure says which way it went.
+                    .rotationEffect(.degrees(isChosenDay ? 90 : 0))
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableKey())
     }
 
     /// One key on the panel: a lamp that is lit or not, the choice in the
@@ -118,6 +140,13 @@ struct RangePicker: View {
                     .foregroundStyle(Palette.ink)
                 Legend(detail, size: 9)
                     .fixedSize(horizontal: false, vertical: true)
+                    // Health's answer arrives after the screen does, and the
+                    // line under each row fades over to it rather than
+                    // jumping. A fade, not rolling digits: the line changes
+                    // from a sentence to a figure, and rolling every letter of
+                    // it left the row unreadable for the length of the change.
+                    .contentTransition(.opacity)
+                    .animation(Motion.standard, value: detail)
             }
             Spacer(minLength: 8)
             trailing()
@@ -131,6 +160,8 @@ struct RangePicker: View {
                 .strokeBorder(ticked ? Palette.ink : Palette.hairline, lineWidth: 1)
         )
         .contentShape(Rectangle())
+        // The lamp lights and the outline inks in under the finger.
+        .animation(Motion.snappy, value: ticked)
     }
 
     // MARK: - What each choice costs

@@ -16,6 +16,7 @@ import UniformTypeIdentifiers
 struct HomeView: View {
     @EnvironmentObject private var services: Services
     @Environment(\.scenePhase) private var phase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var connecting = false
     @State private var reachingBack = false
@@ -67,6 +68,7 @@ struct HomeView: View {
             if !services.agentConnected {
                 connect
                     .padding(.top, 14)
+                    .transition(.opacity)
             }
             keys
                 .padding(.top, 16)
@@ -74,6 +76,12 @@ struct HomeView: View {
         .padding(.horizontal, 20)
         .padding(.bottom, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Things that join or leave the shell — the strip about an agent's
+        // edits, the lit invitation, the key into the journal — make room at
+        // one pace instead of shoving the dial in a single frame.
+        .animation(Motion.standard(reduced: reduceMotion), value: noticeShown)
+        .animation(Motion.standard(reduced: reduceMotion), value: services.agentConnected)
+        .animation(Motion.standard(reduced: reduceMotion), value: services.edits.ever.anything)
         .pageBackground()
         .onChange(of: phase) { _, new in
             if new != .active {
@@ -149,12 +157,17 @@ struct HomeView: View {
                 .fill(state.mood == .alight ? Palette.accent : Palette.legend)
                 .frame(width: 7, height: 7)
             Legend(state.status, size: 9)
+                .contentTransition(.opacity)
             Spacer(minLength: 8)
             if let reached = services.stats?.backfillReached {
+                // A date rather than a count: a month's letters do not roll.
                 Legend("since \(spoken(day: reached))", size: 9)
+                    .contentTransition(.opacity)
             }
         }
         .frame(height: 34)
+        .animation(Motion.standard, value: state.status)
+        .animation(Motion.standard, value: services.stats?.backfillReached)
     }
 
     /// Five taps on the name open the log, counted within one sitting: the
@@ -177,6 +190,7 @@ struct HomeView: View {
             if services.edits.ever.anything {
                 editsKey
                     .padding(.top, 14)
+                    .transition(.opacity)
             }
             HStack(alignment: .top, spacing: 8) {
                 KeyButton(label: "reach back", symbol: "clock.arrow.circlepath") {
@@ -190,6 +204,7 @@ struct HomeView: View {
                     KeyButton(label: "connect agent", symbol: "square.and.arrow.up") {
                         connecting = true
                     }
+                    .transition(.opacity)
                 }
                 KeyButton(label: "disconnect", symbol: "power") {
                     confirmingDisconnect = true
@@ -226,6 +241,8 @@ struct HomeView: View {
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .padding(.top, 12)
+            .transition(.arriving(reduced: reduceMotion))
         } else if services.edits.unseen.total > 0 {
             DarkPanel(padding: 0) {
                 Button { readingEdits = true } label: {
@@ -241,7 +258,7 @@ struct HomeView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableKey())
 
                 if services.edits.unseen.written > 0 {
                     Palette.body.frame(height: 1)
@@ -256,11 +273,20 @@ struct HomeView: View {
                             .frame(maxWidth: .infinity, minHeight: 46)
                             .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableKey())
                 }
             }
             .padding(.top, 12)
+            .transition(.arriving(reduced: reduceMotion))
         }
+    }
+
+    /// Which strip is across the top, if any, so its arrival can be animated
+    /// as one change.
+    private var noticeShown: Int {
+        if services.edits.unseen.total > 0 { return 2 }
+        if let held = services.stats?.editsHeldByLock, held > 0 { return 1 }
+        return 0
     }
 
     /// The way into everything an agent has ever done, once anything has been.
@@ -324,13 +350,18 @@ struct HomeView: View {
 
     private var instrument: some View {
         ZStack {
-            Dial(progress: state.progress, mood: state.mood, side: 264)
+            // Reading Health again has no figure yet, so the arc walks round
+            // until the count comes back.
+            Dial(progress: state.progress, mood: state.mood, side: 264, waiting: state.rereading)
             Button {
                 services.setPaused(!services.paused)
             } label: {
                 face
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressableKey())
+            // Starting and stopping is the one thing a person does here daily,
+            // and a light tap under the thumb says it took.
+            .sensoryFeedback(.impact(weight: .light), trigger: services.paused)
             .accessibilityLabel(services.paused ? "Start sending" : "Stop sending")
             .accessibilityValue(state.spokenValue)
         }
@@ -340,28 +371,41 @@ struct HomeView: View {
     private var face: some View {
         VStack(spacing: 6) {
             if state.settled {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 34, weight: .bold))
-                    .foregroundStyle(Palette.accent)
-                Text("Up to date")
-                    .font(.system(size: 19, weight: .semibold))
-                    .foregroundStyle(Palette.ink)
+                VStack(spacing: 6) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 34, weight: .bold))
+                        .foregroundStyle(Palette.accent)
+                    Text("Up to date")
+                        .font(.system(size: 19, weight: .semibold))
+                        .foregroundStyle(Palette.ink)
+                }
+                .transition(.face(reduced: reduceMotion))
             } else {
-                Text(state.remaining)
-                    .font(.system(size: 44, weight: .medium, design: .monospaced))
-                    .foregroundStyle(Palette.ink)
-                    .contentTransition(.numericText())
-                // "days left" read as time — the one thing this number is not.
-                // It says what the days are: work still to do.
-                Legend("days waiting")
+                VStack(spacing: 6) {
+                    Text(state.remaining)
+                        .font(.system(size: 44, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Palette.ink)
+                        // The figure counts down in place as days go, rather
+                        // than being replaced by another figure every two
+                        // seconds.
+                        .contentTransition(.numericText(countsDown: true))
+                    // "days left" read as time — the one thing this number is
+                    // not. It says what the days are: work still to do.
+                    Legend("days waiting")
+                }
+                .transition(.face(reduced: reduceMotion))
             }
             Image(systemName: services.paused ? "play.fill" : "pause.fill")
                 .font(.system(size: 14))
                 .foregroundStyle(Palette.ink)
+                .contentTransition(.symbolEffect(.replace))
                 .padding(.top, 8)
         }
         .frame(width: 186, height: 186)
         .contentShape(Circle())
+        .animation(Motion.standard(reduced: reduceMotion), value: state.settled)
+        .animation(Motion.standard, value: state.remaining)
+        .animation(Motion.snappy, value: services.paused)
     }
 
     // MARK: - The line under the dial
@@ -386,14 +430,20 @@ struct HomeView: View {
                 HStack(spacing: 10) {
                     rule
                     Legend(state.caption, size: 11, colour: Palette.ink)
+                        .contentTransition(.opacity)
                     rule
                 }
             } else {
                 Legend(state.caption, size: 11, colour: Palette.ink)
                     .multilineTextAlignment(.center)
+                    .contentTransition(.opacity)
             }
         }
         .frame(width: 330)
+        // The sentence under the dial changes in place: the rules either side
+        // of it close in or open out with the words.
+        .animation(Motion.standard(reduced: reduceMotion), value: state.caption)
+        .animation(Motion.standard(reduced: reduceMotion), value: state.problem)
     }
 
     private var rule: some View {

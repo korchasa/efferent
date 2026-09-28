@@ -14,22 +14,40 @@ import UIKit
 struct SetupView: View {
     @EnvironmentObject private var services: Services
 
-    private enum Step { case welcome, access, notices, range, preparing }
+    private enum Step: Int { case welcome, access, notices, range, preparing }
 
     @State private var step: Step = .welcome
+    /// Which way the last move went, so a step leaves by the edge the next one
+    /// did not come in from.
+    @State private var forward = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Health's own first record, looked at again by every screen that shows it.
     @StateObject private var earliest = EarliestDay()
     @State private var selection: RangeSelection = .everything
 
     var body: some View {
-        Group {
-            switch step {
-            case .welcome: welcome
-            case .access: access
-            case .notices: notices
-            case .range: range
-            case .preparing: preparing
+        VStack(spacing: 0) {
+            // The brand row and the step counter stay put while the steps
+            // change under them: they are the instrument's own printing, and
+            // only the counter moves, a segment at a time.
+            stepHeader
+                .padding(.horizontal, 20)
+
+            ZStack {
+                Group {
+                    switch step {
+                    case .welcome: welcome
+                    case .access: access
+                    case .notices: notices
+                    case .range: range
+                    case .preparing: preparing
+                    }
+                }
+                .id(step)
+                .transition(.step(forward: forward, reduced: reduceMotion))
             }
+            .frame(maxHeight: .infinity)
+            .clipped()
         }
         .pageBackground()
         .task {
@@ -39,6 +57,20 @@ struct SetupView: View {
             // start and never the answer that screen shows.
             await lookAtHealth()
         }
+    }
+
+    /// Move to another step along the path the steps are laid out on.
+    ///
+    /// A step that is leaving is drawn with the direction it had when it
+    /// arrived, so when the direction turns round it has to be told first and
+    /// the move made on the next turn of the run loop — otherwise going back
+    /// would slide the old step out towards the side the new one comes from.
+    private func go(to next: Step) {
+        let ahead = next.rawValue > step.rawValue
+        let move = { withAnimation(Motion.standard(reduced: reduceMotion)) { step = next } }
+        guard ahead != forward else { return move() }
+        forward = ahead
+        Task { @MainActor in move() }
     }
 
     /// Ask Health how far back it goes, through the screen's own services so a
@@ -54,8 +86,6 @@ struct SetupView: View {
     /// else on the screen has to compete with it.
     private var welcome: some View {
         VStack(alignment: .leading, spacing: 0) {
-            stepHeader(step: 1, back: nil)
-
             headline
                 .padding(.top, 20)
 
@@ -76,7 +106,7 @@ struct SetupView: View {
             .padding(.bottom, 22)
 
             VStack(spacing: 10) {
-                Button("Begin setup") { step = .access }
+                Button("Begin setup") { go(to: .access) }
                     .buttonStyle(ProminentButton())
                 Legend("4 steps · about a minute", size: 9)
                     .frame(maxWidth: .infinity)
@@ -117,8 +147,6 @@ struct SetupView: View {
 
     private var access: some View {
         stepLayout(
-            step: 2,
-            back: { step = .welcome },
             title: "Health access",
             blurb: "Apple never tells an app what you allowed. Nothing here can confirm it — "
                 + "the switches in Health are the only record."
@@ -143,11 +171,11 @@ struct SetupView: View {
                 Button("Ask Health now") {
                     Task {
                         await services.requestHealthAccess()
-                        step = .notices
+                        go(to: .notices)
                     }
                 }
                 .buttonStyle(ProminentButton())
-                Button("Not now") { step = .notices }
+                Button("Not now") { go(to: .notices) }
                     .buttonStyle(QuietButton())
             }
         }
@@ -186,8 +214,6 @@ struct SetupView: View {
     /// button shows the sheet, because that sheet can be answered once.
     private var notices: some View {
         stepLayout(
-            step: 3,
-            back: { step = .access },
             title: "Notices",
             blurb: "An agent you connect may write into Health — a meal, a nap, a weight. "
                 + "Efferent can tell you when that happens. It is the only thing this app "
@@ -219,11 +245,11 @@ struct SetupView: View {
                     Button("Allow notices") {
                         Task {
                             await services.askForNotices()
-                            step = .range
+                            go(to: .range)
                         }
                     }
                     .buttonStyle(ProminentButton())
-                    Button("Not now") { step = .range }
+                    Button("Not now") { go(to: .range) }
                         .buttonStyle(QuietButton())
                 }
             }
@@ -234,8 +260,6 @@ struct SetupView: View {
 
     private var range: some View {
         stepLayout(
-            step: 4,
-            back: { step = .notices },
             title: "How far back?",
             blurb: "Efferent takes every day from the one you choose up to today. You can reach "
                 + "further back later."
@@ -250,13 +274,19 @@ struct SetupView: View {
                         .foregroundStyle(Palette.alarm)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
+                        .transition(.arriving(reduced: reduceMotion))
                 }
                 Button("Start syncing") {
-                    step = .preparing
+                    go(to: .preparing)
                     Task { await services.prepareArchive(startingFrom: startDay) }
                 }
                 .buttonStyle(ProminentButton())
             }
+            // The remark follows the choice above it, and Health's answer
+            // arriving: a sentence that swaps in place reads as the same
+            // sentence being corrected, not as a new one to find.
+            .animation(Motion.standard(reduced: reduceMotion), value: summary)
+            .animation(Motion.standard(reduced: reduceMotion), value: services.lastError)
         }
         // Asked again here, and not once for the whole walkthrough. The Health
         // sheet is two steps back, and an answer taken before it was shown says
@@ -276,6 +306,7 @@ struct SetupView: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Palette.body)
                 .fixedSize(horizontal: false, vertical: true)
+                .contentTransition(.opacity)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 16)
@@ -328,25 +359,34 @@ struct SetupView: View {
     /// send is a screen nobody can act on.
     private var preparing: some View {
         VStack(spacing: 0) {
-            stepHeader(step: 4, back: nil)
-                .padding(.horizontal, 20)
-
             Spacer(minLength: 0)
 
             VStack(spacing: 24) {
-                Dial(progress: archiveReady ? services.syncProgress : 0.08, mood: .alight, side: 132)
+                // While the archive is being made there is nothing to
+                // measure, so the lit arc walks round instead of standing at
+                // a figure it does not have.
+                Dial(
+                    progress: archiveReady ? services.syncProgress : 0.08,
+                    mood: .alight,
+                    side: 132,
+                    waiting: !archiveReady && services.lastError == nil
+                )
                 VStack(spacing: 10) {
                     Text(archiveReady ? "Sending has started" : "Creating your archive")
                         .font(.system(size: 26, weight: .semibold))
                         .foregroundStyle(Palette.ink)
+                        .contentTransition(.opacity)
                     Text(preparingBlurb)
                         .font(.system(size: 15))
                         .foregroundStyle(Palette.body)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
+                        .contentTransition(.opacity)
                 }
                 if archiveReady {
                     Legend(queueLine, size: 11, colour: Palette.ink)
+                        .contentTransition(.numericText())
+                        .transition(.arriving(reduced: reduceMotion))
                 }
             }
             .padding(.horizontal, 28)
@@ -360,18 +400,26 @@ struct SetupView: View {
                         .foregroundStyle(Palette.alarm)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
+                        .transition(.arriving(reduced: reduceMotion))
                 }
                 if archiveReady {
                     Button("Continue") { services.finishSetup() }
                         .buttonStyle(ProminentButton())
+                        .transition(.opacity)
                 } else if services.lastError != nil {
-                    Button("Try again") { step = .range }
+                    Button("Try again") { go(to: .range) }
                         .buttonStyle(ProminentButton())
+                        .transition(.opacity)
                 }
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 24)
         }
+        // The archive being made, the first figure, a failure: each arrives
+        // while the person is watching this screen for exactly that.
+        .animation(Motion.standard(reduced: reduceMotion), value: archiveReady)
+        .animation(Motion.standard(reduced: reduceMotion), value: services.lastError)
+        .animation(Motion.standard, value: queueLine)
         .task {
             // The count moves on the upload session's own queue, and watching
             // it move is the whole point of this screen.
@@ -400,20 +448,41 @@ struct SetupView: View {
 
     // MARK: - The shape every step shares
 
-    private func stepHeader(step: Int, back: (() -> Void)?) -> some View {
+    /// Where the back key goes from each step, or nil where there is no way
+    /// back: the first step, and the pause in which the archive is made.
+    private var previous: Step? {
+        switch step {
+        case .welcome, .preparing: nil
+        case .access: .welcome
+        case .notices: .access
+        case .range: .notices
+        }
+    }
+
+    /// Which of the four segments are lit. Making the archive is the end of
+    /// the fourth step rather than a fifth.
+    private var stepNumber: Int {
+        min(step.rawValue + 1, 4)
+    }
+
+    private var stepHeader: some View {
         HStack(spacing: 10) {
-            if let back {
-                Button(action: back) {
+            if let previous {
+                Button { go(to: previous) } label: {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Palette.ink)
+                        .frame(minWidth: 24, minHeight: 34, alignment: .leading)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(PressableKey())
+                .transition(.opacity)
             }
             Text("efferent")
                 .font(.system(size: 14, weight: .medium, design: .monospaced))
                 .foregroundStyle(Palette.ink)
             Spacer(minLength: 8)
-            StepBar(step: step, total: 4)
+            StepBar(step: stepNumber, total: 4)
         }
         .frame(height: 34)
     }
@@ -423,17 +492,12 @@ struct SetupView: View {
     /// put because the content above it grows — the day picker opens a calendar
     /// — and a button that drifts off the screen is how a setup gets abandoned.
     private func stepLayout(
-        step: Int,
-        back: (() -> Void)?,
         title: String,
         blurb: String,
         @ViewBuilder content: () -> some View,
         @ViewBuilder actions: () -> some View
     ) -> some View {
         VStack(spacing: 0) {
-            stepHeader(step: step, back: back)
-                .padding(.horizontal, 20)
-
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     VStack(alignment: .leading, spacing: 14) {

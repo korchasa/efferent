@@ -15,6 +15,7 @@ struct EditsView: View {
     /// drew both would offer two keys about one record — one of which could
     /// only fail.
     @State private var records: [RecordHistory]
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// On for the store screenshot: an image renderer draws a list, a scroll
     /// view and a navigation stack as nothing at all, so the same rows are
     /// printed straight onto the shell instead. The app itself is never flat —
@@ -191,7 +192,9 @@ struct EditsView: View {
     private func act(on record: RecordHistory) {
         Task {
             await services.act(on: record.current)
-            reload()
+            // The row changes its word and moves under today, and the list
+            // shows it going there instead of redrawing itself around it.
+            withAnimation(Motion.standard(reduced: reduceMotion)) { reload() }
         }
     }
 }
