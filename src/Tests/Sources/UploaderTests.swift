@@ -154,6 +154,89 @@ final class UploaderTests: XCTestCase {
         XCTAssertEqual(resumed, .scheduled(days: 1, unchanged: 0))
     }
 
+    /// An uploader whose archive the phone has let go of must never send again.
+    /// Its background session kept it alive after a disconnect, and it went on
+    /// sending to the old bucket under the new archive's key.
+    func testARetiredUploaderSendsNothingEvenWhenLetGo() async throws {
+        let store = try Store.inMemory()
+        try store.markDirty(["2026-08-07"])
+        var built = 0
+        let uploader = try makeUploader(store: store, identifier: "test.retired.\(UUID().uuidString)") { days in
+            built += 1
+            return Dictionary(uniqueKeysWithValues: days.map {
+                ($0, DayContents(events: [], sampleIdentifiers: []))
+            })
+        }
+
+        uploader.retire()
+        uploader.setStopped(false)
+        let outcome = try await uploader.send()
+
+        XCTAssertEqual(outcome, .stopped)
+        XCTAssertEqual(built, 0, "a retired uploader still read Health")
+        XCTAssertEqual(try store.pendingDays(limit: 10), ["2026-08-07"])
+    }
+
+    /// A failure is waited out by every pass, not only by the retry it
+    /// scheduled. A pass started by anything else used to send at once, and a
+    /// refused archive was asked a month at a time, once a second.
+    func testAPassWaitsOutAFailureWhoeverStartsIt() async throws {
+        let store = try Store.inMemory()
+        try store.markDirty(["2026-08-07"])
+        var built = 0
+        let uploader = try makeUploader(store: store, identifier: "test.waiting.\(UUID().uuidString)") { days in
+            built += 1
+            return Dictionary(uniqueKeysWithValues: days.map {
+                ($0, DayContents(events: [], sampleIdentifiers: []))
+            })
+        }
+
+        uploader.holdOff(for: 60)
+        let held = try await uploader.send()
+        XCTAssertEqual(held, .waiting)
+        XCTAssertEqual(built, 0, "a pass inside the wait still read Health")
+
+        uploader.holdOff(for: nil)
+        let resumed = try await uploader.send()
+        XCTAssertEqual(resumed, .scheduled(days: 1, unchanged: 0))
+    }
+
+    /// Answers outlive the process that asked, so the uploader of a new archive
+    /// can be handed the answer to a request for the old one. The bucket is in
+    /// the path; the host may differ, because a service that moved still holds
+    /// the same archive.
+    func testAnAnswerBelongsToTheArchiveItsPathNames() throws {
+        let destination = try Destination(
+            endpoint: URL(string: "https://example.invalid")!,
+            readingPublicKey: WireTests.readingPublicKey
+        )
+        let moved = URL(string: "https://elsewhere.invalid" + destination.daysURL.path)!
+        let other = URL(string: "https://example.invalid/b/aaaaaaaaaaaaaaaaaaaaaaaaaa/days")!
+
+        XCTAssertTrue(Uploader.belongs(destination.daysURL, to: destination))
+        XCTAssertTrue(Uploader.belongs(moved, to: destination))
+        XCTAssertFalse(Uploader.belongs(other, to: destination))
+        XCTAssertFalse(Uploader.belongs(nil, to: destination))
+    }
+
+    /// A refusal counts against the days only when it was about the days. A
+    /// key the bucket does not know, or a request signed too long before it was
+    /// delivered, would otherwise set a whole history aside in two minutes.
+    func testOnlyARefusalOfTheDaysCountsAgainstThem() {
+        let said = { (text: String) in Data(text.utf8) }
+
+        XCTAssertTrue(Uploader.isAboutTheDays(status: 400, body: said(#"{"error":"malformed batch"}"#)))
+        XCTAssertTrue(Uploader.isAboutTheDays(status: 413, body: said(#"{"error":"too large"}"#)))
+        XCTAssertFalse(Uploader.isAboutTheDays(
+            status: 403, body: said(#"{"error":"this bucket already belongs to another writer"}"#)
+        ))
+        XCTAssertFalse(Uploader.isAboutTheDays(status: 401, body: Data()))
+        XCTAssertFalse(Uploader.isAboutTheDays(
+            status: 400, body: said(#"{"error":"timestamp is 499s away","now":1790708983}"#)
+        ))
+        XCTAssertFalse(Uploader.isAboutTheDays(status: 500, body: Data()), "the service's trouble is not the days'")
+    }
+
     // MARK: - Checking the archive before trusting the ledger
 
     /// The check runs before the pass decides there is nothing to do, because

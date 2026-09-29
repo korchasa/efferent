@@ -116,8 +116,11 @@ public final class Store {
             }
 
             let now = Date().timeIntervalSince1970
+            // Refusals too: they were another archive's answer. A day set aside
+            // there would otherwise stay set aside here, where nobody refused
+            // it, until the daily check happened to owe it back.
             try db.execute(
-                sql: "UPDATE day SET digest = NULL, dirty = 1, updatedAt = ?",
+                sql: "UPDATE day SET digest = NULL, dirty = 1, attempts = 0, updatedAt = ?",
                 arguments: [now]
             )
             try db.execute(
