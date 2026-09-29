@@ -242,6 +242,16 @@ allowed, so no screen says access was granted; the walkthrough says where the sw
 Walking past the Health step is an answer the walkthrough takes, and "not now" shows no system sheet
 at all, so the question stays open for the screen that asks it again later.
 
+**SETUP-5 — The screen that watches the archive start names the step it is on, and says "sending"
+only once something is going.** Three steps follow "Start syncing": the archive is made, the chosen
+history is read through once, and the days go. The second is the slow one — the first read of every
+metric, about a minute for a decade — and nothing is sent during it. The screen said "Sending has
+started" as soon as the archive existed and then stood still for ten seconds on the owner's phone,
+with an empty disc in the middle of the dial (2026-09-29). So each step has its own title and
+sentence, the dial's face is never empty — the key while it is being made, then the days waiting
+with their unit — and Continue appears only once the days are going, because the everyday screen it
+leads to would show the same standing figure with nothing to say why.
+
 ## What the app must be able to say about itself
 
 **STATE-1 — The screen says when the queue was last checked.** Silence has two causes — nobody sent

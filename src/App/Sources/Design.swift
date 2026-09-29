@@ -185,6 +185,31 @@ struct Dial: View {
     }
 }
 
+/// How far a dial's face is moved off the middle of its disc, so that it looks
+/// centred rather than measures centred.
+///
+/// A stack is centred by its frame, and a frame is not what the eye weighs.
+/// The figure's line keeps room for descenders a digit never has, and the big
+/// digit is the darkest thing on the face, so "0 · days waiting" sat with its
+/// weight 8 pt above the middle of the everyday disc (4.3 % of its diameter),
+/// while "Up to date" sat 3.5 pt below it; switching between the two jumped
+/// the eye by 11.5 pt (owner, 2026-09-29). The rule is the one a play symbol
+/// in a round key follows: the centre of the ink, each point weighted by how
+/// dark it is, goes on the centre of the circle. Measured on screenshots of
+/// the everyday dial at 3x; re-measure if a face's type changes.
+enum FaceBalance {
+    /// The count with its unit and the start/stop symbol under it.
+    static let figure: CGFloat = 8
+    /// The mark, "Up to date" and the symbol.
+    static let settled: CGFloat = -3.5
+    /// The smaller dial that watches the archive start: the count with its
+    /// unit, and no symbol under it.
+    static let preparingFigure: CGFloat = 5
+    /// The same dial once everything is sent. With no symbol under it the dark
+    /// words outweigh the orange mark, so the face sat 10 pt low.
+    static let preparingSettled: CGFloat = -10
+}
+
 /// The step counter across the top of a setup screen: filled segments and the
 /// number in figures, the way a device prints which of its modes is on.
 struct StepBar: View {

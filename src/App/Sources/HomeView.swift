@@ -401,6 +401,7 @@ struct HomeView: View {
                 .contentTransition(.symbolEffect(.replace))
                 .padding(.top, 8)
         }
+        .offset(y: state.settled ? FaceBalance.settled : FaceBalance.figure)
         .frame(width: 186, height: 186)
         .contentShape(Circle())
         .animation(Motion.standard(reduced: reduceMotion), value: state.settled)

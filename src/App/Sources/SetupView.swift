@@ -361,18 +361,21 @@ struct SetupView: View {
         VStack(spacing: 0) {
             Spacer(minLength: 0)
 
-            VStack(spacing: 24) {
-                // While the archive is being made there is nothing to
-                // measure, so the lit arc walks round instead of standing at
-                // a figure it does not have.
-                Dial(
-                    progress: archiveReady ? services.syncProgress : 0.08,
-                    mood: .alight,
-                    side: 132,
-                    waiting: !archiveReady && services.lastError == nil
-                )
+            VStack(spacing: 28) {
+                // Until the days are going there is nothing to measure, so the
+                // lit arc walks round instead of standing at a figure it does
+                // not have.
+                ZStack {
+                    Dial(
+                        progress: sending ? services.syncProgress : 0,
+                        mood: .alight,
+                        side: 184,
+                        waiting: !sending && services.lastError == nil
+                    )
+                    preparingFace
+                }
                 VStack(spacing: 10) {
-                    Text(archiveReady ? "Sending has started" : "Creating your archive")
+                    Text(preparingTitle)
                         .font(.system(size: 26, weight: .semibold))
                         .foregroundStyle(Palette.ink)
                         .contentTransition(.opacity)
@@ -382,11 +385,6 @@ struct SetupView: View {
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                         .contentTransition(.opacity)
-                }
-                if archiveReady {
-                    Legend(queueLine, size: 11, colour: Palette.ink)
-                        .contentTransition(.numericText())
-                        .transition(.arriving(reduced: reduceMotion))
                 }
             }
             .padding(.horizontal, 28)
@@ -402,7 +400,7 @@ struct SetupView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .transition(.arriving(reduced: reduceMotion))
                 }
-                if archiveReady {
+                if sending {
                     Button("Continue") { services.finishSetup() }
                         .buttonStyle(ProminentButton())
                         .transition(.opacity)
@@ -415,11 +413,13 @@ struct SetupView: View {
             .padding(.horizontal, 20)
             .padding(.bottom, 24)
         }
-        // The archive being made, the first figure, a failure: each arrives
-        // while the person is watching this screen for exactly that.
-        .animation(Motion.standard(reduced: reduceMotion), value: archiveReady)
+        // The archive being made, the history read, the first figure, a
+        // failure: each arrives while the person is watching this screen for
+        // exactly that.
+        .animation(Motion.standard(reduced: reduceMotion), value: services.preparation)
         .animation(Motion.standard(reduced: reduceMotion), value: services.lastError)
-        .animation(Motion.standard, value: queueLine)
+        .animation(Motion.standard, value: services.stats?.pendingDays)
+        .animation(Motion.standard(reduced: reduceMotion), value: sent)
         .task {
             // The count moves on the upload session's own queue, and watching
             // it move is the whole point of this screen.
@@ -430,20 +430,93 @@ struct SetupView: View {
         }
     }
 
-    private var archiveReady: Bool {
-        services.destination != nil
+    /// The days are going. Only now may the person walk on: before it, the
+    /// everyday screen would show a figure standing still with nothing to say
+    /// why.
+    private var sending: Bool {
+        services.preparation == .sending
+    }
+
+    /// Everything chosen is in the archive before the person walked on. Drawn
+    /// as the everyday screen draws it, a mark rather than a nought: a nought
+    /// is also what an archive that never got anything shows.
+    private var sent: Bool {
+        guard sending, let stats = services.stats else { return false }
+        return stats.pendingDays == 0 && stats.sentDays > 0
+    }
+
+    private var preparingTitle: String {
+        switch services.preparation {
+        case .creatingArchive: "Creating your archive"
+        case .readingHistory: "Reading your history"
+        case .sending: sent ? "Everything is sent" : "Sending has started"
+        }
     }
 
     private var preparingBlurb: String {
-        archiveReady
-            ? "Efferent is sending in the background. You can leave this screen — it carries on "
-            + "without you, whenever this phone has a network."
-            : "Making the key that opens it, and claiming a place to keep the sealed days."
+        switch services.preparation {
+        case .creatingArchive:
+            "Making the key that opens it, and claiming a place to keep the sealed days."
+        case .readingHistory:
+            "Efferent goes through the days you chose once, so that afterwards it notices "
+                + "every change. A long history takes up to a minute."
+        case .sending where sent:
+            "From now on Efferent sends each new day on its own, whenever this phone has a "
+                + "network."
+        case .sending:
+            "Efferent is sending in the background. You can leave this screen — it carries on "
+                + "without you, whenever this phone has a network."
+        }
     }
 
-    private var queueLine: String {
-        guard let pending = services.stats?.pendingDays, pending > 0 else { return "nothing waiting" }
-        return "\(grouped(pending)) days waiting"
+    /// A single symbol is centred by its own shape; a stack of lines is not.
+    private var preparingFaceBalance: CGFloat {
+        if services.preparation == .creatingArchive { return 0 }
+        return sent ? FaceBalance.preparingSettled : FaceBalance.preparingFigure
+    }
+
+    /// What the dial's face carries while the archive starts.
+    ///
+    /// It was empty, and an empty white disc in the middle of the screen reads
+    /// as a button with nothing on it (owner, 2026-09-29). While the archive is
+    /// made the face shows the key being made, because there is no figure yet
+    /// and the key is what the sentence underneath is about. From the moment
+    /// the days are marked it carries their count with its unit, exactly as the
+    /// everyday screen does, so Continue leads into an instrument already read.
+    private var preparingFace: some View {
+        ZStack {
+            if services.preparation == .creatingArchive {
+                Image(systemName: "key.horizontal.fill")
+                    .font(.system(size: 30, weight: .medium))
+                    .foregroundStyle(Palette.accent)
+                    .transition(.face(reduced: reduceMotion))
+            } else if sent {
+                VStack(spacing: 4) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 26, weight: .bold))
+                        .foregroundStyle(Palette.accent)
+                    Text("Up to date")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Palette.ink)
+                }
+                .transition(.face(reduced: reduceMotion))
+            } else {
+                VStack(spacing: 4) {
+                    Text(grouped(services.stats?.pendingDays ?? 0))
+                        .font(.system(size: 32, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Palette.ink)
+                        .contentTransition(.numericText(countsDown: true))
+                        .minimumScaleFactor(0.5)
+                        .lineLimit(1)
+                    Legend("days waiting", size: 8)
+                }
+                .padding(.horizontal, 20)
+                .transition(.face(reduced: reduceMotion))
+            }
+        }
+        .offset(y: preparingFaceBalance)
+        .frame(width: 130, height: 130)
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: - The shape every step shares

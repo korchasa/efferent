@@ -42,6 +42,22 @@ final class Services: ObservableObject {
     /// app is least useful in, so the way out of it stays lit until it is done.
     @Published private(set) var agentConnected: Bool
 
+    /// How far the first export has got, for the walkthrough screen that
+    /// watches it begin.
+    enum Preparation: Equatable {
+        /// Making the reading key and claiming the archive with the service.
+        case creatingArchive
+        /// Marking the chosen days and reading Health through once. Nothing
+        /// is sent yet, and on a long history this is the slow part: before
+        /// it had a name the screen already said "Sending has started" and
+        /// then stood still for ten seconds on the owner's phone (2026-09-29).
+        case readingHistory
+        /// The days are going.
+        case sending
+    }
+
+    @Published private(set) var preparation = Preparation.creatingArchive
+
     /// The phone is re-reading Health because the person asked it to, so the
     /// figure on the face is about to change and is not shown yet.
     ///
@@ -1027,12 +1043,23 @@ final class Services: ObservableObject {
     }
 
     /// Mark everything from the chosen day onwards, or from Health's own first
-    /// record when no day was chosen.
+    /// record when no day was chosen, then send.
     ///
-    /// Quick, because marking a day is a row and nothing more. The sending that
-    /// follows takes as long as it takes and needs nobody watching — a day is
-    /// either in the archive or still marked.
+    /// The sending that follows takes as long as it takes and needs nobody
+    /// watching — a day is either in the archive or still marked.
     func exportHistory(from day: String? = nil) async {
+        await queueHistory(from: day)
+        await sendNow()
+    }
+
+    /// The marking half of `exportHistory`, on its own so the walkthrough can
+    /// say when it ends.
+    ///
+    /// Not quick on a first export. Marking a day is a row, but the first
+    /// marking also reads every metric Health keeps once, so that later reads
+    /// start from now (`HealthCoordinator.markHistory`) — about a minute for a
+    /// decade, and nothing is sent until it is done.
+    private func queueHistory(from day: String?) async {
         log.info("queueing history from \(day ?? "the first day Health has")")
         do {
             _ = try await health.markHistory(from: day)
@@ -1041,7 +1068,6 @@ final class Services: ObservableObject {
             lastError = String(describing: error)
         }
         refreshStats()
-        await sendNow()
     }
 
     // MARK: - Setup
@@ -1052,6 +1078,7 @@ final class Services: ObservableObject {
     /// not a question either — it happens once the person has said how far back
     /// to go, and the screen that shows it is telling, not asking.
     func prepareArchive(startingFrom day: String?) async {
+        preparation = .creatingArchive
         if destination == nil {
             await createArchive()
         }
@@ -1063,7 +1090,10 @@ final class Services: ObservableObject {
         if paused {
             setPaused(false)
         }
-        await exportHistory(from: day)
+        preparation = .readingHistory
+        await queueHistory(from: day)
+        preparation = .sending
+        await sendNow()
     }
 
     /// The walkthrough is done. Written last, so a setup abandoned halfway
