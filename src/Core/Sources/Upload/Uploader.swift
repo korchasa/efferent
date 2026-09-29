@@ -96,6 +96,9 @@ public final class Uploader: NSObject {
         /// Held back on purpose. The days stay marked, so nothing is lost by
         /// stopping and nothing has to be rebuilt to start again.
         case stopped
+        /// A request has just failed and the retry it scheduled has not come
+        /// round yet. The days stay marked; the retry sends them.
+        case waiting
     }
 
     public enum UploadError: Error, Equatable {
@@ -144,6 +147,13 @@ public final class Uploader: NSObject {
     /// Requests that came back as a failure since the last one that did not.
     /// It sets how long to wait before trying again, and nothing else.
     private var consecutiveFailures = 0
+    /// Until when a failure is being waited out. Every pass honours it, not
+    /// only the retry the failure scheduled: a pass started by a Health
+    /// delivery, or one still running when the failure came back, would
+    /// otherwise carry on at full speed while the log said it was waiting —
+    /// which is what a phone did on 2026-09-29, a request a second for two
+    /// minutes, each one refused.
+    private var retryAt: Date?
 
     /// Answers as they arrive, byte by byte. Delegate queue only.
     private var responseBodies: [Int: Data] = [:]
@@ -169,6 +179,7 @@ public final class Uploader: NSObject {
     /// find the queue already empty — worth keeping once, not once each.
     private var refusedWhileRunning = 0
     private var refusedWhileStopped = 0
+    private var refusedWhileWaiting = 0
     private var quietPasses = 0
     private var passRunning = false
 
@@ -180,8 +191,22 @@ public final class Uploader: NSObject {
     /// only on the way in would stop the button and let the chain run on.
     private let stopLock = NSLock()
     private var stopped = false
+    /// Stopped for good: the archive this uploader sends to is no longer the
+    /// phone's. Unlike `stopped`, nothing lets it go again.
+    private var retired = false
+    /// Whether the session exists, so retiring an uploader that never sent
+    /// does not make a session only to throw it away.
+    private var sessionMade = false
+
+    /// Called with the service's own sentence when it refuses a request, so a
+    /// screen can say why nothing is landing. Every refusal used to end in the
+    /// log alone, and the screen went on saying the days were sending.
+    public var didRefuse: ((Error) -> Void)?
 
     private lazy var session: URLSession = {
+        stopLock.lock()
+        sessionMade = true
+        stopLock.unlock()
         let config = URLSessionConfiguration.background(withIdentifier: configuration.sessionIdentifier)
         // The data is small and the point of the app is freshness, so let it go
         // as soon as there is a network rather than waiting for a charger.
@@ -225,10 +250,53 @@ public final class Uploader: NSObject {
         session.getAllTasks { tasks in tasks.forEach { $0.cancel() } }
     }
 
+    /// Let this uploader go for good, because the archive it sends to is no
+    /// longer this phone's.
+    ///
+    /// Dropping the reference is not enough. A background session holds on to
+    /// its delegate until the session is invalidated, and every answer it hands
+    /// over starts the next pass. On 2026-09-29 a phone that had disconnected
+    /// and made a new archive kept the old uploader alive exactly this way: it
+    /// went on sending to the old bucket, signed with the new writer key, and
+    /// the service answered every request "this bucket already belongs to
+    /// another writer". Sharing the ledger, it counted those refusals against
+    /// the new archive's days until most of the history had been set aside.
+    /// Invalidating also frees the session's name, which the next uploader has
+    /// to use.
+    public func retire() {
+        stopLock.lock()
+        retired = true
+        let made = sessionMade
+        stopLock.unlock()
+        guard made else { return }
+        session.invalidateAndCancel()
+    }
+
     private var isStopped: Bool {
         stopLock.lock()
         defer { stopLock.unlock() }
-        return stopped
+        return stopped || retired
+    }
+
+    private var isRetired: Bool {
+        stopLock.lock()
+        defer { stopLock.unlock() }
+        return retired
+    }
+
+    /// Wait out a failure until `delay` has passed, or stop waiting (`nil`).
+    /// Internal so the tests can stand in for a failed answer.
+    func holdOff(for delay: TimeInterval?) {
+        flightLock.lock()
+        retryAt = delay.map { Date().addingTimeInterval($0) }
+        flightLock.unlock()
+    }
+
+    private var isWaitingOut: Bool {
+        flightLock.lock()
+        defer { flightLock.unlock() }
+        guard let retryAt else { return false }
+        return Date() < retryAt
     }
 
     /// Build the next days and hand the changed ones to the system.
@@ -248,11 +316,17 @@ public final class Uploader: NSObject {
     /// screen said thousands of days were waiting.
     public func send() async throws -> Outcome {
         guard !isStopped else {
-            countRefusal(stopped: true)
+            // A retired uploader is somebody else's archive now; its asks are
+            // not this phone's pause and are not counted as one.
+            if !isRetired { countRefusal(.stopped) }
             return .stopped
         }
+        guard !isWaitingOut else {
+            countRefusal(.waiting)
+            return .waiting
+        }
         guard claimPass() else {
-            countRefusal(stopped: false)
+            countRefusal(.running)
             return .alreadyInFlight
         }
         defer { releasePass() }
@@ -273,6 +347,14 @@ public final class Uploader: NSObject {
             // Nothing came back from the ledger, so there is nothing left to
             // take — not "nothing happened", which is why both counts matter.
             guard round.scheduled > 0 || round.cleaned > 0, !isStopped else { break }
+            // An answer that failed while this pass was building stops it here.
+            // Answers to a refused request come back within a second, so the
+            // pipe never filled and the pass went on building a month a second
+            // until its budget ran out, every one of them refused the same way.
+            guard !isWaitingOut else {
+                log.debug("a request has just failed, so the rest wait for the retry")
+                break
+            }
             guard batchesInFlight < configuration.concurrentUploads else {
                 log.debug(
                     "\(batchesInFlight) requests are in the air, which is as many as this "
@@ -587,13 +669,15 @@ public final class Uploader: NSObject {
         return consecutiveFailures
     }
 
-    private func countRefusal(stopped: Bool) {
+    private enum TurnedAway { case running, stopped, waiting }
+
+    private func countRefusal(_ reason: TurnedAway) {
         passLock.lock()
         defer { passLock.unlock() }
-        if stopped {
-            refusedWhileStopped += 1
-        } else {
-            refusedWhileRunning += 1
+        switch reason {
+        case .running: refusedWhileRunning += 1
+        case .stopped: refusedWhileStopped += 1
+        case .waiting: refusedWhileWaiting += 1
         }
     }
 
@@ -615,9 +699,11 @@ public final class Uploader: NSObject {
         passLock.lock()
         let running = refusedWhileRunning
         let stopped = refusedWhileStopped
+        let waiting = refusedWhileWaiting
         let quiet = quietPasses
         refusedWhileRunning = 0
         refusedWhileStopped = 0
+        refusedWhileWaiting = 0
         quietPasses = 0
         passLock.unlock()
 
@@ -627,6 +713,9 @@ public final class Uploader: NSObject {
         }
         if stopped > 0 {
             parts.append("\(stopped) turned away while sending was held back")
+        }
+        if waiting > 0 {
+            parts.append("\(waiting) turned away while a failure was waited out")
         }
         if quiet > 0 {
             parts.append("\(quiet) passes found nothing waiting")
@@ -719,6 +808,19 @@ extension Uploader: URLSessionDataDelegate {
         // and send it again. Held until every exit from here, answered or not.
         defer { settle(carried) }
 
+        // An answer for another archive is nobody's business here. Background
+        // sessions outlive the process, so the answer to a request made before
+        // the phone disconnected can arrive at the uploader of the archive that
+        // replaced it — and counted, it would set this archive's days aside for
+        // a refusal that was about another bucket.
+        guard Self.belongs(task.originalRequest?.url, to: destination) else {
+            log.info(
+                "request \(task.taskIdentifier) was for an archive this phone has let go of; "
+                    + "its answer is dropped"
+            )
+            return
+        }
+
         if let error {
             // Nothing to undo: the days are still marked, so they go again next
             // pass. Retrying here would only fight the system's own backoff.
@@ -743,12 +845,16 @@ extension Uploader: URLSessionDataDelegate {
             // A refusal about the request itself, rather than about the network
             // or the service's own trouble. Counted against the days it carried:
             // a day the service will not take is not made acceptable by being
-            // sent again forever at the head of the queue.
-            if (400 ..< 500).contains(response.statusCode), let carried {
+            // sent again forever at the head of the queue. Only when it is the
+            // days that were refused, though — see `isAboutTheDays`.
+            if Self.isAboutTheDays(status: response.statusCode, body: body), let carried {
                 refuse(carried.map(\.day), status: response.statusCode)
             }
 
             let refused = (400 ..< 500).contains(response.statusCode)
+            if refused {
+                didRefuse?(ConnectionError.refusal(status: response.statusCode, body: body))
+            }
             return carryOn(after: refused ? .refused : .transport)
         }
         guard let carried else { return carryOn(after: .delivered) }
@@ -808,6 +914,29 @@ extension Uploader: URLSessionDataDelegate {
         }
     }
 
+    /// Whether a request was answered for this uploader's archive. Compared by
+    /// path, which names the bucket: the host is allowed to differ, because a
+    /// service that moved still holds the same archive.
+    static func belongs(_ url: URL?, to destination: Destination) -> Bool {
+        url?.path == destination.daysURL.path
+    }
+
+    /// Whether a refusal was about the days a request carried, and so counts
+    /// against them.
+    ///
+    /// Two refusals are not. A 401 or 403 is about who signed — a key the
+    /// bucket does not know, a signature that does not hold — and the same
+    /// days signed by the right key go straight in. A refusal for being out of
+    /// time carries the service's clock (`now`); when the phone's own clock is
+    /// right, the request was simply signed long before it was delivered, which
+    /// a background session does to a locked phone. Counting either against
+    /// the days would set them aside for something they had no part in.
+    static func isAboutTheDays(status: Int, body: Data) -> Bool {
+        guard (400 ..< 500).contains(status), status != 401, status != 403 else { return false }
+        let refusal = try? JSONDecoder().decode(Refusal.self, from: body)
+        return refusal?.now == nil
+    }
+
     /// What the last request came back as, as far as what to do next is
     /// concerned.
     private enum Answer {
@@ -848,6 +977,7 @@ extension Uploader: URLSessionDataDelegate {
             delay = min(300, 5 * pow(2, Double(min(failures, 8) - 1)))
             log.info("waiting \(Int(delay)) seconds after \(failures) failed requests in a row")
         }
+        holdOff(for: delay > 0 ? delay : nil)
 
         Task { [weak self] in
             if delay > 0 {

@@ -374,6 +374,24 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(try store.stats().stuckDays, 0)
     }
 
+    /// A refusal is one archive's answer. A phone that disconnected and made a
+    /// new archive has asked nobody about those days yet, and the new archive
+    /// must get all of them straight away rather than a day later.
+    func testANewArchiveStartsEveryRefusedDayOver() throws {
+        let store = try Store.inMemory()
+        try store.activateArchive("old-bucket")
+        try store.markDirty(["2026-08-07"])
+        for _ in 0 ..< Int(Store.attemptsBeforeParking) {
+            _ = try store.recordRefused(["2026-08-07"])
+        }
+        XCTAssertTrue(try store.pendingDays(limit: 10).isEmpty)
+
+        XCTAssertTrue(try store.activateArchive("new-bucket"))
+
+        XCTAssertEqual(try store.pendingDays(limit: 10), ["2026-08-07"])
+        XCTAssertEqual(try store.stats().stuckDays, 0, "the old archive's refusals followed the day")
+    }
+
     /// The days already in the air are at the head of exactly this order, so a
     /// page that did not leave them out would come back made entirely of them
     /// and read as "nothing else to send".

@@ -31,6 +31,11 @@ final class Services: ObservableObject {
 
     @Published private(set) var stats: Stats?
     @Published private(set) var lastError: String?
+    /// The service's last word on an upload it turned away, until one lands.
+    /// Answers arrive long after the pass that sent them has finished, so the
+    /// pass cannot report them itself — and a pass that ends without a
+    /// thrown error must not wipe the one sentence saying why nothing lands.
+    private var uploadRefusal: String?
     @Published private(set) var destination: Destination?
     @Published private(set) var connectionHandoff: ConnectionHandoff?
     /// Whether setup has been walked through. A phone that already holds an
@@ -291,6 +296,7 @@ final class Services: ObservableObject {
             _ = try store.activateDayFormat(Int64(dayFormatVersion))
             try UserDefaults.standard.set(JSONEncoder().encode(created), forKey: Self.destinationKey)
             destination = created
+            uploader?.retire()
             uploader = nil
             applier = nil
             lastError = nil
@@ -487,7 +493,11 @@ final class Services: ObservableObject {
         batchTotal = 0
         destination = nil
         connectionHandoff = nil
+        // Retired, not just dropped: its background session keeps it alive
+        // and would go on sending to this archive under the next one's key.
+        uploader?.retire()
         uploader = nil
+        uploadRefusal = nil
         applier = nil
         do {
             try identity.forget()
@@ -521,7 +531,22 @@ final class Services: ObservableObject {
         // Without this the counters only change when the screen reappears,
         // which reads as a stall while data is going up fine.
         built.didStoreDay = { [weak self] in
-            Task { @MainActor in self?.refreshStats() }
+            Task { @MainActor in
+                self?.uploadRefusal = nil
+                self?.refreshStats()
+            }
+        }
+        built.didRefuse = { [weak self] error in
+            let said: String
+            if case let ConnectionError.server(status, message) = error {
+                said = "The archive turned the upload away (\(status)): \(message)"
+            } else {
+                said = "The archive turned the upload away. (\(error))"
+            }
+            Task { @MainActor in
+                self?.uploadRefusal = said
+                self?.lastError = said
+            }
         }
         // A pause set before anything was ever sent has to survive the first
         // uploader being built, or the first send would start under it.
@@ -720,7 +745,7 @@ final class Services: ObservableObject {
                         + "in \(Uploader.milliseconds(since: started)) ms"
                 )
             }
-            lastError = nil
+            lastError = uploadRefusal
         } catch where HealthReader.isLocked(error) {
             // Not a failure and not on the screen: a day is built out of Health,
             // and a locked phone hands nothing over. The days stay marked.
