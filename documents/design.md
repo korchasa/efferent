@@ -16,9 +16,9 @@ after the agent wrote it. See "What a wake is allowed" below.
 ## Scope
 
 How the app is arranged to meet [`requirements.md`](requirements.md). Written one subsystem at a
-time; today it covers the delivery of an agent's edits, the notices about them, and the one question
-the walkthrough puts to Health. Everything above
-this — what the app collects, the wire format, who can read the archive — is `README.md`, and the
+time; today it covers the delivery of an agent's edits, the notices about them, the one question
+the walkthrough puts to Health, how a read of the archive is proved, and how history comes back.
+Everything above this — what the app collects and the wire format — is `README.md`, and the
 boundary with the service is [`connection.md`](connection.md).
 
 ## The archive has two directions, and they are started by different things
@@ -45,8 +45,8 @@ phone, and everything else is a floor under that wake.**
   the floor is what turns a lost wake into lost time instead of a lost edit.
 - **The queue is the recovery.** An edit stays in `e/` until the phone answers it. Nothing a missed
   wake or an interrupted run can do loses an edit; the worst case is that it is applied later, and
-  applying it twice is safe because a sample carries the agent's sync identifier and a version that
-  only climbs.
+  applying an unanswered edit twice is safe because a sample carries the agent's sync identifier and
+  a version that only climbs. An answered one is never applied again — "An edit lands once" below.
 
 Reading them as alternatives is the mistake this document exists to prevent. Push without the floor
 is a channel whose delivery nobody promises; the floor without push is what the app has today.
@@ -347,9 +347,87 @@ text does not follow the system text size: every size is a fixed `.system(size:)
 accessibility-extra-large only the sheet titles and the chevrons grow. Nothing clips or overlaps,
 but a person who enlarges text sees no change in the app's own words.
 
+## Who may read the archive
+
+Meets READ-1 to READ-5.
+
+**One check in front of every read that hands something back.** The Worker's `authorizeReader` sits
+in front of the listing of days, a day, a range, the listing of edits and an outcome. With no
+`<bucket>/reader` object it lets the read through, which is READ-4; with one it wants the headers
+`x-efferent-reader`, `x-efferent-signature` and `x-efferent-timestamp`, the registered key, a
+signature over `efferent/v1 read\n<bucket>\n<pathname + search>\n<timestamp>`, and a moment within
+300 seconds. An unsigned read gets 401 with a pointer to the guide, the wrong key or target 403, a
+stale moment 400. `stats`, `archive_status` and `setup_guide` never go through it. The check is one
+R2 `get` per gated read. The remote tools `list_sealed_days`, `get_sealed_day` and `list_edits` ask
+`head` whether a key exists and, when it does, answer with the script command instead: the remote
+endpoint can never hold what a signature needs.
+
+**The key is derived, so nothing new is stored or handed over.** `ReadKey.derive` on the phone and
+`read_key` in the reader's script are HKDF-SHA256 over the raw reading private key, an empty salt,
+the info `efferent/v1 read` and 32 bytes, taken as an Ed25519 seed. `ReadKeyTests` and the reader's
+`ReadKey` tests hold both to one published vector, and `deno task interop` has the reader verify a
+read the phone signed. CryptoKit signs with fresh randomness, so the phone verifies the reader's
+signature rather than reproducing it byte for byte.
+
+**The phone registers once per archive and signs its own reads.** `Services.ensureReaderRegistered`
+runs after the editor's registration at launch, when an archive is created and before edits are
+collected. It sends a writer-signed `PUT /b/<bucket>/reader` and, once the service has taken it,
+writes `reader.bucket` into the store's meta so it is not sent again; `activateArchive` clears that
+line with the rest of the archive's state. A legacy connection has no reading private key on the
+phone and registers nothing. The phone's two reads — the archive listing behind reconciliation
+(`Archive`) and the queue listing (`Applier.pending`) — are signed by `ReadSigner` on the service's
+clock, the same `clockOffset` uploads use: a phone whose clock is wrong would otherwise have every
+read refused the moment its key is registered. Both registrations use the corrected clock too.
+
+**History comes back a quarter at a time.** `GET /b/<bucket>/d?from&to&after` lists up to 92 days,
+keeps those up to `to`, cuts at 8 MiB using the sizes the listing already gives — the first day
+always goes, so no range stalls on one heavy day — and reads the bodies side by side, each as soon
+as it arrives, because a Worker keeps six connections open and queues the rest. The answer is the
+upload frame; `x-efferent-next` names the last day sent when more remain. A frame costs one `list`
+and up to 92 `get`s, inside the 1 000 calls a request may make. A range that runs backwards is
+refused rather than answered empty, because an empty frame reads as days that do not exist. The
+reader's package groups the days it wants into spans — the next wanted day within 7 days of the last
+joins the span, up to 92 days long — and keeps 4 spans in flight; the guide's script reads `--from`
+and `--to` in one process.
+
+**What stays open, and why.** Whether the archive exists, how many days and bytes it holds and its
+first and last day answer to the bucket id, because `archive_status` is what an agent calls before
+it has run anything locally. A legacy connection stays open by its id for good, and an archive is
+open until its phone has run a build that registers the key.
+
+## An edit lands once
+
+Meets DELIVERY-3a.
+
+**A digest of every answered edit, kept beside the journal.** Migration v11 adds `answeredEdit`:
+the SHA-256 of the sealed bytes as the key, the edit's name, the moment its editor signed it, and
+when it was answered. `Applier.apply` writes a row after the service has taken the outcome — not
+before, or an edit whose answer did not land would come back as a replay of itself — and only for
+an edit whose signature verified. Rows signed more than `replayWindow` (900 s) before the newest one
+are pruned in the same write, so the table stays a handful of rows; `activateArchive` empties it.
+
+**Two checks before anything is opened into Health.** An edit whose digest is in the table is
+refused, whatever the service named it. An edit signed more than 900 s before the newest answered
+one is refused too, which covers edits answered before this table existed. The second check rests on
+two facts: the service takes an edit only within 300 s of its signature and lists the queue in the
+order it took them, and a run answers in that order and stops at the first edit it cannot answer. So
+two genuine edits can be signed at most 600 s out of order, and nothing older than the newest
+answered one by 900 s is still owed. A refusal writes nothing, is answered as one failed item with
+the word `replayed`, and goes into the journal only when the name has no rows there, so the lines of
+the edit it repeats stay as they were.
+
+**Where it does not reach.** The table starts empty, so between installing the build and the first
+edit it answers, an edit answered before the upgrade can still be applied once more. The database is
+not in the phone's backup, so a phone restored from one starts empty in the same way. Both need the
+service itself to misbehave.
+
 ## What is not verified yet
 
 These are claims the design leans on and nobody has run.
+- The read key against the deployed service and a real phone. It was proved against the Worker run
+  locally, from Python and from the phone's own code, not on `api.efferentapp.com`.
+- A replay from a service that misbehaves. The phone's checks are tested against a stand-in
+  service; no real service has ever handed an answered edit back.
 - How it behaves over days rather than over an evening. Every shape of the run was watched on
   2026-09-19 and each finished on its own, but all of it was watched inside two hours on one phone
   with a development signature.
@@ -372,3 +450,7 @@ record's own page is the end of reading about it. Only the page asks first. Deci
 - The 15-second ticker is a guess at a person's patience, not a measurement.
 - Whether refusing the wake is a separate question to the person or rides on the notice permission
   they are already asked for.
+- A post-quantum seal. Every day is sealed with X25519, so ciphertext copied today is opened the day
+  that curve falls. An HPKE suite with a hybrid key encapsulation (X-Wing) would close that, but it
+  needs a new reading key, a new bucket and a fresh handoff to every agent, which is the owner's
+  call. The read key removes the cheap way to copy the ciphertext — the bucket id — in the meantime.

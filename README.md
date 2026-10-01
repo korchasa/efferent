@@ -166,11 +166,22 @@ reachable, or still owned by the same person.
   followed until it comes back null — a listing that stopped at its first page would report the rest
   of a decade as nothing at all, and would do it without an error.
 - **`GET /b/<bucket>/d/<day>`** hands that day back, exactly as it went in.
+- **`GET /b/<bucket>/d?from=…&to=…`** hands a range of days back in one answer, in the frame an
+  upload travels in: per day its date, its length and its sealed bytes, oldest first. Both ends are
+  inclusive. At most 92 days and 8 MiB go at once, decided from the sizes the listing already gives;
+  `x-efferent-next` names the last day sent when more remain, and it goes back as `after`. "The last
+  three months" is the commonest question asked of history, and it costs one request rather than
+  ninety-two.
 - **`GET /b/<bucket>/stats`** says how much is there — days, bytes, first and last — without handing
   any of it over. It is encrypted anyway; this is for deciding whether to fetch.
+- **`PUT /b/<bucket>/reader`** records, signed by the phone's writer key, the public half of the
+  read key described under "Who can read it". From then on the two listings, a day, a range and an
+  outcome answer only a read signed with that key; `stats` stays open.
 - **`/mcp/b/<bucket>`** exposes the keyless remote MCP tools for archive metadata and ciphertext
   links plus `setup_guide`, which returns the complete local Python reference without accepting any
-  arguments, and `list_edits`, which says what is waiting for the phone. It never accepts a key.
+  arguments, and `list_edits`, which says what is waiting for the phone. It never accepts a key, so
+  once a read key is registered, the tools that would list or hand back days or edits answer with the
+  local command that signs the read instead.
 
 And the queue in the other direction, which the service holds until the phone has collected it:
 
@@ -241,6 +252,10 @@ day, so a question about the 11th that fetched only the 11th would miss the nigh
 decryption, and compares day against day: an event's times are instants and a bound is a date, so
 comparing the two as strings would put every reading of the 6th after the 6th.
 
+Neither asks for a day at a time. Days close together share one range request of up to 92 days, and
+four ranges are in flight at once, so a fresh copy of a decade is about 50 requests rather than
+about 3 920, and the everyday refresh of recent days is one.
+
 `sync` is safe to interrupt. Each day is its own file and what was taken is written down as it goes,
 so a run that stops costs the days it had not reached and nothing else.
 
@@ -255,18 +270,21 @@ server in the running session. The remote MCP server returns setup text,
 archive metadata and ciphertext only. The complete decision and the boundary between phone,
 Cloudflare and agent are in [`documents/connection.md`](documents/connection.md).
 
-The Worker exposes the keyless remote MCP at `/mcp/b/<bucket-id>`. It offers archive metadata,
-sealed-day listings and ciphertext links. Its argument-free `setup_guide` tool returns the exact
-Python source needed to decrypt one selected day locally. The agent saves that source and the
-handoff in private local files, uses the remaining remote tools to select dates, and runs the
-reference once per date. No repository checkout, Deno installation, second MCP server, separate
-prompt URL or gateway restart is part of the connection.
+The Worker exposes the keyless remote MCP at `/mcp/b/<bucket-id>`. It offers archive metadata and
+an argument-free `setup_guide` tool that returns the exact Python source needed to fetch and decrypt
+days locally. The agent saves that source and the handoff in private local files, asks
+`archive_status` which dates the archive spans, and runs the reference once for the range a question
+needs: `--from` and `--to` fetch it a quarter of days per request and print NDJSON with the day on
+every line. The tools that list sealed days and hand out ciphertext links answer only while the
+phone has not registered a read key; afterwards they point at the same local command. No repository
+checkout, Deno installation, second MCP server, separate prompt URL or gateway restart is part of
+the connection.
 
 **The part that answers runs next to the reading key, and it has to.** The remote MCP endpoint is
 discovery and ciphertext transport. The embedded script validates that the key belongs to the
-bucket, fetches only ciphertext using the bucket id and date, and emits local NDJSON. The agent then
-analyses those records with local code and never sends plaintext or the reading key to a remote
-tool.
+bucket, fetches only ciphertext, signs every read with the read key it makes from the reading key,
+and emits local NDJSON. The agent then analyses those records with local code and never sends
+plaintext or the reading key to a remote tool.
 
 That script is not the only copy of itself. `reader/` holds the same reading side as an installable
 Python package — the command line tool, the MCP server, and the analysis behind both — and the
@@ -301,6 +319,17 @@ count of what landed and, per failed item, its index and one of a closed set of 
 replaces the edit with its outcome, and the days the items touched are marked and re-uploaded whole,
 so the entry shows up in the archive afterwards like anything logged by hand. An edit whose outcome
 the service did not accept stays in the queue and is applied again; that is what the version is for.
+
+An edit the phone has answered is never applied again, whoever serves it. A service in working order
+never hands one back, because it deletes the edit when it takes the outcome; the check is for one
+that does, since an old `put` applied a second time puts an old value back over the correction that
+replaced it. The phone writes down the SHA-256 of each answered edit's sealed bytes, with its name
+and the moment its editor signed it, and refuses as `replayed` an edit whose bytes it has answered
+before under any name, or one signed more than 15 minutes before the newest edit it has answered.
+Nothing in Health is touched, and the outcome says why. The second rule covers edits answered before
+the digests were kept: the service takes an edit only within five minutes of its signature, and the
+phone answers the queue in order and stops at the first edit it cannot answer, so a genuine edit is
+never signed that long before one answered ahead of it.
 
 Every item lands, and every item can be taken back. An agent reaches only the records this app
 itself wrote: they carry its own sync identifier, and HealthKit will not let one app delete
@@ -365,6 +394,19 @@ agent's machine and never sent to the remote MCP endpoint, Cloudflare, an HTTP h
 argument. Cloudflare can return setup text, list and return sealed days, but cannot open one. The
 agent fetches ciphertext and decrypts and analyses it locally.
 
+The bucket id is an address, and it is kept nowhere safe: it sits in the MCP URL, so it is in every
+client configuration the owner adds it to — some of them hosted by somebody else — and in the
+service's request logs. So it opens nothing on its own. The phone makes a **read key** from the
+reading key — an Ed25519 key whose seed is HKDF-SHA256 over the raw reading private key, with an
+empty salt and the info `efferent/v1 read` — and registers its public half with the service, signed
+by the writer key. From then on every read of a day, a range, a listing or an outcome must be signed
+with it, over the bucket, the path and query exactly as sent, and a moment within five minutes of
+the service's clock; a signature for one range opens no other. Every holder of the reading key makes
+the same read key, so the handoff carries nothing new and the reading key itself never travels.
+What stays open is how much there is: whether the archive exists, how many days and bytes, its first
+and last day. An archive joined from a reader before the phone made its own keys has no reading
+private key on the phone, so it never registers a read key and stays readable by its id, as before.
+
 Encryption says nothing about authorship, so the phone also makes a signing key on first launch. It
 claims the empty archive with that key and signs every later upload; afterwards only that writer is
 accepted — otherwise a stranger who learned a bucket name could fill it with rubbish. That check
@@ -388,7 +430,8 @@ spending its whole waking life on round trips. What goes up is a plain frame —
 sealed blob, repeated — and the signature covers the whole of it along with the dates it names, so
 the service has to prove its own reading of the frame before it can store anything. Each day inside
 is still sealed to its own date, so a batch binds nothing and ends at the door: the archive never
-learns that days arrived together.
+learns that days arrived together. They come back the same way: a range is one request in the same
+frame, signed by the read key rather than the writer.
 
 There is no server-side invitation or pairing session. The phone creates the bucket and gives the
 connection handoff directly to the agent. [`documents/connection.md`](documents/connection.md)
@@ -402,7 +445,8 @@ without a reset.
 `deno task interop` exists to prove the two still agree: a Swift test packs, seals and signs a real
 request of two days, and the reader unpacks it, opens each day and checks the signature. Two days
 rather than one, because a batch of one would never cross the boundary where a framing disagreement
-would live. With `--post <url>` it also puts that request through a running service and reads both
+would live. The read key is checked the same way: both sides make it from one reading key, and the
+reader verifies a read the phone signed. With `--post <url>` it also puts that request through a running service and reads both
 days back out separately.
 
 The service itself is a Cloudflare Worker over an R2 bucket, answering at `api.efferentapp.com`. It
@@ -442,8 +486,9 @@ deno task check
 - `icons` — re-render the app icons from `documents/icon.svg`.
 - `screenshots <directory>` — the six store screenshots at 1290 × 2796, drawn offscreen by the app itself
   (`--snapshot <directory>`) from made-up figures and a key invented on the spot. No phone, no Health, no network.
-- `interop` — check that Swift and Python agree on request bytes, HPKE, the day's own layout and
-  the phone handoff key, and that the phone opens and verifies an edit the reader sealed and signed.
+- `interop` — check that Swift and Python agree on request bytes, HPKE, the day's own layout, the
+  phone handoff key and the read key, and that the phone opens and verifies an edit the reader
+  sealed and signed.
   It runs the RFC 9180 self-test first, on the exact source `setup_guide` returns.
 - `reader:setup` — make `reader/.venv` from Python 3.13 and install the one run-time dependency and
   the formatter. Every task that runs the reader needs it; `EFFERENT_PYTHON` points at another

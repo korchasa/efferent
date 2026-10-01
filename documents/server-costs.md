@@ -69,11 +69,31 @@ applied, an outcome is under 100 bytes and lives forever.
 that has not been opened in a month against an agent writing ten edits a day reaches it in about
 seven weeks, and the agent is then refused with a 429 that says so until the phone catches up.
 
+## Reading, once reads are signed
+
+Counted from the service's own source on **2026-10-01**, when signed reads and ranges landed; not
+yet measured on the deployed service.
+
+- **The read key's check**: 1 Class B per read of a day, a range, a listing or an outcome — the
+  key is looked up before anything else, whether or not one is registered. `stats` does not pay it.
+  Registering the key is once per archive: 2 Class B and 1 Class A, like the editor's.
+- **A range**: 1 Class A to list it and 1 Class B per day in it, plus the check, in one Worker
+  request. A quarter is 1 Class A, 93 Class B and 1 Worker request → about **$0.000038**, where 92
+  single reads were 92 Class B and 92 Worker requests → about $0.000061. The list costs more than a
+  read, but it replaces 91 Worker requests.
+- **The phone's own reads** pay the check too: one per queue listing and one per page of the daily
+  archive walk. An hourly phone makes about 720 passes and 180 walk pages a month, so about 900
+  Class B more → **$0.00032 per user-month**, under 3% of sending hourly. The everyday screen lists
+  the queue every 15 seconds while it is open, so each hour on screen adds 240 more, about
+  $0.00009.
+
 ## One-time
 
 The first eleven-year export is 127 requests of 31 days each: 4,168 Class A, 381 Class B →
-about **$0.019 per user**, paid once. A full download into a fresh local mirror is about $0.003 per
-user; R2 egress is free, so it is one Class B read and one Worker request per day.
+about **$0.019 per user**, paid once. A full download into a fresh local mirror is about **$0.0016
+per user**: R2 egress is free, so it is one Class B read per day as before, and the ranges add 43
+Class A and 43 Class B for a decade while taking about 3 870 Worker requests away. It was about
+$0.003 when every day was its own request.
 
 ## Where the free allowances end
 
@@ -102,4 +122,4 @@ never come down when data is replaced. That makes them budgets rather than sizes
   that many people arrive, not when they do.
 
 Recalculate when prices, batch size, the archive's size, the walk's page count, the operations behind
-an edit or either ceiling changes.
+an edit or a read, the size of a range or either ceiling changes.
