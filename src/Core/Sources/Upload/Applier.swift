@@ -38,6 +38,18 @@ import os
 /// a queue blocked forever by one bad edit is worse than a bad edit answered.
 /// A failure to *deliver* the answer is different, and stops the run — the
 /// edit stays, and is applied again next time.
+///
+/// **An answered edit is never applied again.** The service deletes an edit
+/// when it takes the answer, so in working order nothing answered is listed
+/// twice. The editor's signature cannot guard against a service that lists one
+/// anyway: it covers the sealed bytes and the moment, not the name the service
+/// gives them. So the phone keeps a digest of every edit it answered and the
+/// moment each was signed, and refuses as `replayed` an edit with bytes it has
+/// answered or signed long before the newest one it has.
+///
+/// **The listing is read with the read key.** Once the phone has registered
+/// that key, the queue answers nobody else, so an id that leaked no longer
+/// shows what an agent has asked for.
 public final class Applier {
     /// Edits taken in one run. A run happens at the head of every pass, so a
     /// long queue is walked a launch at a time rather than in one that the
@@ -48,6 +60,16 @@ public final class Applier {
     /// Enough pages for the queue's own ceiling several times over; a service
     /// answering nonsense ends the walk loudly rather than spinning.
     public static let maxPages = 20
+    /// How long before the newest answered edit another may have been signed
+    /// and still be applied, in seconds.
+    ///
+    /// The service takes an edit only when its moment is within five minutes of
+    /// its own clock, and lists edits in the order it took them. Two edits in
+    /// that order can therefore be signed at most ten minutes out of order, and
+    /// edits are answered in that order, a run stopping at the first it cannot
+    /// answer. Fifteen minutes is that bound with room over it: an edit signed
+    /// earlier still was taken long ago, and has been answered already.
+    public static let replayWindow: Int64 = 900
 
     public struct Applied: Equatable, Sendable {
         public var edits = 0
@@ -236,11 +258,14 @@ public final class Applier {
     /// The names waiting, in the order the service took them, up to this run's
     /// share of them.
     private func pending() async throws -> [String] {
+        let signer = try ReadSigner(
+            destination: destination, readKey: ReadKey.derive(from: readingKey()), store: store, now: now
+        )
         var names: [String] = []
         var after: String?
         for _ in 0 ..< Self.maxPages {
             let url = destination.editsURL(after: after, limit: Self.pageSize)
-            let answer = try await fetch(URLRequest(url: url))
+            let answer = try await fetch(signer.request(url))
             guard (200 ..< 300).contains(answer.status) else {
                 throw ApplyError.refused(status: answer.status, message: Uploader.said(answer.body))
             }
@@ -304,17 +329,39 @@ public final class Applier {
         }
 
         let result: Result
-        switch try open(answer) {
-        case let .items(items):
-            result = try await write(items, of: name)
-        case let .unreadable(code):
-            log.debug("\(name): could not be read at all, \(code.rawValue)")
-            try store.recordUnopenedEdit(name, code: code, at: now())
-            result = Result(written: 0, removed: 0, failed: [.init(item: 0, code: code)], days: [])
+        // An edit its editor signed and this phone has not answered before,
+        // written down once its answer has landed and not a moment sooner: an
+        // answer that did not land leaves the edit to be applied again.
+        var answering: Signed?
+        let (opened, signed) = try open(answer)
+        if let signed, let earlier = try replayed(signed) {
+            log.error("\(name): \(earlier); it was not applied again")
+            // Journaled only under a name the journal does not hold yet: the
+            // rows under its own name are what it did the first time.
+            if try store.edits(of: name).isEmpty {
+                try store.recordUnopenedEdit(name, code: .replayed, at: now())
+            }
+            result = Result(written: 0, removed: 0, failed: [.init(item: 0, code: .replayed)], days: [])
+        } else {
+            answering = signed
+            switch opened {
+            case let .items(items):
+                result = try await write(items, of: name)
+            case let .unreadable(code):
+                log.debug("\(name): could not be read at all, \(code.rawValue)")
+                try store.recordUnopenedEdit(name, code: code, at: now())
+                result = Result(written: 0, removed: 0, failed: [.init(item: 0, code: code)], days: [])
+            }
         }
 
         applied.days.formUnion(result.days)
         try await report(name, Efferent.Outcome(applied: result.applied, failed: result.failed))
+        if let answering {
+            try store.recordAnsweredEdit(
+                digest: answering.digest, name: name, signedAt: answering.at,
+                window: Self.replayWindow, at: now()
+            )
+        }
         applied.edits += 1
         applied.items += result.applied + result.failed.count
         applied.failed += result.failed.count
@@ -332,9 +379,18 @@ public final class Applier {
         case unreadable(OutcomeCode)
     }
 
+    /// What the editor's signature vouches for: the moment it was made, and a
+    /// digest of exactly the bytes it covers.
+    private struct Signed {
+        let at: Int64
+        let digest: Data
+    }
+
     /// The editor's signature, then the seal, then the shape. Each failure is
-    /// a word the outcome can carry.
-    private func open(_ answer: Answer) throws -> Opened {
+    /// a word the outcome can carry. Whatever the signature verified comes back
+    /// beside it, even for an edit that would not open: that is still an edit
+    /// its editor sent, and answered once.
+    private func open(_ answer: Answer) throws -> (Opened, Signed?) {
         guard let editor = answer.headers["x-efferent-editor"],
               let signature = answer.headers["x-efferent-signature"],
               let stamp = answer.headers["x-efferent-timestamp"], let timestamp = Int64(stamp),
@@ -347,8 +403,9 @@ public final class Applier {
                   )
               )
         else {
-            return .unreadable(.badSignature)
+            return (.unreadable(.badSignature), nil)
         }
+        let signed = Signed(at: timestamp, digest: Data(SHA256.hash(data: answer.body)))
         let plaintext: Data
         do {
             plaintext = try SealedBox.open(
@@ -357,13 +414,31 @@ public final class Applier {
                 associatedData: CanonicalRequest.associatedData(editBucket: destination.bucket)
             )
         } catch {
-            return .unreadable(.cannotOpen)
+            return (.unreadable(.cannotOpen), signed)
         }
         do {
-            return try .items(EditBatch.unpack(plaintext))
+            return try (.items(EditBatch.unpack(plaintext)), signed)
         } catch {
-            return .unreadable(.malformed)
+            return (.unreadable(.malformed), signed)
         }
+    }
+
+    /// Why an edit its editor did sign must still not be applied, or nil.
+    ///
+    /// Two ways an answered edit can come back, and one check for each. The
+    /// same bytes under any name carry the same digest. Bytes this phone has
+    /// let go of carry a moment from before the newest edit it answered, by
+    /// more than the window — and the window is wider than any two edits taken
+    /// in order can be apart.
+    private func replayed(_ signed: Signed) throws -> String? {
+        if let earlier = try store.answeredEdit(digest: signed.digest) {
+            return "its bytes were answered before, as \(earlier)"
+        }
+        if let newest = try store.newestAnsweredSignature(), signed.at < newest - Self.replayWindow {
+            return "it was signed at \(signed.at), more than \(Self.replayWindow) s before the newest "
+                + "edit answered (\(newest))"
+        }
+        return nil
     }
 
     /// The items, in order. A failure is written down and the next item goes;

@@ -5,7 +5,9 @@
  * twice, in two languages, and nothing but a check keeps them in step. A Swift
  * test packs, seals and signs a real request of two days; the reader unpacks
  * it, opens each day with the matching private key and checks the signature.
- * Drift between the two shows up here rather than on a phone.
+ * The read key goes the same way: both sides make it from one reading key, and
+ * the reader verifies a read the phone signed. Drift between the two shows up
+ * here rather than on a phone.
  *
  * This half runs the Swift test. Everything that touches a key is in
  * `reader/efferent/interop.py`, which is also where the reading side lives: a
@@ -62,6 +64,8 @@ const emitted = {
   editItems: marker(stdout, "EDIT_ITEMS"),
   editIds: marker(stdout, "EDIT_IDS"),
   editMetrics: marker(stdout, "EDIT_METRICS"),
+  reader: marker(stdout, "READER"),
+  readSignature: marker(stdout, "READSIGNATURE"),
   liveTimestamp: marker(stdout, "LIVETIMESTAMP"),
   liveSignature: marker(stdout, "LIVESIGNATURE"),
 };

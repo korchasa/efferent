@@ -9,6 +9,10 @@ here rather than on a phone.
 Two days rather than one on purpose: a batch of one would never exercise the
 boundary between them, which is where a framing disagreement would live.
 
+The read key is checked the same way. Neither side stores it — each makes it
+from the reading key — so the phone prints its public half and a read it signed,
+and this side has to arrive at the same key and verify the signature.
+
 This is the reading half. `deno task interop` runs the Swift half around it:
 `fixture` first, so the phone has an edit to open, then `check` with what the
 Swift test printed.
@@ -23,8 +27,9 @@ import json
 import sys
 from pathlib import Path
 
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 import efferent_hpke as wire
@@ -35,6 +40,7 @@ from .phone import (
     canonical_request,
     decompress,
     pack_day,
+    unix_now,
     unpack_days,
     verify_upload,
 )
@@ -159,6 +165,50 @@ def read_day(blob: bytes, day: str, private_raw: bytes, public_raw: bytes, bucke
     return events
 
 
+def verifies(public: bytes, signature: bytes, message: bytes) -> bool:
+    try:
+        Ed25519PublicKey.from_public_bytes(public).verify(signature, message)
+    except InvalidSignature:
+        return False
+    return True
+
+
+def check_read_key(fixture: dict, emitted: dict) -> None:
+    """The read key is kept nowhere: the phone and the reader each make it from
+    the reading key, and the service checks a read against the half the phone
+    registered. Two derivations that differ by one byte would have every signed
+    read refused, so the phone's half is compared with the one made here, and a
+    read the phone signed has to verify against it.
+
+    The fixture's reading key is the one the edit was sealed to: it is the only
+    private half both sides hold in this run."""
+    section("Making the read key on both sides")
+    reading_private = wire.base64url(fixture["readingPrivate"])
+    made_here = wire.read_key(reading_private).public_key().public_bytes(*wire.RAW)
+    expect(
+        emitted["reader"] == wire.to_base64url(made_here),
+        "the phone and the reader made different read keys from one reading key",
+    )
+
+    bucket, timestamp = fixture["bucket"], fixture["timestamp"]
+    target = f"/b/{bucket}/d?from={DAY}&to={SECOND_DAY}"
+    signature = wire.base64url(emitted["readSignature"])
+    expect(
+        verifies(made_here, signature, wire.canonical_read(bucket, target, timestamp).encode()),
+        "the reader could not verify a read the phone signed",
+    )
+    # The path and query are what make one signature open one read and no
+    # other: a signature that still verified with another range in it would
+    # open any range for five minutes.
+    widened = f"/b/{bucket}/d?from={DAY}&to=2026-12-31"
+    expect(
+        not verifies(
+            made_here, signature, wire.canonical_read(bucket, widened, timestamp).encode()
+        ),
+        "a read signed for one range verified for another — the query is not in the signature",
+    )
+
+
 def check(state_path: Path, emitted: dict, post_to: str | None) -> None:
     public_raw = wire.base64url(READING_PUBLIC)
     bucket = wire.bucket_of(public_raw)
@@ -248,6 +298,9 @@ def check(state_path: Path, emitted: dict, post_to: str | None) -> None:
         "dropping a day from the batch still verified — the days are not in the canonical string",
     )
 
+    fixture = json.loads(wire.base64url(json.loads(state_path.read_text())["fixture"]).decode())
+    check_read_key(fixture, emitted)
+
     if post_to:
         post(post_to, bucket, frame, emitted, private_raw, public_raw)
 
@@ -282,7 +335,7 @@ def post(
     """The bytes agree; whether a real service accepts them is a separate
     question, and the only way to answer it is to ask one."""
     section(f"Posting the Swift request to {post_to}")
-    status, answer = transport(
+    status, answer, _ = transport(
         "PUT",
         f"{post_to}/b/{bucket}/days",
         {
@@ -307,16 +360,41 @@ def post(
         (DAY, "agg:steps:2026-08-07T09:00:00Z:h"),
         (SECOND_DAY, "agg:steps:2026-08-08T09:00:00Z:h"),
     ):
-        _, stored = transport("GET", f"{post_to}/b/{bucket}/d/{day}")
+        stored = read(post_to, bucket, f"/b/{bucket}/d/{day}", private_raw)
         read_back = decompress(
             open_sealed(private_raw, public_raw, stored, associated_data(bucket, day))
         ).decode()
         expect(expected in read_back, f"what came back for {day} is not what went in")
         print(f"  {day}: {len(read_back.strip().splitlines())} lines back, {len(stored)} bytes")
 
-    _, listed = transport("GET", f"{post_to}/b/{bucket}/days")
+    # And both together, the way an agent asks for history: one request for
+    # the range, answered in the frame an upload travels in, the same bytes
+    # per day as the reads one at a time.
+    target = f"/b/{bucket}/d?from={DAY}&to={SECOND_DAY}"
+    ranged = wire.unpack_frame(read(post_to, bucket, target, private_raw))
+    expect(
+        [day for day, _ in ranged] == [DAY, SECOND_DAY],
+        f"the range came back as {[day for day, _ in ranged]}",
+    )
+    for day, blob in ranged:
+        expect(
+            blob == read(post_to, bucket, f"/b/{bucket}/d/{day}", private_raw),
+            f"{day} came back from the range as other bytes than on its own",
+        )
+
+    listed = read(post_to, bucket, f"/b/{bucket}/days", private_raw)
     days = json.loads(listed)["days"]
     expect(len(days) >= 2, f"the service listed {len(days)} days back")
+
+
+def read(post_to: str, bucket: str, target: str, private_raw: bytes) -> bytes:
+    """A read signed the way every reader signs one. This bucket has no read key
+    registered, so the service only ignores the signature — but the request is
+    then the one a real reader makes, headers and all."""
+    url = f"{post_to}{target}"
+    status, body, _ = transport("GET", url, wire.read_headers(url, bucket, private_raw, unix_now()))
+    expect(status == 200, f"the service answered {target} with {status}: {body[:200]!r}")
+    return body
 
 
 def main(argv: list[str] | None = None) -> None:

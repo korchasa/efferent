@@ -173,6 +173,41 @@ final class StoreTests: XCTestCase {
         )
     }
 
+    func testTheReadKeyIsRegisteredPerArchive() throws {
+        let store = try Store.inMemory()
+        try store.activateArchive("old-bucket")
+        XCTAssertFalse(try store.readerRegistered(for: "old-bucket"))
+        try store.recordReaderRegistered(for: "old-bucket")
+        XCTAssertTrue(try store.readerRegistered(for: "old-bucket"))
+        XCTAssertFalse(try store.readerRegistered(for: "new-bucket"))
+
+        XCTAssertTrue(try store.activateArchive("new-bucket"))
+        XCTAssertFalse(try store.readerRegistered(for: "old-bucket"), "a new archive registers its read key again")
+        XCTAssertFalse(try store.readerRegistered(for: "new-bucket"))
+    }
+
+    /// The record of answered edits keeps what the floor does not already
+    /// cover, and nothing of another archive's.
+    func testAnsweredEditsAreKeptInsideTheWindowAndForgottenWithTheArchive() throws {
+        let store = try Store.inMemory()
+        try store.activateArchive("old-bucket")
+        XCTAssertNil(try store.newestAnsweredSignature())
+
+        try store.recordAnsweredEdit(digest: Data([1]), name: "1757228400001-abcdefgh", signedAt: 1000, window: 900)
+        try store.recordAnsweredEdit(digest: Data([2]), name: "1757228400002-abcdefgh", signedAt: 1500, window: 900)
+        XCTAssertEqual(try store.answeredEdit(digest: Data([1])), "1757228400001-abcdefgh")
+        XCTAssertEqual(try store.newestAnsweredSignature(), 1500)
+
+        try store.recordAnsweredEdit(digest: Data([3]), name: "1757228400003-abcdefgh", signedAt: 2000, window: 900)
+        XCTAssertNil(try store.answeredEdit(digest: Data([1])), "signed 1000 s before the newest: the floor holds it")
+        XCTAssertEqual(try store.answeredEdit(digest: Data([2])), "1757228400002-abcdefgh")
+        XCTAssertEqual(try store.newestAnsweredSignature(), 2000)
+
+        XCTAssertTrue(try store.activateArchive("new-bucket"))
+        XCTAssertNil(try store.answeredEdit(digest: Data([2])))
+        XCTAssertNil(try store.newestAnsweredSignature(), "another archive's moments set no floor here")
+    }
+
     func testRememberingALegacyArchiveDoesNotRequeueItsDays() throws {
         let store = try Store.inMemory()
         try store.recordSent(day: "2026-08-07", digest: Data([0xAB]), sampleIdentifiers: [])

@@ -124,12 +124,13 @@ public final class Store {
                 arguments: [now]
             )
             try db.execute(
-                sql: "DELETE FROM meta WHERE key IN (?, ?, ?, ?, ?, ?)",
+                sql: "DELETE FROM meta WHERE key IN (?, ?, ?, ?, ?, ?, ?)",
                 arguments: [
                     MetaKey.lastUploadAt.rawValue,
                     MetaKey.backfillReached.rawValue,
                     MetaKey.lastReconciledAt.rawValue,
                     MetaKey.editorRegisteredFor.rawValue,
+                    MetaKey.readerRegisteredFor.rawValue,
                     MetaKey.wakeRegisteredAs.rawValue,
                     MetaKey.editsSeenAt.rawValue,
                 ]
@@ -138,6 +139,9 @@ public final class Store {
             // archive is another agent, and a list of edits nobody can act on any
             // more — the ids in it name records this phone no longer tracks.
             try db.execute(sql: "DELETE FROM editLog")
+            // What was answered was answered to another archive's queue, and
+            // its moments would hold this one's edits to a floor they never set.
+            try db.execute(sql: "DELETE FROM answeredEdit")
             try Self.setString(db, MetaKey.archiveBucket.rawValue, bucket)
             return true
         }
@@ -490,6 +494,61 @@ public final class Store {
     public func recordEditorRegistered(for bucket: String) throws {
         try dbQueue.write { db in
             try Self.setString(db, MetaKey.editorRegisteredFor.rawValue, bucket)
+        }
+    }
+
+    /// Whether this phone has told `bucket`'s service which key reads must be
+    /// signed with.
+    public func readerRegistered(for bucket: String) throws -> Bool {
+        try dbQueue.read { db in
+            try Self.string(db, MetaKey.readerRegisteredFor.rawValue) == bucket
+        }
+    }
+
+    public func recordReaderRegistered(for bucket: String) throws {
+        try dbQueue.write { db in
+            try Self.setString(db, MetaKey.readerRegisteredFor.rawValue, bucket)
+        }
+    }
+
+    // MARK: - Edits already answered
+
+    /// The name an edit with these sealed bytes was answered under, if it was.
+    public func answeredEdit(digest: Data) throws -> String? {
+        try dbQueue.read { db in
+            try String.fetchOne(
+                db, sql: "SELECT editName FROM answeredEdit WHERE digest = ?", arguments: [digest]
+            )
+        }
+    }
+
+    /// The moment the newest answered edit was signed at, or nil before any.
+    public func newestAnsweredSignature() throws -> Int64? {
+        try dbQueue.read { db in
+            try Int64.fetchOne(db, sql: "SELECT MAX(signedAt) FROM answeredEdit")
+        }
+    }
+
+    /// Write down an answered edit, and let go of every one signed more than
+    /// `window` seconds before the newest: the floor refuses those anyway.
+    public func recordAnsweredEdit(
+        digest: Data, name: String, signedAt: Int64, window: Int64, at moment: Date = Date()
+    ) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: """
+                INSERT OR REPLACE INTO answeredEdit (digest, editName, signedAt, answeredAt)
+                VALUES (?, ?, ?, ?)
+                """,
+                arguments: [digest, name, signedAt, moment.timeIntervalSince1970]
+            )
+            try db.execute(
+                sql: """
+                DELETE FROM answeredEdit
+                WHERE signedAt < (SELECT MAX(signedAt) FROM answeredEdit) - ?
+                """,
+                arguments: [window]
+            )
         }
     }
 

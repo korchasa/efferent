@@ -65,6 +65,11 @@ public struct Destination: Equatable, Codable, Sendable {
         bucketURL.appendingPathComponent("editor")
     }
 
+    /// Where the phone says which key may read.
+    public var readerURL: URL {
+        bucketURL.appendingPathComponent("reader")
+    }
+
     /// The queue of edits still waiting, or a page of it.
     public func editsURL(after: String? = nil, limit: Int) -> URL {
         var components = URLComponents(
@@ -159,6 +164,23 @@ public enum CanonicalRequest {
     /// The same string as `canonicalDeviceRegistration` on the service's side.
     public static func deviceRegistration(bucket: String, timestamp: Int64, body: Data) -> Data {
         canonical(["\(protocolName) device", bucket, String(timestamp)], body: body)
+    }
+
+    // MARK: - Reading
+
+    /// The same string as `canonicalReaderRegistration` on the service's side:
+    /// the writer naming the read key, which is the owner deciding who reads.
+    public static func readerRegistration(bucket: String, timestamp: Int64, body: Data) -> Data {
+        canonical(["\(protocolName) reader", bucket, String(timestamp)], body: body)
+    }
+
+    /// A read, as the read key signs it — the same string as `canonicalRead`.
+    ///
+    /// `target` is the path and query exactly as the request carries them, so
+    /// a signature for one page of a listing opens no other page. A read has
+    /// no body, so nothing is hashed.
+    public static func read(bucket: String, target: String, timestamp: Int64) -> Data {
+        Data(["\(protocolName) read", bucket, target, String(timestamp)].joined(separator: "\n").utf8)
     }
 
     public static func edit(bucket: String, timestamp: Int64, sealed: Data) -> Data {

@@ -164,6 +164,10 @@ public enum EditBatch {
 /// an item it is holding until its owner has looked at it, and `declined` is
 /// what it answers once they have said no. They are the reason an outcome can
 /// be sent twice for one edit.
+///
+/// `replayed` is the phone saying it answered this very edit before and wrote
+/// nothing the second time. A service in working order never lists an answered
+/// edit again; the word is for one that does.
 public enum OutcomeCode: String, Codable, Sendable, CaseIterable {
     case unknownMetric
     case badUnit
@@ -176,6 +180,7 @@ public enum OutcomeCode: String, Codable, Sendable, CaseIterable {
     case malformed
     case awaitingApproval
     case declined
+    case replayed
 }
 
 /// What the phone tells the service about one edit: how many items landed and
