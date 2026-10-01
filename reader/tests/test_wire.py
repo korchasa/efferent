@@ -184,6 +184,107 @@ class Days(unittest.TestCase):
             wire.expand(b'{"v":3,"series":[]}')
 
 
+class ReadKey(unittest.TestCase):
+    """The key a read is signed with. Nobody stores it: the phone and every
+    reader make it from the reading key, so the derivation itself is the
+    contract, and these vectors are what the Swift side is held to as well."""
+
+    READING_PRIVATE = bytes(range(1, 33))
+    BUCKET = "abucketidmadeupforthistest"
+    TARGET = f"/b/{BUCKET}/d?from=2026-08-01&to=2026-08-31"
+
+    def test_the_read_key_matches_the_published_vector(self):
+        key = wire.read_key(self.READING_PRIVATE)
+        seed = key.private_bytes(
+            serialization.Encoding.Raw,
+            serialization.PrivateFormat.Raw,
+            serialization.NoEncryption(),
+        )
+        self.assertEqual(
+            seed.hex(), "39e7d153a3e583b4036f36b661bf06e3714d6c29d969c347d2bbe45e6bdc87be"
+        )
+        self.assertEqual(
+            key.public_key().public_bytes(*RAW).hex(),
+            "434172a1e4cbfe85eb1097bdc785a22e5a293a0c05ddee75ff146822f9ee53b5",
+        )
+
+    def test_a_read_signature_matches_the_published_vector(self):
+        # Ed25519 here is deterministic, so the signature is a vector too. The
+        # phone's CryptoKit signs with fresh randomness, so the Swift test
+        # verifies this signature rather than reproducing it.
+        message = wire.canonical_read(self.BUCKET, self.TARGET, 1_700_000_000)
+        self.assertEqual(
+            message,
+            "efferent/v1 read\n"
+            "abucketidmadeupforthistest\n"
+            "/b/abucketidmadeupforthistest/d?from=2026-08-01&to=2026-08-31\n"
+            "1700000000",
+        )
+        self.assertEqual(
+            wire.read_key(self.READING_PRIVATE).sign(message.encode()).hex(),
+            "babf8af472d036155a4cbb7bb5385cb0dc360aa18e27c825660609b5d28937f9"
+            "502366c466fbfb9fc724e8d0d3615e47f77b6f9fe62c312b80f3a8267d037900",
+        )
+
+    def test_the_headers_sign_the_path_and_query_exactly_as_sent(self):
+        url = f"https://efferent.example{self.TARGET}"
+        headers = wire.read_headers(url, self.BUCKET, self.READING_PRIVATE, 1_700_000_000)
+
+        self.assertEqual(headers["X-Efferent-Timestamp"], "1700000000")
+        public = wire.read_key(self.READING_PRIVATE).public_key()
+        self.assertEqual(headers["X-Efferent-Reader"], wire.to_base64url(public.public_bytes(*RAW)))
+        public.verify(
+            wire.base64url(headers["X-Efferent-Signature"]),
+            wire.canonical_read(self.BUCKET, self.TARGET, 1_700_000_000).encode(),
+        )
+
+        # No query, no question mark: the service signs what the URL parser
+        # leaves of it, and an empty query leaves nothing.
+        bare = wire.read_headers(
+            f"https://efferent.example/b/{self.BUCKET}/stats", self.BUCKET, self.READING_PRIVATE, 1
+        )
+        public.verify(
+            wire.base64url(bare["X-Efferent-Signature"]),
+            wire.canonical_read(self.BUCKET, f"/b/{self.BUCKET}/stats", 1).encode(),
+        )
+
+    def test_another_reading_key_makes_another_read_key(self):
+        one = wire.read_key(self.READING_PRIVATE).public_key().public_bytes(*RAW)
+        other = wire.read_key(bytes(range(2, 34))).public_key().public_bytes(*RAW)
+        self.assertNotEqual(one, other)
+
+
+class Frames(unittest.TestCase):
+    """A range answer: the upload frame travelling back."""
+
+    @staticmethod
+    def frame(*days: tuple[str, bytes]) -> bytes:
+        return b"".join(day.encode() + len(blob).to_bytes(4, "big") + blob for day, blob in days)
+
+    def test_days_come_back_in_order_with_their_bytes(self):
+        body = self.frame(("2026-08-01", b"one"), ("2026-08-03", b"three"))
+        self.assertEqual(
+            wire.unpack_frame(body), [("2026-08-01", b"one"), ("2026-08-03", b"three")]
+        )
+
+    def test_an_empty_answer_is_a_range_with_no_days(self):
+        self.assertEqual(wire.unpack_frame(b""), [])
+
+    def test_every_way_a_frame_is_wrong_is_refused_whole(self):
+        good = self.frame(("2026-08-01", b"one"))
+        cases = [
+            (good[:-1], "only 2 are there"),
+            (good + b"2026-08", "left over"),
+            (self.frame(("2026-08-01", b"one"), ("2026-08-01", b"again")), "ascend"),
+            (self.frame(("2026-02-30", b"one")), "not a day"),
+            (self.frame(("2026-08-01", b"")), "no body"),
+        ]
+        for body, pattern in cases:
+            with self.subTest(pattern=pattern):
+                with self.assertRaisesRegex(ValueError, pattern):
+                    wire.unpack_frame(body)
+
+
 class Edits(unittest.TestCase):
     PUT = {
         "op": "put",

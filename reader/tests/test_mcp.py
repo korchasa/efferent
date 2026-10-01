@@ -520,13 +520,8 @@ class Writing(Served):
 
         def service(method, url, headers=None, body=None):
             taken.update(method=method, url=url, headers=headers, body=body)
-            return 201, json.dumps(
-                {
-                    "name": "1767300000000-abcdefgh",
-                    "at": "2026-01-01T20:00:00.000Z",
-                    "bytes": len(body),
-                }
-            ).encode()
+            answer = {"name": "1767300000000-abcdefgh", "at": "2026-01-01T20:00:00.000Z"}
+            return 201, json.dumps({**answer, "bytes": len(body)}).encode(), {}
 
         with mock.patch("efferent.archive.transport", service):
             answer = self.call("phone_data_write", {"items": [MEAL, NAP]})
@@ -573,7 +568,8 @@ class Writing(Served):
         self.seed_editor()
 
         def service(*_, **__):
-            return 403, json.dumps({"error": "no editor is registered for this bucket"}).encode()
+            refusal = {"error": "no editor is registered for this bucket"}
+            return 403, json.dumps(refusal).encode(), {}
 
         with mock.patch("efferent.archive.transport", service):
             answer = self.call("phone_data_write", {"items": [MEAL]})
@@ -610,48 +606,62 @@ class Writing(Served):
         )
 
         def service(method, url, headers=None, body=None):
+            # Every read is signed with the key made from the reading key,
+            # whether or not the phone has registered it yet.
+            self.assertEqual(
+                headers["X-Efferent-Reader"],
+                wire.to_base64url(
+                    wire.read_key(self.reading_private).public_key().public_bytes(*wire.RAW)
+                ),
+            )
             # The listing carries counts; the outcome is asked for only where
-            # something was refused, and it says which item and why.
+            # something did not land, and it says which item and why. The first
+            # outcome was stored before the word changed and still says
+            # `refused`; it is a real answer and is read as one.
             if "/o/1767300000000-abcdefgh" in url:
-                return 200, json.dumps(
-                    {
-                        "applied": 1,
-                        "refused": [{"item": 1, "code": "badRange"}],
-                        "bytes": 300,
-                        "at": "2026-01-01T20:00:00.000Z",
-                    }
-                ).encode()
+                legacy = {"applied": 1, "refused": [{"item": 1, "code": "badRange"}]}
+                return 200, json.dumps({**legacy, "bytes": 300}).encode(), {}
+            if "/o/1767300002000-yyyyyyyy" in url:
+                current = {"applied": 0, "failed": [{"item": 0, "code": "replayed"}]}
+                return 200, json.dumps({**current, "bytes": 90}).encode(), {}
             self.assertIn(f"/b/{self.bucket}/edits", url)
             self.assertIn("status=all", url)
-            return 200, json.dumps(
-                {
-                    "edits": [
-                        {
-                            "name": "1767300000000-abcdefgh",
-                            "bytes": 300,
-                            "at": "2026-01-01T20:00:00.000Z",
-                            "status": "partial",
-                            "applied": 1,
-                            "refused": 1,
-                        },
-                        {
-                            "name": "1767300001000-zzzzzzzz",
-                            "bytes": 200,
-                            "at": "2026-01-01T20:00:01.000Z",
-                            "status": "pending",
-                        },
-                    ],
-                    "next": None,
-                }
-            ).encode()
+            listing = {
+                "edits": [
+                    {
+                        "name": "1767300000000-abcdefgh",
+                        "bytes": 300,
+                        "at": "2026-01-01T20:00:00.000Z",
+                        "status": "partial",
+                        "applied": 1,
+                        "failed": 1,
+                    },
+                    {
+                        "name": "1767300001000-zzzzzzzz",
+                        "bytes": 200,
+                        "at": "2026-01-01T20:00:01.000Z",
+                        "status": "pending",
+                    },
+                    {
+                        "name": "1767300002000-yyyyyyyy",
+                        "bytes": 90,
+                        "at": "2026-01-01T20:00:02.000Z",
+                        "status": "failed",
+                        "applied": 0,
+                        "failed": 1,
+                    },
+                ],
+                "next": None,
+            }
+            return 200, json.dumps(listing).encode(), {}
 
         with mock.patch("efferent.archive.transport", service):
             answer = self.call("phone_data_edits", {"status": "all"})
 
         self.assertFalse(answer["isError"], answer["text"])
         self.assertIsNone(answer["body"]["next"])
-        self.assertEqual(len(answer["body"]["edits"]), 2)
-        known, unknown = answer["body"]["edits"]
+        self.assertEqual(len(answer["body"]["edits"]), 3)
+        known, unknown, replayed = answer["body"]["edits"]
         self.assertEqual(known["status"], "partial")
         self.assertEqual(known["applied"], 1)
         self.assertEqual([item["id"] for item in known["items"]], [MEAL["id"], NAP["id"]])
@@ -661,6 +671,9 @@ class Writing(Served):
         # before the record existed — is listed as the service knows it.
         self.assertEqual(unknown["status"], "pending")
         self.assertNotIn("items", unknown)
+        # An edit the phone had already answered once, handed back again: it
+        # wrote nothing and says so.
+        self.assertEqual(replayed["refusals"], [{"item": 0, "code": "replayed"}])
 
 
 if __name__ == "__main__":

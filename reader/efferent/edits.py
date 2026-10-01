@@ -9,9 +9,12 @@ import re
 
 import efferent_hpke as wire
 
-#: The phone's word for why it refused one item. The last two are legacy: a
-#: build that asked its owner before changing or removing a record produced
-#: them, no phone does now, and an outcome is told once and never revised.
+#: The phone's word for why it refused one item. `awaitingApproval` and
+#: `declined` are legacy: a build that asked its owner before changing or
+#: removing a record produced them, no phone does now, and an outcome is told
+#: once and never revised. `replayed` means the phone had already answered this
+#: very edit and wrote nothing the second time, which only happens when the
+#: service hands back an edit it should have deleted.
 OUTCOME_CODES = (
     "unknownMetric",
     "badUnit",
@@ -24,6 +27,7 @@ OUTCOME_CODES = (
     "malformed",
     "awaitingApproval",
     "declined",
+    "replayed",
 )
 
 EDIT_NAME = re.compile(r"^\d{13}-[a-z2-7]{8}$")

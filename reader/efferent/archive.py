@@ -26,7 +26,7 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 import efferent_hpke as wire
 
-from .days import is_day, now_iso
+from .days import add_days, is_day, now_iso
 from .phone import canonical_edit, decompress, sign, unix_now
 from .sealed import associated_data, edit_associated_data, open_sealed
 
@@ -36,7 +36,16 @@ READING = "reading-key.json"
 EDITOR = "editor-key.json"
 EDITS = "edits.json"
 USER_AGENT = "efferent-local-reader/1.0"
-FETCH_WINDOW = 8
+#: How many ranges are asked for at once. Each answer is up to a quarter of
+#: days, so a handful already fills the link.
+FETCH_WINDOW = 4
+#: The longest run of days one range asks for: a quarter, which is what the
+#: service hands back in one answer.
+SPAN_DAYS = 92
+#: How far apart two wanted days may be and still share a request. The days
+#: between come along and are dropped here; a week of them weighs less than
+#: the request that would fetch the second day on its own.
+GAP_DAYS = 7
 RAW = (serialization.Encoding.Raw, serialization.PublicFormat.Raw)
 
 
@@ -240,22 +249,36 @@ def mirrored_days(start: str | None = None, end: str | None = None) -> list[str]
 
 def transport(method: str, url: str, headers: dict | None = None, body: bytes | None = None):
     """One place every request goes through, so a test can stand in for the
-    service. Answers `(status, body)`; a refusal is a status, not an exception."""
+    service. Answers `(status, body, headers)`, the headers named in lower
+    case; a refusal is a status, not an exception."""
     request = Request(
         url, data=body, method=method, headers={"User-Agent": USER_AGENT, **(headers or {})}
     )
     try:
         with urlopen(request, timeout=30) as response:
-            return response.status, response.read()
+            answered = {name.lower(): value for name, value in response.headers.items()}
+            return response.status, response.read(), answered
     except HTTPError as error:
-        return error.code, error.read()
+        answered = {name.lower(): value for name, value in error.headers.items()}
+        return error.code, error.read(), answered
 
 
-def fetch_json(url: str):
-    status, body = transport("GET", url)
-    if status >= 400:
-        raise ArchiveError(f"{url}: {status} {body.decode('utf-8', 'replace')}")
-    return json.loads(body)
+def spans(names: list[str]) -> list[tuple[str, str, list[str]]]:
+    """Wanted days as ranges to ask for, each with the wanted days inside it.
+
+    A range ends where the next wanted day is more than `GAP_DAYS` on, or where
+    it would pass `SPAN_DAYS`. A sync of a decade is then a few dozen requests
+    rather than one per day, and a refresh of three scattered days is three
+    small ones rather than a year of days nobody asked for."""
+    ranges: list[tuple[str, str, list[str]]] = []
+    for day in sorted(set(names)):
+        if ranges:
+            first, last, inside = ranges[-1]
+            if day <= add_days(last, GAP_DAYS) and day < add_days(first, SPAN_DAYS):
+                ranges[-1] = (first, day, [*inside, day])
+                continue
+        ranges.append((day, day, [day]))
+    return ranges
 
 
 def refusal(body: bytes, status: int) -> str:
@@ -283,18 +306,71 @@ class Archive:
         self.private_raw = raw_private(reading["readingPrivate"])
         self.bucket = wire.bucket_of(self.reading_public)
 
-    def day(self, name: str) -> dict:
-        status, blob = transport(
-            "GET",
-            f"{self.endpoint}/b/{self.bucket}/d/{name}",
-            {"Accept": "application/octet-stream"},
-        )
+    def read(self, target: str, accept: str = "application/json"):
+        """A GET of `target`, signed with the read key made from the reading key.
+
+        Signed whether or not the phone has registered that key: before it has,
+        the service ignores the signature, and after it, a read without one is
+        refused. Signing always is what lets one reader serve both."""
+        url = f"{self.endpoint}{target}"
+        signed = wire.read_headers(url, self.bucket, self.private_raw, unix_now())
+        return transport("GET", url, {"Accept": accept, **signed})
+
+    def read_json(self, target: str):
+        status, body, _ = self.read(target)
         if status >= 400:
-            raise ArchiveError(f"{name}: {status} {blob.decode('utf-8', 'replace')}")
+            raise ArchiveError(f"{target}: {status} {refusal(body, status)}")
+        return json.loads(body)
+
+    def opened(self, day: str, blob: bytes) -> dict:
         sealed = open_sealed(
-            self.private_raw, self.reading_public, blob, associated_data(self.bucket, name)
+            self.private_raw, self.reading_public, blob, associated_data(self.bucket, day)
         )
-        return {"day": name, "events": events_of(decompress(sealed))}
+        return {"day": day, "events": events_of(decompress(sealed))}
+
+    def span(self, first: str, last: str) -> dict[str, bytes]:
+        """Every day the archive holds from `first` to `last`, sealed, in as
+        many answers as the service needs: it names the last day it sent while
+        more remain, and that goes back as `after`."""
+        found: dict[str, bytes] = {}
+        after = ""
+        while True:
+            parameters = {"from": first, "to": last, **({"after": after} if after else {})}
+            status, body, headers = self.read(
+                f"/b/{self.bucket}/d?{urlencode(parameters)}", "application/octet-stream"
+            )
+            if status == 405:
+                raise ArchiveError(
+                    f"{first} to {last}: the service does not hand ranges back yet — "
+                    "it predates this reader, and its Worker needs deploying first"
+                )
+            if status >= 400:
+                raise ArchiveError(f"{first} to {last}: {status} {refusal(body, status)}")
+            try:
+                days = wire.unpack_frame(body)
+            except ValueError as error:
+                raise ArchiveError(f"{first} to {last}: {error}") from None
+            for day, blob in days:
+                if day < first or day > last or day <= after:
+                    raise ArchiveError(f"the service answered {first} to {last} with {day}")
+                found[day] = blob
+            following = headers.get("x-efferent-next")
+            if not following:
+                return found
+            if following <= after:
+                raise ArchiveError(f"the service asked to go on from {following} after {after}")
+            after = following
+
+    def fetch(self, wanted: tuple[str, str, list[str]]) -> list[dict]:
+        """One range, opened: the wanted days inside it and nothing else. A day
+        asked for and not handed back stops the fetch, because a mirror that
+        recorded a day it never received would never ask for it again."""
+        first, last, inside = wanted
+        found = self.span(first, last)
+        missing = [day for day in inside if day not in found]
+        if missing:
+            raise ArchiveError(f"{missing[0]}: the archive no longer holds this day")
+        return [self.opened(day, found[day]) for day in inside]
 
     def list(self, start: str | None = None, end: str | None = None) -> list[dict]:
         """Which days the archive has in a range. Following `next` until it
@@ -310,22 +386,34 @@ class Archive:
                 parameters["from"] = start
             if end:
                 parameters["to"] = end
-            page = fetch_json(f"{self.endpoint}/b/{self.bucket}/days?{urlencode(parameters)}")
+            query = f"?{urlencode(parameters)}" if parameters else ""
+            page = self.read_json(f"/b/{self.bucket}/days{query}")
             entries.extend(page["days"])
             if page.get("next") is None:
                 return entries
             after = page["next"]
 
     def several(self, names: list[str], width: int = FETCH_WINDOW):
-        """Named days, several at a time, in the order they were asked for. The
-        window is small on purpose — enough to fill the link, not enough to
-        look like an attack on it."""
+        """Named days, in the order they were asked for, fetched as ranges a few
+        at a time. The window is small on purpose — enough to fill the link,
+        not enough to look like an attack on it."""
+        order = list(dict.fromkeys(names))
+        ranges = spans(order)
+        ready: dict[str, dict] = {}
+        position = 0
         with ThreadPoolExecutor(max_workers=width) as pool:
-            for start in range(0, len(names), width):
-                yield from pool.map(self.day, names[start : start + width])
+            for start in range(0, len(ranges), width):
+                for opened in pool.map(self.fetch, ranges[start : start + width]):
+                    for day in opened:
+                        ready[day["day"]] = day
+                # Whatever is next in the order asked for goes out as soon as
+                # it is here, so a sync records its progress as it goes.
+                while position < len(order) and order[position] in ready:
+                    yield ready.pop(order[position])
+                    position += 1
 
     def stats(self) -> dict:
-        return fetch_json(f"{self.endpoint}/b/{self.bucket}/stats")
+        return self.read_json(f"/b/{self.bucket}/stats")
 
     def submit_edits(self, items: list) -> dict:
         """An edit, the way the phone will check it: sealed to the reading key
@@ -344,7 +432,7 @@ class Archive:
         signature = sign(
             raw_private(editor["editorPrivate"]), canonical_edit(self.bucket, timestamp, sealed)
         )
-        status, body = transport(
+        status, body, _ = transport(
             "POST",
             f"{self.endpoint}/b/{self.bucket}/edits",
             {
@@ -374,14 +462,19 @@ class Archive:
             parameters["status"] = status
         if limit:
             parameters["limit"] = str(limit)
-        page = fetch_json(f"{self.endpoint}/b/{self.bucket}/edits?{urlencode(parameters)}")
+        query = f"?{urlencode(parameters)}" if parameters else ""
+        page = self.read_json(f"/b/{self.bucket}/edits{query}")
         known = {edit["name"]: edit["items"] for edit in submitted_edits()}
         entries = []
         for entry in page["edits"]:
             items = known.get(entry["name"])
             laid = {**entry, "items": items} if items is not None else {**entry}
-            if (entry.get("refused") or 0) > 0:
-                outcome = fetch_json(f"{self.endpoint}/b/{self.bucket}/o/{entry['name']}")
+            # Items that did not land are `failed`, in the listing and in the
+            # outcome. An outcome stored before the word changed says `refused`
+            # and is a real answer, so it is read under that name rather than
+            # reported as having none.
+            if (entry.get("failed") or 0) > 0:
+                outcome = self.read_json(f"/b/{self.bucket}/o/{entry['name']}")
                 laid["refusals"] = [
                     {
                         **refused,
@@ -391,7 +484,7 @@ class Archive:
                             else {}
                         ),
                     }
-                    for refused in outcome["refused"]
+                    for refused in outcome.get("failed", outcome.get("refused", []))
                 ]
             entries.append(laid)
         return {"edits": entries, "next": page.get("next")}

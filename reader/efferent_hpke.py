@@ -25,6 +25,9 @@ SEALED_VERSION = 2
 ENC_BYTES = 32
 USER_AGENT = "efferent-local-reader/1.0"
 RAW = (serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+# What one answer from the service may weigh before this reader stops reading
+# it. A day is at most a mebibyte and a range answer at most eight.
+MAX_ANSWER_BYTES = 16 * 1024 * 1024
 
 # RFC 9180 HPKE, base mode, DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 and
 # ChaCha20-Poly1305, written out below rather than imported: the only
@@ -211,28 +214,174 @@ def load_handoff(handoff_path: Path) -> tuple[str, str, bytes, bytes | None]:
     return connection(handoff_path.read_text())
 
 
-def read_day(handoff_path: Path, day: str) -> bytes:
-    endpoint, bucket, private_raw, _ = load_handoff(handoff_path)
-    aad = f"efferent/v1\n{bucket}\n{day}".encode()
+def is_day(value: object) -> bool:
+    """A calendar day, and one that exists: the 31st of February matches the
+    pattern and is no day anybody can ask for."""
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        return False
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
 
-    # This request contains only the bucket and date. The reading key remains local.
+
+# Every read is signed. The key is an Ed25519 key whose seed is
+# HKDF-SHA256(reading private key, salt empty, info "efferent/v1 read", 32), so
+# whoever holds the reading key holds this one too and the reading key itself
+# never travels. The phone registers the public half with the service; from
+# then on the bucket id alone opens nothing, and a read must name this bucket,
+# the path and query it asks for, and a moment near the service's clock. Before
+# the phone registers it the service ignores the signature, so signing always
+# is what lets this script read both.
+
+READ_INFO = b"efferent/v1 read"
+
+
+def read_key(reading_private_raw: bytes) -> Ed25519PrivateKey:
+    seed = hkdf_expand(hkdf_extract(b"", reading_private_raw), READ_INFO, 32)
+    return Ed25519PrivateKey.from_private_bytes(seed)
+
+
+def canonical_read(bucket: str, target: str, timestamp: int) -> str:
+    return f"efferent/v1 read\n{bucket}\n{target}\n{timestamp}"
+
+
+def read_headers(url: str, bucket: str, reading_private_raw: bytes, timestamp: int) -> dict:
+    """The three headers that sign a read of this URL. What is signed is the path
+    and query exactly as they are sent, so a signature for one day opens no
+    other day and one page of a listing no other page."""
+    parts = urlsplit(url)
+    target = parts.path + (f"?{parts.query}" if parts.query else "")
+    key = read_key(reading_private_raw)
+    return {
+        "X-Efferent-Timestamp": str(timestamp),
+        "X-Efferent-Reader": to_base64url(key.public_key().public_bytes(*RAW)),
+        "X-Efferent-Signature": to_base64url(
+            key.sign(canonical_read(bucket, target, timestamp).encode())
+        ),
+    }
+
+
+def get(url: str, bucket: str, reading_private_raw: bytes, accept: str):
+    """One signed read: the body and the headers, or the service's refusal."""
     request = Request(
-        f"{endpoint}/b/{bucket}/d/{day}",
+        url,
         headers={
-            "Accept": "application/octet-stream",
+            "Accept": accept,
             "User-Agent": USER_AGENT,
+            **read_headers(url, bucket, reading_private_raw, int(time.time())),
         },
     )
-    with urlopen(request, timeout=30) as response:
-        blob = response.read(16 * 1024 * 1024 + 1)
-    if len(blob) > 16 * 1024 * 1024:
-        raise ValueError("the sealed day exceeds the 16 MiB protocol limit")
+    try:
+        with urlopen(request, timeout=30) as response:
+            body = response.read(MAX_ANSWER_BYTES + 1)
+            headers = response.headers
+    except HTTPError as error:
+        raise SystemExit(
+            f"the service refused {urlsplit(url).path}: {error.code} "
+            f"{error.read().decode('utf-8', 'replace')}"
+        ) from None
+    if len(body) > MAX_ANSWER_BYTES:
+        raise ValueError("the answer exceeds the 16 MiB this reader will hold")
+    return body, headers
+
+
+def open_day(bucket: str, reading_private_raw: bytes, day: str, blob: bytes) -> bytes:
+    """A sealed day, opened. The day is bound into the tag, so a blob handed
+    back under another date does not open at all."""
     if not blob or blob[0] != SEALED_VERSION:
         version = blob[0] if blob else "missing"
         raise ValueError(f"expected HPKE sealed version 2, got {version}")
-
-    compressed = hpke_open(private_raw, INFO, aad, blob[1:])
+    aad = f"efferent/v1\n{bucket}\n{day}".encode()
+    compressed = hpke_open(reading_private_raw, INFO, aad, blob[1:])
     return zlib.decompress(compressed, -zlib.MAX_WBITS)
+
+
+FRAME_HEADER_BYTES = 14
+
+
+def unpack_frame(body: bytes) -> list[tuple[str, bytes]]:
+    """A range answer, which is the frame an upload uses travelling back: ten
+    bytes of ASCII day, four of big-endian length, the sealed day, repeated to
+    the end. Days ascend and never repeat. An empty body is a range with no days
+    in it; anything left over is a truncated frame, refused whole rather than
+    read as far as it goes."""
+    days: list[tuple[str, bytes]] = []
+    offset = 0
+    previous = ""
+    while offset < len(body):
+        left = len(body) - offset
+        if left < FRAME_HEADER_BYTES:
+            raise ValueError(f"{left} bytes left over where a day was expected")
+        day = body[offset : offset + 10].decode("ascii", "replace")
+        length = int.from_bytes(body[offset + 10 : offset + FRAME_HEADER_BYTES], "big")
+        if not is_day(day):
+            raise ValueError(f"{json.dumps(day)} is not a day")
+        if day <= previous:
+            raise ValueError(f"days must ascend without repeats: {previous} then {day}")
+        if length == 0:
+            raise ValueError(f"{day} carries no body")
+        if left - FRAME_HEADER_BYTES < length:
+            raise ValueError(
+                f"{day} says {length} bytes and only {left - FRAME_HEADER_BYTES} are there"
+            )
+        start = offset + FRAME_HEADER_BYTES
+        days.append((day, body[start : start + length]))
+        previous = day
+        offset = start + length
+    return days
+
+
+def read_day(handoff_path: Path, day: str) -> bytes:
+    endpoint, bucket, private_raw, _ = load_handoff(handoff_path)
+    blob, _ = get(f"{endpoint}/b/{bucket}/d/{day}", bucket, private_raw, "application/octet-stream")
+    return open_day(bucket, private_raw, day, blob)
+
+
+def read_range(handoff_path: Path, first: str, last: str):
+    """Every day from first to last, both included, as NDJSON lines with the
+    day on each. The service answers a quarter of days, or eight mebibytes, per
+    request and names the last day it sent while more remain."""
+    endpoint, bucket, private_raw, _ = load_handoff(handoff_path)
+    after = ""
+    while True:
+        query = f"from={first}&to={last}" + (f"&after={after}" if after else "")
+        body, headers = get(
+            f"{endpoint}/b/{bucket}/d?{query}", bucket, private_raw, "application/octet-stream"
+        )
+        for day, blob in unpack_frame(body):
+            if day < first or day > last or day <= after:
+                raise ValueError(f"the service answered {first} to {last} with {day}")
+            for line in expand(open_day(bucket, private_raw, day, blob)).splitlines():
+                event = json.loads(line)
+                event["day"] = day
+                yield json.dumps(event, sort_keys=True) + "\n"
+        following = headers.get("X-Efferent-Next")
+        if not following:
+            return
+        if following <= after:
+            raise ValueError(f"the service asked to go on from {following} after {after}")
+        after = following
+
+
+def list_days(handoff_path: Path, first: str | None, last: str | None):
+    """Which days the archive holds, how big each is and when it was last
+    uploaded, one JSON object per line. Nothing is decrypted, because nothing
+    here is sealed: it is what the service itself knows."""
+    endpoint, bucket, private_raw, _ = load_handoff(handoff_path)
+    after = ""
+    while True:
+        parameters = [f"after={after}"] if after else [f"from={first}"] if first else []
+        parameters += [f"to={last}"] if last else []
+        query = f"?{'&'.join(parameters)}" if parameters else ""
+        body, _ = get(f"{endpoint}/b/{bucket}/days{query}", bucket, private_raw, "application/json")
+        page = json.loads(body)
+        for entry in page["days"]:
+            yield json.dumps(entry, sort_keys=True) + "\n"
+        if not page.get("next"):
+            return
+        after = page["next"]
 
 
 DAY_FORMAT_VERSION = 2
@@ -438,50 +587,65 @@ def write_edit(handoff_path: Path, items_path: Path) -> str:
         ) from None
 
 
-def list_edits(handoff_path: Path) -> str:
+def list_edits(handoff_path: Path):
     """Every edit and what the phone said about it, one JSON object per line.
-    The listing is keyless: it names edits and counts, never their contents."""
-    endpoint, bucket, _, _ = load_handoff(handoff_path)
-    lines = []
+    The listing names edits and counts, never their contents."""
+    endpoint, bucket, private_raw, _ = load_handoff(handoff_path)
     after = ""
     while True:
         query = f"?status=all&after={after}" if after else "?status=all"
-        request = Request(f"{endpoint}/b/{bucket}/edits{query}", headers={"User-Agent": USER_AGENT})
-        with urlopen(request, timeout=30) as response:
-            page = json.loads(response.read())
-        lines.extend(json.dumps(entry, sort_keys=True) for entry in page["edits"])
+        body, _ = get(
+            f"{endpoint}/b/{bucket}/edits{query}", bucket, private_raw, "application/json"
+        )
+        page = json.loads(body)
+        for entry in page["edits"]:
+            yield json.dumps(entry, sort_keys=True) + "\n"
         if not page.get("next"):
-            return "".join(line + "\n" for line in lines)
+            return
         after = page["next"]
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--handoff", type=Path, help="the file holding the phone's handoff")
-    what = parser.add_mutually_exclusive_group(required=True)
+    what = parser.add_mutually_exclusive_group()
     what.add_argument("--self-test", action="store_true", help="check HPKE against RFC 9180 A.2.1")
     what.add_argument("--day", help="YYYY-MM-DD: fetch and decrypt that day")
+    what.add_argument("--list", action="store_true", help="list the days held, without decrypting")
     what.add_argument("--write", type=Path, help="a JSON file of items to write into Health")
     what.add_argument("--edits", action="store_true", help="list the edits and their outcomes")
+    parser.add_argument("--from", dest="first", help="YYYY-MM-DD: the first day of a range")
+    parser.add_argument("--to", dest="last", help="YYYY-MM-DD: the last day of a range")
     args = parser.parse_args()
+    for flag, value in (("--day", args.day), ("--from", args.first), ("--to", args.last)):
+        if value is not None and not is_day(value):
+            parser.error(f"{flag} must be YYYY-MM-DD and a date that exists")
+    ranged = args.first is not None or args.last is not None
+    if ranged and not args.list and (args.first is None or args.last is None):
+        parser.error("a range of days takes both --from and --to")
+    if ranged and args.first is not None and args.last is not None and args.first > args.last:
+        parser.error("--from must not be after --to")
+    if ranged and (args.self_test or args.day or args.write or args.edits):
+        parser.error("--from and --to go with --list or alone")
     if args.self_test:
         self_test()
         return
+    if not (args.day or args.list or args.write or args.edits or ranged):
+        parser.error(
+            "say what to do: --from and --to, --day, --list, --edits, --write, --self-test"
+        )
     if args.handoff is None:
         parser.error("--handoff is required")
     if args.write:
         sys.stdout.write(write_edit(args.handoff, args.write) + "\n")
-        return
-    if args.edits:
-        sys.stdout.write(list_edits(args.handoff))
-        return
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.day):
-        parser.error("--day must be YYYY-MM-DD")
-    try:
-        date.fromisoformat(args.day)
-    except ValueError:
-        parser.error("--day must be YYYY-MM-DD")
-    sys.stdout.write(expand(read_day(args.handoff, args.day)))
+    elif args.edits:
+        sys.stdout.writelines(list_edits(args.handoff))
+    elif args.list:
+        sys.stdout.writelines(list_days(args.handoff, args.first, args.last))
+    elif args.day:
+        sys.stdout.write(expand(read_day(args.handoff, args.day)))
+    else:
+        sys.stdout.writelines(read_range(args.handoff, args.first, args.last))
 
 
 if __name__ == "__main__":
