@@ -976,8 +976,10 @@ TOOLS = [
                 "type was",
                 "declined on the phone, notFound for a delete of an id never written, "
                 "healthRefused when",
-                "Health itself said no. Edits this machine submitted also show the ids they "
-                "carried.",
+                "Health itself said no, replayed when the phone had already answered that very "
+                "edit and",
+                "wrote nothing the second time. Edits this machine submitted also show the ids "
+                "they carried.",
                 "",
                 "Every item lands, including one that changes or removes a record already in "
                 "Health —",

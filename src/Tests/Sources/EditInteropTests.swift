@@ -11,7 +11,9 @@ import XCTest
 /// consistent. So `scripts/interop.ts` seals and signs an edit with the
 /// TypeScript side, hands it over in the environment, and this test takes it
 /// through exactly the checks `Applier` makes: the editor signature over the
-/// canonical message, the box with the bucket in its tag, and the items.
+/// canonical message, the box with the bucket in its tag, and the items. It
+/// also makes the read key from the fixture's reading key, for the reader to
+/// compare with its own.
 ///
 /// The fixture arrives base64url-encoded in `EFFERENT_EDIT_FIXTURE`, which
 /// `xcodebuild` passes through from `TEST_RUNNER_EFFERENT_EDIT_FIXTURE`. Its
@@ -76,5 +78,17 @@ final class EditInteropTests: XCTestCase {
         print("EFFERENT_INTEROP_EDIT_ITEMS=\(items.count)")
         print("EFFERENT_INTEROP_EDIT_IDS=\(items.map(\.id).joined(separator: ","))")
         print("EFFERENT_INTEROP_EDIT_METRICS=\(metrics.joined(separator: ","))")
+
+        // The read key, made from the same reading key. Nobody stores it, so
+        // the reader has to arrive at the same one on its own, and then accept
+        // a range read the phone signed with it.
+        let readKey = try ReadKey.derive(from: reading)
+        let readSignature = try readKey.signature(for: CanonicalRequest.read(
+            bucket: fixture.bucket,
+            target: "/b/\(fixture.bucket)/d?from=2026-08-07&to=2026-08-08",
+            timestamp: fixture.timestamp
+        ))
+        print("EFFERENT_INTEROP_READER=\(Base64URL.encode(readKey.publicKey.rawRepresentation))")
+        print("EFFERENT_INTEROP_READSIGNATURE=\(Base64URL.encode(Data(readSignature)))")
     }
 }

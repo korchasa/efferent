@@ -48,7 +48,11 @@ public struct Archive {
     /// can be decided, so handing it to a daemon to finish later would be no
     /// use. It is also small — a few hundred kilobytes for a decade — and a
     /// timeout is what keeps a dead network from holding up the send.
-    public init(destination: Destination, timeout: TimeInterval = 20) {
+    ///
+    /// Each page is signed with the read key when the phone holds one: once
+    /// that key is registered, the archive answers no listing without it. A
+    /// phone with no reading key passes no signer and reads as it always did.
+    public init(destination: Destination, signer: ReadSigner?, timeout: TimeInterval = 20) {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = timeout
         // Elapsed time as well as silence — see the same pair in `Applier`. A
@@ -58,7 +62,8 @@ public struct Archive {
         let session = URLSession(configuration: configuration)
 
         self.init(destination: destination) { url in
-            let (data, response) = try await session.data(from: url)
+            let request = try signer?.request(url) ?? URLRequest(url: url)
+            let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 throw ArchiveError.malformed("no HTTP response")
             }

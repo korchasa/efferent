@@ -182,9 +182,13 @@ final class Services: ObservableObject {
         }
         // Once per bucket, and retried at the head of every pass until it
         // lands: a phone that made its archive before edits existed has an
-        // editor key the service has never heard of.
+        // editor key the service has never heard of, and one that made it
+        // before reads were signed has no read key there either.
         if destination != nil {
-            Task { [weak self] in await self?.ensureEditorRegistered() }
+            Task { [weak self] in
+                await self?.ensureEditorRegistered()
+                await self?.ensureReaderRegistered()
+            }
         }
     }
 
@@ -304,6 +308,7 @@ final class Services: ObservableObject {
             refreshStats()
             log.info("created bucket \(created.bucket)")
             await ensureEditorRegistered()
+            await ensureReaderRegistered()
             // The archive was made by a person on a screen, which is the one
             // moment the writing sheet can be shown without waiting for the
             // next launch.
@@ -336,7 +341,8 @@ final class Services: ObservableObject {
             try await ArchiveCreator.registerEditor(
                 destination: destination,
                 identity: identity,
-                editorPublicKey: key.publicKey.rawRepresentation
+                editorPublicKey: key.publicKey.rawRepresentation,
+                now: serviceNow()
             )
             try store.recordEditorRegistered(for: destination.bucket)
             log.info("the editor key is registered with the archive")
@@ -344,6 +350,50 @@ final class Services: ObservableObject {
         } catch {
             log.error("could not register the editor key: \(String(describing: error))")
         }
+    }
+
+    /// Tell the service which key reads must be signed with, once per archive.
+    ///
+    /// From the moment it lands the bucket id stops opening anything: every
+    /// read has to carry a signature only a holder of the reading key can make.
+    /// Only a phone that holds its reading key has anything to make the read
+    /// key from; a legacy archive joined from a reader registers none and stays
+    /// readable on its id, as before. A failure is a line in the log, like the
+    /// editor's, and the next pass tries again — until then the archive simply
+    /// reads the way it did before there were read keys.
+    func ensureReaderRegistered() async {
+        guard !demonstration, let destination else { return }
+        do {
+            guard try !store.readerRegistered(for: destination.bucket),
+                  let reading = try readingIdentity.existingPrivateKey()
+            else { return }
+            try await ArchiveCreator.registerReader(
+                destination: destination,
+                identity: identity,
+                readerPublicKey: ReadKey.derive(from: reading).publicKey.rawRepresentation,
+                now: serviceNow()
+            )
+            try store.recordReaderRegistered(for: destination.bucket)
+            log.info("the read key is registered with the archive; reads must be signed from now on")
+        } catch {
+            log.error("could not register the read key: \(String(describing: error))")
+        }
+    }
+
+    /// The service's clock as this phone last learned it. A registration
+    /// signed on a clock the service refuses would be refused every launch,
+    /// for the same reason, for good.
+    private func serviceNow() -> Date {
+        Date().addingTimeInterval((try? store.clockOffset()) ?? 0)
+    }
+
+    /// What signs this phone's reads of its archive, or nil for a phone that
+    /// holds no reading key and so has no read key to sign with.
+    private func readSigner(for destination: Destination) -> ReadSigner? {
+        guard let reading = try? readingIdentity.existingPrivateKey(),
+              let readKey = try? ReadKey.derive(from: reading)
+        else { return nil }
+        return ReadSigner(destination: destination, readKey: readKey, store: store)
     }
 
     // MARK: - Being woken
@@ -513,6 +563,7 @@ final class Services: ObservableObject {
             return uploader
         }
         guard let destination else { return nil }
+        let signer = readSigner(for: destination)
         let built = Uploader(
             destination: destination,
             store: store,
@@ -524,7 +575,7 @@ final class Services: ObservableObject {
             // The same split for the check: the uploader decides how often to
             // ask, Health works out which days should exist and compares.
             reconcile: { [health] in
-                try await health.reconcile(with: Archive(destination: destination))
+                try await health.reconcile(with: Archive(destination: destination, signer: signer))
             }
         )
         // Days land on the upload session's own queue, with no view in sight.
@@ -790,6 +841,7 @@ final class Services: ObservableObject {
         // that does not exist — every fifteen seconds, from the ticker.
         guard !demonstration else { return }
         await ensureEditorRegistered()
+        await ensureReaderRegistered()
         guard let applier = applierIfPaired() else { return }
         do {
             // Read here, where the answer lives, and handed in: a locked phone

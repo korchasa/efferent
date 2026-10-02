@@ -230,6 +230,31 @@ enum Database {
             try db.create(index: "editLog_on_record", on: "editLog", columns: ["recordId"])
         }
 
+        // Every edit this phone has answered, by the bytes its editor signed.
+        //
+        // The service deletes an edit the moment it takes the outcome, so in
+        // working order nothing answered is ever listed again. A service that
+        // did list one again — under its own name or a fresh one — would have it
+        // applied twice, and the editor's signature cannot object: it covers the
+        // sealed bytes and the moment they were signed, never the name the
+        // service gives them. Applied twice, an old value goes back over the
+        // correction that replaced it.
+        //
+        // So the phone keeps what it answered: a digest of the sealed bytes,
+        // which no new name changes, and the moment they were signed, which
+        // bounds how far back anything may come from. A row older than that
+        // bound says nothing the bound does not already say, and goes as soon as
+        // the newest moves on, so the table stays a few rows long.
+        migrator.registerMigration("v11.answeredEdit") { db in
+            try db.create(table: "answeredEdit") { table in
+                table.column("digest", .blob).primaryKey().notNull()
+                table.column("editName", .text).notNull()
+                table.column("signedAt", .integer).notNull()
+                table.column("answeredAt", .double).notNull()
+            }
+            try db.create(index: "answeredEdit_on_signedAt", on: "answeredEdit", columns: ["signedAt"])
+        }
+
         return migrator
     }
 
@@ -350,6 +375,10 @@ enum MetaKey: String {
     /// this only saves the round trip; it is cleared with the archive because
     /// another archive is another service-side record.
     case editorRegisteredFor = "editor.bucket"
+    /// The bucket whose service holds this phone's read key, for the same
+    /// reason and cleared with the archive for the same reason. Once it lands
+    /// the archive answers only reads signed with that key.
+    case readerRegisteredFor = "reader.bucket"
     /// When the person last opened the list of an agent's edits, in seconds
     /// since 1970.
     ///

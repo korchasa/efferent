@@ -3,8 +3,9 @@
 ## Scope
 
 This document says what the app must do. It is written one subsystem at a time, as each is worked
-through; today it covers two of them — how an edit an agent asked for reaches the phone and how the
-person learns that it did, and what the walkthrough must have asked before the first export leaves.
+through; today it covers three of them — how an edit an agent asked for reaches the phone and how the
+person learns that it did, what the walkthrough must have asked before the first export leaves, and
+who may read the archive and how its history comes back.
 The rest of the app is described in `README.md` and governed by `AGENTS.md`. A subsystem missing
 from this document has not been written down yet; that is not a claim that it has no requirements.
 
@@ -32,6 +33,10 @@ requirement says what must be true. How it is arranged is [`design.md`](design.m
   it reads, what it may put on a lock screen, and how far back to go.
 - **First day** — the earliest day Health has anything at all about. It is the floor of every range
   the walkthrough offers and of the first export.
+- **Read key** — the Ed25519 key a read of the archive is signed with. Nobody stores it: the phone
+  and every reader make it from the reading private key, and only its public half reaches the
+  service.
+- **Range** — the days between two dates, both included, handed back by the service in one answer.
 
 ## The agent starts the delivery
 
@@ -51,6 +56,19 @@ phone should look, and the phone finds out the rest for itself.
 **DELIVERY-3 — The phone still decides everything.** Checking the editor's signature, opening the
 edit with the reading key, writing into Health and answering the service are unchanged by the wake.
 A service able to make the phone write would be a service able to write into Health.
+
+**DELIVERY-3a — An edit is applied at most once, whoever serves it.** The phone refuses, without
+touching Health, an edit whose sealed bytes it has answered before under any name, and one signed
+more than 15 minutes before the newest edit it has answered. The refusal is an outcome like any
+other, with the word `replayed`, and the journal shows it when the edit came under a name it had
+not seen.
+
+*Why.* The editor's signature covers the sealed bytes and the moment, not the name the service gives
+them, so a service could hand an answered edit back and the phone would write it again. An old
+`put` applied a second time puts an old value back over the correction that replaced it. The second
+rule covers edits answered before the phone kept digests: the service takes an edit only within
+five minutes of its signature, and the phone answers the queue in order, so a genuine edit is never
+signed that long before one answered ahead of it.
 
 **DELIVERY-4 — The wake is never the only way in.** Apple does not promise to deliver a background
 wake, and several ordinary states swallow it: the app swiped out of the switcher, background
@@ -142,6 +160,44 @@ DELIVERY-6.
 **PRIVACY-3 — Nothing about the edit leaves the archive.** The wake is the only new traffic, and it
 says nothing about what was sent, by whom, about which day, or about what the phone did with it.
 
+## Who may read the archive
+
+**READ-1 — Once the phone has registered a read key, every per-day and per-edit read needs a
+signature by it.** The listing of days, a day, a range, the listing of edits and an edit's outcome
+answer an unsigned read with 401, and a read signed by another key or for another path with 403.
+Whether the archive exists, how many days and bytes it holds, its first and last day, and the setup
+guide stay open. The remote tools that would list or hand back days or edits answer with the local
+command that signs the read.
+
+*Why.* The bucket id is the last segment of the MCP URL, so it sits in every client configuration
+it was ever added to — some hosted by somebody else — and in the service's logs. Ciphertext
+harvested today is opened the day its curve falls, and the listing beside it is a record of its own:
+the size of every day, the moment every day was written, the moment of every edit. An address must
+not be a key.
+
+**READ-2 — The read key is made from the reading key, and only its public half travels.** Its seed
+is HKDF-SHA256 over the raw reading private key, with an empty salt and the info `efferent/v1 read`,
+taken as an Ed25519 seed; the phone and every reader arrive at the same key, so the handoff carries
+nothing new. The phone registers the public half with its writer key. A read signature covers
+`efferent/v1 read`, the bucket id, the path and query exactly as sent, and a moment within five
+minutes of the service's clock, so a signature for one range opens no other and a captured one stops
+working within minutes.
+
+**READ-3 — A range of days comes back in one request.** At most 92 days and 8 MiB per answer, with a
+pointer to where the next one starts; both ends of the range are included. The reader, the command
+line, the local MCP server and the guide's script all fetch history that way.
+
+*Why.* "The last three months" is the commonest question asked of history, and a day per request
+made it 92 round trips; on the guide's path it was also 92 processes. A fresh copy of a decade was
+about 3 920 requests.
+
+**READ-4 — An archive whose phone has not registered a read key answers exactly as before.** That
+covers a phone not yet updated and a legacy connection whose reading private key is not on the
+phone. Readers sign every read anyway, so a phone registering its key asks nothing of them.
+
+**READ-5 — An agent learns which items of an edit failed, in the phone's words.** The reader reads
+the outcome the way the service now writes it, and still reads one stored under the older word.
+
 ## Notices
 
 **NOTICE-1 — A notice carries counts and the two verbs, and nothing else.** Never a metric, never a
@@ -200,10 +256,10 @@ which of the two is offered, and nothing else: a record in Health is removed, wh
 write held under the same id, because that earlier value is one the agent chose and the person
 never saw.
 
-**WORD-5 — An item that did not happen failed; it was not refused.** Eleven words say why an item
-did not land, and nine of them are nothing anybody decided: a metric this app does not write, a unit
+**WORD-5 — An item that did not happen failed; it was not refused.** Twelve words say why an item
+did not land, and ten of them are nothing anybody decided: a metric this app does not write, a unit
 that does not fit it, a span that cannot be, Health not allowed, no such record, a letter that would
-not open or would not parse. Calling those a refusal reads as a decision somebody made and hides
+not open or would not parse, an edit already answered once. Calling those a refusal reads as a decision somebody made and hides
 that something is wrong. The word is the same on the screen, in the journal, in the answer the phone
 sends the service and in what an agent reads back — and it is the word the whole edit already
 carried when one of its items did not land.

@@ -253,6 +253,56 @@ public enum ArchiveCreator {
         }
     }
 
+    /// The request that names the key reads must be signed with.
+    ///
+    /// Signed by the writer key, because who may read is the owner's decision.
+    /// What it names is the public half of the read key, which every holder of
+    /// the reading key can make for itself, so naming it hands nobody anything;
+    /// what it changes is that the bucket id alone stops opening the archive.
+    /// Idempotent like the editor's: the same key is answered with 200.
+    public static func readerRequest(
+        destination: Destination,
+        identity: DeviceIdentity,
+        readerPublicKey: Data,
+        now: Date = Date()
+    ) throws -> URLRequest {
+        let key = try identity.signingKey()
+        let timestamp = Int64(now.timeIntervalSince1970)
+        let signature = try key.signature(for: CanonicalRequest.readerRegistration(
+            bucket: destination.bucket, timestamp: timestamp, body: readerPublicKey
+        ))
+
+        var request = URLRequest(url: destination.readerURL)
+        request.httpMethod = "PUT"
+        request.httpBody = readerPublicKey
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        request.setValue(String(timestamp), forHTTPHeaderField: "x-efferent-timestamp")
+        request.setValue(
+            Base64URL.encode(key.publicKey.rawRepresentation), forHTTPHeaderField: "x-efferent-writer"
+        )
+        request.setValue(Base64URL.encode(Data(signature)), forHTTPHeaderField: "x-efferent-signature")
+        return request
+    }
+
+    /// Register the read key with the archive's service.
+    public static func registerReader(
+        destination: Destination,
+        identity: DeviceIdentity,
+        readerPublicKey: Data,
+        session: URLSession = .shared,
+        now: Date = Date()
+    ) async throws {
+        let (body, response) = try await session.data(for: readerRequest(
+            destination: destination, identity: identity, readerPublicKey: readerPublicKey, now: now
+        ))
+        guard let http = response as? HTTPURLResponse else {
+            throw ConnectionError.server(status: 0, message: "the server did not return HTTP")
+        }
+        guard (200 ..< 300).contains(http.statusCode) else {
+            throw ConnectionError.refusal(status: http.statusCode, body: body)
+        }
+    }
+
     /// The request that tells the service where this phone can be reached.
     ///
     /// Signed by the writer key rather than the editor key, because this is the

@@ -142,7 +142,7 @@ def send(url: str, day_list: str) -> None:
 
     timestamp = unix_now()
     signature = sign_upload(raw_private(writer["writerPrivate"]), bucket, wanted, timestamp, body)
-    status, answer = transport(
+    status, answer, _ = transport(
         "PUT",
         f"{url}/b/{bucket}/days",
         {
@@ -230,9 +230,9 @@ def edits(options: dict) -> None:
         )
         return
     for entry in page["edits"]:
-        # A refusal is not one thing, so the line says which kind. An edit
-        # "0 applied, 1 refused" where the refusal is a question reads as a
-        # failure, and that is exactly what it is not.
+        # An item that did not land is not one thing, so the line says which
+        # kind. An edit "0 applied, 1 failed" where the item is a question
+        # reads as a fault, and that is exactly what it is not.
         parts = []
         if entry.get("applied"):
             parts.append(f"{entry['applied']} applied")
@@ -241,18 +241,18 @@ def edits(options: dict) -> None:
         if entry.get("declined"):
             parts.append(f"{entry['declined']} declined")
         could_not = (
-            (entry.get("refused") or 0) - (entry.get("waiting") or 0) - (entry.get("declined") or 0)
+            (entry.get("failed") or 0) - (entry.get("waiting") or 0) - (entry.get("declined") or 0)
         )
         if could_not > 0:
-            parts.append(f"{could_not} refused")
+            parts.append(f"{could_not} failed")
         counts = "" if entry["status"] == "pending" or not parts else "  " + ", ".join(parts)
         print(f"{entry['name']}  {entry['status']:<8}  {entry['at']}{counts}")
         for item in entry.get("items") or []:
             named = f"  {item['metric']} {item['day']}" if item.get("metric") else ""
             print(f"    {item['op']:<6} {item['id']}{named}")
-        for refused in entry.get("refusals") or []:
-            named = f" ({refused['id']})" if refused.get("id") else ""
-            print(f"    refused item {refused['item']}{named}: {refused['code']}")
+        for failed in entry.get("refusals") or []:
+            named = f" ({failed['id']})" if failed.get("id") else ""
+            print(f"    item {failed['item']}{named} did not land: {failed['code']}")
     if page.get("next"):
         print(f"more: --after {page['next']}")
 

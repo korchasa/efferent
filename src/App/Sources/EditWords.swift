@@ -325,6 +325,7 @@ enum EditWords {
         case .badSignature: "not signed by your agent's key"
         case .cannotOpen: "this phone could not open it"
         case .malformed: "the edit did not make sense"
+        case .replayed: "already applied once, so it was not applied again"
         // The two that are not a failure. They are in the same set because the
         // wire has one field for "what became of this item", and an agent reads
         // them the same way — except that these two can change.

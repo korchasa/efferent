@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
-from efferent_hpke import to_base64url
+from efferent_hpke import to_base64url, unpack_frame
 
 from .days import is_day
 
@@ -27,8 +27,6 @@ SHARED = ("metric", "bucket", "unit", "source")
 COLUMNS = ("value", "stage", "activity", "duration")
 KNOWN = {"id", "v", "start", "end", *SHARED, *COLUMNS}
 MAX_DAYS_PER_REQUEST = 31
-DAY_BYTES = 10
-HEADER_BYTES = DAY_BYTES + 4
 
 
 # MARK: - Framing
@@ -162,22 +160,12 @@ def pack_days(days: list[tuple[str, bytes]]) -> bytes:
 def unpack_days(body: bytes) -> list[tuple[str, bytes]]:
     """Read a frame back, or refuse it whole: a batch that unpacked to the days
     it happened to parse would store some of what was sent and answer as though
-    it stored all of it."""
-    days = []
-    offset = 0
-    previous = ""
-    while offset < len(body):
-        left = len(body) - offset
-        if left < HEADER_BYTES:
-            raise ValueError(f"{left} bytes left over where a day was expected")
-        day = body[offset : offset + DAY_BYTES].decode("ascii", "replace")
-        length = int.from_bytes(body[offset + DAY_BYTES : offset + HEADER_BYTES], "big")
-        _check(day, previous, length)
-        if left - HEADER_BYTES < length:
-            raise ValueError(f"{day} says {length} bytes and only {left - HEADER_BYTES} are there")
-        days.append((day, body[offset + HEADER_BYTES : offset + HEADER_BYTES + length]))
-        previous = day
-        offset += HEADER_BYTES + length
+    it stored all of it.
+
+    The reading side's own parser does the work, because a range answer is the
+    same frame travelling the other way. The one difference is here: a range
+    can hold no days, and a batch that holds none was never worth sending."""
+    days = unpack_frame(body)
     if not days:
         raise ValueError("a batch with no days in it")
     return days

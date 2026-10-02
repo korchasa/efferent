@@ -69,11 +69,21 @@ On first setup the phone:
    handoff;
 5. creates the Ed25519 editor key, registers its public half with a writer-signed
    `PUT /b/<bucket-id>/editor`, and keeps the private half in the Keychain for the same handoff;
-6. starts sending sealed days without waiting for an agent.
+6. makes the read key from the reading private key and registers its public half with a
+   writer-signed `PUT /b/<bucket-id>/reader`, after which the service answers only reads signed
+   with it;
+7. starts sending sealed days without waiting for an agent.
 
 The three keys stay separate. Possession of the reading private key grants read access, not the
 ability to forge an upload; possession of the editor key grants the right to ask the phone to write,
 not to read a day or to upload one.
+
+The read key is not a fourth key to keep. It is an Ed25519 key whose seed is HKDF-SHA256 over the
+raw reading private key, with an empty salt and the info `efferent/v1 read`, made whenever it is
+needed: whoever holds the reading key holds it too, and nobody else does. A read is signed over
+`efferent/v1 read`, the bucket id, the path and query exactly as requested, and the moment, in the
+headers `x-efferent-reader`, `x-efferent-signature` and `x-efferent-timestamp`; the service accepts
+a moment within five minutes of its own clock.
 
 ## What the phone hands to an agent
 
@@ -106,10 +116,12 @@ A handoff from before the phone could write has three fields. It still imports, 
 makes reads and cannot write, and says so. A fresh four-field handoff for the same archive adds the
 editor key to that reader and touches nothing else.
 
-The bucket id belongs in the MCP URL; it is an address, not a decryption secret. The keys are
-separate fields. Neither may appear in a URL, an HTTP header, a remote MCP tool argument, a log, or
-server-side storage. The agent keeps the handoff in an owner-only local file and does not repeat
-either key in output.
+The bucket id belongs in the MCP URL; it is an address, not a decryption secret. Once the phone has
+registered the read key it is not an access secret either: an id copied out of a client
+configuration or a log opens no day, no listing and no edit, because every such read must be signed
+by the read key. The keys are separate fields. Neither may appear in a URL, an HTTP header, a remote
+MCP tool argument, a log, or server-side storage. The agent keeps the handoff in an owner-only local
+file and does not repeat either key in output.
 
 The setup guide is ordinary MCP tool output. `setup_guide` takes no arguments, so the reading key
 cannot be passed to it, and returns the current runnable Python reference. There is no separate
@@ -117,7 +129,9 @@ prompt URL and no prompt-version compatibility surface. The guide does not requi
 checkout, Deno, a local MCP server or a gateway restart.
 
 The MCP endpoint takes no authentication. The bucket id in the address is all it needs, and neither
-key ever reaches it. The instruction is one line, because every importer reads only the first line
+key ever reaches it — which is also why, once the phone has registered its read key, the tools that
+would list or hand back days or edits answer with the local command that signs the read: the
+endpoint can never be handed what a signature needs. The instruction is one line, because every importer reads only the first line
 under `Instruction:`, and it says all of this itself: it names the transport (streamable HTTP), says
 that no authorization header and no key go into the client configuration, shows how Claude Code and
 Codex register such a server, and gives the one JSON-RPC `tools/call` request that fetches the guide
@@ -132,13 +146,19 @@ looked at.
 
 - Own archive creation and key generation, the editor key included.
 - Encrypt every day to its own reading public key.
-- Sign uploads with the independent device signing key, and register the editor's public half with
-  it.
+- Sign uploads with the independent device signing key, and register the editor's public half and
+  the read key's public half with it.
+- Sign its own reads of the archive listing and the edit queue with the read key, stamped on the
+  service's clock as its uploads are.
 - Produce the connection handoff whenever the owner chooses to connect an agent.
 - Collect the edit queue on every launch that can reach Health and is not paused, check each edit's
   editor signature itself, open it with the reading private key, write the items into Health under
   `efferent:<id>` sync identifiers with phone-kept versions, report an outcome of counts and codes,
   and mark the touched days so they are re-uploaded whole.
+- Apply an edit at most once, whoever serves it: keep the SHA-256 of every answered edit's sealed
+  bytes and the moment its editor signed it, and answer as `replayed`, without touching Health, an
+  edit whose bytes were answered before under any name or that was signed more than 15 minutes
+  before the newest answered edit.
 - Keep what each item pushed out of Health — the record a replacement took the place of, the record
   a removal took away — read at the moment of the change, because nothing can read it afterwards.
   That is what lets the owner put Health back: an addition is removed again, a replacement and a
@@ -147,8 +167,11 @@ looked at.
 
 ### Cloudflare service and remote MCP server
 
-- Address an archive by bucket id.
-- List sealed days and return sealed objects or links to them.
+- Address an archive by bucket id. Once the phone has registered a read key, answer a read of a
+  day, a range, a listing or an outcome only when it is signed with that key; whether the archive
+  exists and how many days and bytes it holds stay open.
+- List sealed days and return sealed objects, one at a time or a range of up to 92 days in one
+  frame, or links to them.
 - Keep the existing upload signature boundary, and refuse an edit that is not signed by the
   registered editor key.
 - Hold sealed edits until the phone answers for them, hand each back only to the phone's writer
@@ -167,6 +190,8 @@ The implemented remote tools are `setup_guide`, `archive_status`, `list_sealed_d
 `get_sealed_day` and `list_edits`. The first returns the complete local setup procedure and Python
 source; `get_sealed_day` returns a resource link to `application/octet-stream`, not the bytes decoded
 into another shape; `list_edits` names what is waiting for the phone and what became of the rest.
+Once the phone has registered a read key, `list_sealed_days`, `get_sealed_day` and `list_edits`
+answer with the local command instead; `setup_guide` and `archive_status` stay open.
 The phone claims an empty archive with a signed `PUT /b/<bucket-id>` before any Health day exists.
 
 ### Agent machine
@@ -175,8 +200,10 @@ The phone claims an empty archive with a signed `PUT /b/<bucket-id>` before any 
 - Store the complete handoff in an owner-only local file.
 - Connect to the keyless remote MCP endpoint using the bucket id only.
 - Call `setup_guide` first and save its embedded Python reference locally.
-- Use the remote tools to select dates.
-- Run the Python reference to fetch and decrypt each selected day.
+- Use `archive_status` to see which dates the archive spans.
+- Run the Python reference to fetch and decrypt the range a question needs (`--from`, `--to`). It
+  fetches a quarter of days per request and signs every read with the read key it makes from the
+  reading key.
 - Analyse the resulting NDJSON locally and never send plaintext to a remote tool.
 - To write, run the same reference with `--write <items.json>`: it validates the items, seals them
   to the reading key, signs them with the editor key and posts ciphertext; `--edits` says what the
@@ -237,3 +264,12 @@ starts sending immediately; **Export everything Health has** additionally discov
 was never present in the old ledger. Upgrading an affected build-8 phone-owned connection performs
 the same one-time reset, while importing an old reader-owned private key remains outside this
 implementation.
+
+A phone-owned archive gets its read key the first time a build that knows about read keys launches,
+creates the archive or collects edits, and the registration is tried again on each of those until
+the service has taken it. Until then, and for good on a legacy reader-owned
+connection, whose reading private key is not on the phone, reads answer to the bucket id as they
+always did. Readers sign every read whether or not a key is registered, so the moment the phone
+registers one asks nothing of them. The order of the update is fixed the other way: the Worker
+first, then the reader and the phone, because the reader's range reads and the phone's `replayed`
+answer are a route and a word an older Worker does not know.
