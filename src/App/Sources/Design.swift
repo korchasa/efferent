@@ -452,22 +452,23 @@ enum KeyLight {
     /// #F04711 — the lower edge of the orange key.
     static let accentLow = Color(red: 0.941, green: 0.278, blue: 0.067)
 
-    /// #EFEDE9 — the top of a white key sitting in the shell, in the shade
-    /// of the rim above it.
-    static let panelSunk = Color(red: 0.937, green: 0.929, blue: 0.914)
+    /// #F8F7F5 — a white key that is down: one even tone, a shade under the
+    /// keys standing beside it.
+    static let panelDown = Color(red: 0.973, green: 0.969, blue: 0.961)
 
     /// The face of a key: a touch lighter at the top, where the light lands.
-    /// A key that is down sits below the light, so its face turns the other
-    /// way, shaded at the top — which is what tells a latched key from the
-    /// ones standing beside it, more than the point and a half it dropped.
-    /// The only tint is the way forward, so its shades are fixed here rather
-    /// than mixed (mixing colours needs iOS 18).
+    /// A key that is down is one even tone, a shade darker, with no gradient
+    /// at all — a face shaded at the top was tried and read as a painted-on
+    /// effect (owner, 2026-10-07). What tells a latched key from its
+    /// neighbours is the shadow it lost and its lamp. The only tint is the way
+    /// forward, so its shades are fixed here rather than mixed (mixing colours
+    /// needs iOS 18).
     static func face(_ tint: Color?, down: Bool = false) -> LinearGradient {
         let colours: [Color] = switch (tint == nil, down) {
         case (true, false): [Palette.panel, Palette.panel, panelLow]
-        case (true, true): [panelSunk, panelLow, panelLow]
+        case (true, true): [panelDown]
         case (false, false): [accentHigh, Palette.accent, accentLow]
-        case (false, true): [accentLow, Palette.accent, Palette.accent]
+        case (false, true): [Palette.accent]
         }
         return LinearGradient(colors: colours, startPoint: .top, endPoint: .bottom)
     }

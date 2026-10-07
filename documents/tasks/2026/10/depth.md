@@ -94,9 +94,10 @@ text button, flat, as in Apple's own apps; what is read is printed flat, with
 a hairline or a rule.
 
 - **Range rows** (`RangePicker`, setup step and the reach-back sheet):
-  `LatchedKey` — raised, the chosen one stays down. A key that is down shows
-  its face shaded at the top (`KeyLight.panelSunk`), because the 1.5 pt drop
-  alone hardly read on the simulator. The ink outline is gone; the lamp stays.
+  `LatchedKey` — raised, the chosen one stays down. A key that is down is one
+  even tone a shade darker (`KeyLight.panelDown`) with its shadow closed up; a
+  face shaded at the top was tried first and the owner found it unnatural. The
+  ink outline is gone; the lamp stays.
   No haptic of their own — the list already ticks on a change.
 - **Agent-edits notice** (home, both variants): a white `Panel` with a
   hairline and an orange lamp, like the walkthrough's device remarks. Its two
@@ -144,6 +145,7 @@ a hairline or a rule.
   (new notice) and the connect sheet (white prompt panel); live in the
   reach-back sheet, choosing "Last 30 days" latched it and raised the old
   choice, "A day I choose" latched and opened the calendar. The simulator
-  dropped every other injected tap all session, and once the sheet closed
-  after a tap on a row — not reproduced in three tries. The disabled key was
+  seemed to drop taps, and the sheet closed twice: both times a second tap
+  aimed at the "reach back" key landed on the sheet's own "Reach back to here"
+  button, which sits at the same spot. Left alone for 20 s the sheet stays. The disabled key was
   not seen on screen. `deno task test`: 244 passed, 1 skipped, 0 failed.
