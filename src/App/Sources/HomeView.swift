@@ -13,6 +13,40 @@ import UniformTypeIdentifiers
 /// and stopped days ago are different facts, and each one says so in its own
 /// words. Everything sent is the good state and is drawn as one — a mark on the
 /// face rather than a nought.
+/// Three views stacked top to bottom, with the middle one placed so that a
+/// point `anchor` below its top edge lands `target` below the top of the
+/// bounds, centred across. The first view sits at the top and the last at the bottom, and the
+/// middle one moves off the target only as far as it must to stay between
+/// them.
+private struct ScreenCentred: Layout {
+    let target: CGFloat
+    let anchor: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        precondition(subviews.count == 3, "ScreenCentred takes a top, a middle and a bottom")
+        let across = ProposedViewSize(width: bounds.width, height: nil)
+        let heights = subviews.map { $0.sizeThatFits(across).height }
+        let highest = bounds.minY + heights[0]
+        let lowest = bounds.maxY - heights[2] - heights[1]
+        let middle = max(highest, min(bounds.minY + target - anchor, lowest))
+        let tops = [bounds.minY, middle, bounds.maxY - heights[2]]
+        for (index, subview) in subviews.enumerated() {
+            // From the middle, as a stack centres its rows: the dial's block is
+            // narrower than the screen, and placed from the left edge it sat
+            // off to the left.
+            subview.place(
+                at: CGPoint(x: bounds.midX, y: tops[index]),
+                anchor: .top,
+                proposal: ProposedViewSize(width: bounds.width, height: heights[index])
+            )
+        }
+    }
+}
+
 struct HomeView: View {
     @EnvironmentObject private var services: Services
     @Environment(\.scenePhase) private var phase
@@ -33,59 +67,46 @@ struct HomeView: View {
     @State private var brandTaps = 0
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            agentNotice
-
-            Spacer(minLength: 0)
-
-            // The dial is centred on the room left between the brand row and
-            // the block of keys, not on the glass: the bottom of this screen
-            // carries far more than the top, so a dial centred on the screen
-            // sits visibly low in the space it actually occupies.
+        GeometryReader { screen in
+            // The dial's centre is the centre of the glass, not of the room
+            // between the brand row and the keys (owner, 2026-10-07). From
+            // 2026-08-29 it sat in the middle of that room instead, which on a
+            // screen whose bottom carries far more than its top put it well
+            // above the middle of the phone. `ScreenCentred` measures from the
+            // whole screen, safe areas included, and only lets the dial off
+            // that line when it would otherwise run into the top or the keys.
             //
-            // The line under it used to hang off the dial as an overlay so a
-            // long caption could not shove the dial upwards. On a phone shorter
-            // than the one it was written on that backfired: an overlay takes
-            // no room at all, the two spacers above and below collapsed to
-            // nothing, and the caption was drawn straight over the footer,
-            // illegibly. Found on the owner's phone, 2026-09-20, in the state a
-            // healthy phone sits in nearly all the time. The words are in the
-            // stack now and reserve `captionRoom` whatever they say, which is
-            // what keeps the dial still: a block centred between two spacers
-            // rises by half of whatever grows underneath it, so a caption that
-            // gained a line moved the figure on the face. Only something longer
-            // than the reserve moves it now, and moving the dial is better than
-            // writing over the lines below.
-            //
-            // The reserve sits under the dial, so centring the dial and its
-            // words as one block put the dial itself 28 pt above the middle of
-            // its room — the owner saw it high on the phone, 2026-10-07. The
-            // same height is kept empty above the dial, so the block is even
-            // around the dial's centre. It gives way before the spacers do:
-            // on a short phone the dial rises a little rather than pushing the
-            // words into the footer.
-            Color.clear.frame(maxHeight: Self.captionRoom + Self.captionGap)
-
-            VStack(spacing: Self.captionGap) {
-                instrument
-                caption.frame(minHeight: Self.captionRoom, alignment: .top)
+            // The line under the dial keeps the room it reserves
+            // (`captionRoom`) whatever it says. On 2026-09-20 an overlay that
+            // took no room drew "up to date" straight over the footer on a
+            // shorter phone; in the dial's block the words claim their space,
+            // and the layout keeps that block clear of the keys.
+            ScreenCentred(
+                target: (screen.size.height + screen.safeAreaInsets.bottom - screen.safeAreaInsets.top) / 2,
+                anchor: Self.dialSide / 2
+            ) {
+                VStack(spacing: 0) {
+                    header
+                    agentNotice
+                }
+                VStack(spacing: Self.captionGap) {
+                    instrument
+                    caption.frame(minHeight: Self.captionRoom, alignment: .top)
+                }
+                VStack(spacing: 0) {
+                    footer
+                    if !services.agentConnected {
+                        connect
+                            .padding(.top, 14)
+                            .transition(.opacity)
+                    }
+                    keys
+                        .padding(.top, 16)
+                }
             }
-
-            Spacer(minLength: 0)
-
-            footer
-            if !services.agentConnected {
-                connect
-                    .padding(.top, 14)
-                    .transition(.opacity)
-            }
-            keys
-                .padding(.top, 16)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 24)
         }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         // Things that join or leave the shell — the strip about an agent's
         // edits, the lit invitation, the key into the journal — make room at
         // one pace instead of shoving the dial in a single frame.
@@ -370,7 +391,7 @@ struct HomeView: View {
             Dial(
                 progress: state.progress,
                 mood: state.mood,
-                side: 264,
+                side: Self.dialSide,
                 waiting: state.rereading,
                 drawsFace: false
             )
@@ -379,14 +400,14 @@ struct HomeView: View {
             } label: {
                 face
             }
-            .buttonStyle(DialKey(side: 264))
+            .buttonStyle(DialKey(side: Self.dialSide))
             // Starting and stopping is the one thing a person does here daily,
             // and a light tap under the thumb says it took.
             .sensoryFeedback(.impact(weight: .light), trigger: services.paused)
             .accessibilityLabel(services.paused ? "Start sending" : "Stop sending")
             .accessibilityValue(state.spokenValue)
         }
-        .frame(width: 264, height: 264)
+        .frame(width: Self.dialSide, height: Self.dialSide)
     }
 
     private var face: some View {
@@ -440,6 +461,9 @@ struct HomeView: View {
 
     /// Between the dial and the words under it.
     private static let captionGap: CGFloat = 22
+
+    /// The dial, scale and all.
+    private static let dialSide: CGFloat = 264
 
     private var caption: some View {
         VStack(spacing: 8) {

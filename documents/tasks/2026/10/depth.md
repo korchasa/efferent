@@ -123,6 +123,13 @@ brand row and the footer. The same height is now kept empty above the dial, as
 a frame that gives way before the spacers do, so a short phone still never
 pushes the words into the footer.
 
+Then the owner chose the centre of the screen instead of the centre of that
+room. `ScreenCentred` (a `Layout` in `HomeView.swift`) puts the dial's centre
+at the middle of the whole screen, safe areas included, and moves it off that
+line only as far as it must to stay clear of the top and of the keys. Its first
+version placed the dial's block from the left edge, and the block is narrower
+than the screen, so the dial sat to the left; it is centred across now.
+
 ## Definition of Done
 
 - [x] First attempt rolled back, kept on `depth-attempt-1`.
@@ -162,3 +169,7 @@ pushes the words into the footer.
 - Dial position, offscreen render of the everyday screen (1290×2796 px): the
   dial's centre within 2 px of the middle of the room between the notice and
   the footer. `deno task test`: 244 passed, 1 skipped, 0 failed.
+- Screen centre, live on iPhone 17 Pro Max (iOS 26.5, Release, `--demo`, notice
+  shown): the ring spans rows 1038–1829 of 2868, centre 1433.5 against 1434;
+  across, its right edge and radius put the centre at 659.5 of 1320. `deno
+  task test`: 244 passed, 1 skipped, 0 failed.
