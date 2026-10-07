@@ -136,7 +136,8 @@ pushes the words into the footer.
 - [x] `deno task check` and `deno task test` pass.
 - [x] Simulator walk (iOS 26.5): welcome and everyday screens, the dial still
       toggles the pause.
-- [ ] The owner's look on the phone (dev copy).
+- [x] The owner's look on the phone (dev copy): accepted 2026-10-07, dial
+      centred.
 - [ ] Store screenshots regenerated from this branch once it is merged (the
       offscreen render draws these shadows, so `deno task screenshots`
       serves).
