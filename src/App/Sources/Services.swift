@@ -176,8 +176,13 @@ final class Services: ObservableObject {
         health.onNewData = { [weak self] in
             Task { @MainActor in await self?.sendNow() }
         }
+        // Read before the first frame, not by the everyday screen once it is up.
+        // Left to the screen, the first frame drew an empty archive — "0 days
+        // waiting", no journal key — and every launch animated from that into
+        // the real state, the lines under the dial sliding up from below
+        // (owner's screen recording, 2026-10-07).
+        refreshStats()
         if archiveNeedsRewrite {
-            refreshStats()
             Task { [weak self] in await self?.sendNow() }
         }
         // Once per bucket, and retried at the head of every pass until it

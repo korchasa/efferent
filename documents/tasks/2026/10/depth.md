@@ -130,6 +130,16 @@ line only as far as it must to stay clear of the top and of the keys. Its first
 version placed the dial's block from the left edge, and the block is narrower
 than the screen, so the dial sat to the left; it is centred across now.
 
+### Elements slid in on every launch
+
+The owner's screen recording showed the first frame of the everyday screen
+drawing an empty archive — "0 days waiting", "nothing sent yet", no journal
+key — and then animating into the real state: the lines under the dial slid up
+from below and the face turned into "Up to date". Not a layout defect: the
+counters and the journal summary were read only by the screen's own refresh
+loop, a frame after it appeared, and the screen animates every change of them.
+`Services` now reads them while it starts, before the first frame.
+
 ## Definition of Done
 
 - [x] First attempt rolled back, kept on `depth-attempt-1`.
