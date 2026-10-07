@@ -382,7 +382,7 @@ enum MetaKey: String {
     /// When the person last opened the list of an agent's edits, in seconds
     /// since 1970.
     ///
-    /// The dark strip on the everyday screen counts what has landed since. A
+    /// The note at the top of the everyday screen counts what has landed since. A
     /// run nobody has looked at is news; the same run tomorrow is history, and
     /// history belongs in the list rather than across the top of the screen.
     case editsSeenAt = "edits.seenAt"

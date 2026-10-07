@@ -93,7 +93,7 @@ struct RangePicker: View {
                 EmptyView()
             }
         }
-        .buttonStyle(PressableKey())
+        .buttonStyle(LatchedKey(latched: selection == value))
     }
 
     private var chosenDayRow: some View {
@@ -112,13 +112,13 @@ struct RangePicker: View {
                     .rotationEffect(.degrees(isChosenDay ? 90 : 0))
             }
         }
-        .buttonStyle(PressableKey())
+        .buttonStyle(LatchedKey(latched: isChosenDay))
     }
 
     /// One key on the panel: a lamp that is lit or not, the choice in the
     /// ordinary face, and what it costs printed underneath as a legend. The
-    /// chosen one is outlined in ink, so which key is down can be seen from
-    /// across the room rather than read.
+    /// chosen key latches down into the shell and its lamp lights, so which
+    /// one is chosen shows in its shape as well as its lamp.
     private func row(
         title: String,
         detail: String,
@@ -154,13 +154,9 @@ struct RangePicker: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Palette.panel, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                .strokeBorder(ticked ? Palette.ink : Palette.hairline, lineWidth: 1)
-        )
+        .keyCap(in: RoundedRectangle(cornerRadius: 3, style: .continuous))
         .contentShape(Rectangle())
-        // The lamp lights and the outline inks in under the finger.
+        // The lamp lights as the key goes down.
         .animation(Motion.snappy, value: ticked)
     }
 

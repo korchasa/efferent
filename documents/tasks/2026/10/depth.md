@@ -84,6 +84,35 @@ gradient and a clear press with a haptic. So (`keyCap` in `Design.swift`):
   its own — the screen already taps once when sending starts or stops.
 - Same on every iOS version; no glass, no motion sensor.
 
+### One rule for every element
+
+After the raised keys the owner asked how they sit with the rest of the app,
+chose latched keys for the range rows, and asked for every other element to
+be checked — the black notice about an agent's edits read as foreign. The rule
+the shell now follows: what is pressed is a raised key; a word that acts is a
+text button, flat, as in Apple's own apps; what is read is printed flat, with
+a hairline or a rule.
+
+- **Range rows** (`RangePicker`, setup step and the reach-back sheet):
+  `LatchedKey` — raised, the chosen one stays down. A key that is down shows
+  its face shaded at the top (`KeyLight.panelSunk`), because the 1.5 pt drop
+  alone hardly read on the simulator. The ink outline is gone; the lamp stays.
+  No haptic of their own — the list already ticks on a change.
+- **Agent-edits notice** (home, both variants): a white `Panel` with a
+  hairline and an orange lamp, like the walkthrough's device remarks. Its two
+  ways on are text buttons under a rule — "see what changed" (it used to be
+  the whole dark slab that opened the journal) and "take it all back".
+- **The prompt in the connect sheet**: a white `Panel` with mono type, as the
+  log prints its lines. `DarkPanel` and `Palette.darkLegend` are gone.
+- **A disabled key** (the log's send key on an empty log): lies flat and
+  fades instead of standing up looking pressable.
+- Left as they are, on purpose: quiet and danger text buttons, the back
+  chevron, info panels and notes, spec rows, the journal list, the edit page,
+  the walkthrough's dial (it is not pressed), the calendar. System surfaces —
+  toolbar buttons (iOS 26 glass pills, which sit over the sheet's content and
+  read as one more raised key), alerts, swipe actions, the share sheet, the
+  Health sheet and lock-screen notices — are drawn by iOS and keep its look.
+
 ## Definition of Done
 
 - [x] First attempt rolled back, kept on `depth-attempt-1`.
@@ -92,6 +121,8 @@ gradient and a clear press with a haptic. So (`keyCap` in `Design.swift`):
       still shadow, drop on press, and tap once as they land.
 - [x] Content (panels, strip, rows, walkthrough dial) stays flat.
 - [x] No motion-sensor code.
+- [x] Range rows are latched keys; the notice and the prompt are printed
+      panels; no dark surface remains; a disabled key lies flat.
 - [x] `deno task check` and `deno task test` pass.
 - [x] Simulator walk (iOS 26.5): welcome and everyday screens, the dial still
       toggles the pause.
@@ -109,3 +140,10 @@ gradient and a clear press with a haptic. So (`keyCap` in `Design.swift`):
   keys and the dial's face lifted on a soft shadow with no outline; a live
   held press on "Reach back" dropped the cap with a tighter shadow while its
   legend stayed in place. `deno task test`: 244 passed, 1 skipped, 0 failed.
+- Same simulator, element pass: offscreen renders of the everyday screen
+  (new notice) and the connect sheet (white prompt panel); live in the
+  reach-back sheet, choosing "Last 30 days" latched it and raised the old
+  choice, "A day I choose" latched and opened the calendar. The simulator
+  dropped every other injected tap all session, and once the sheet closed
+  after a tap on a row — not reproduced in three tries. The disabled key was
+  not seen on screen. `deno task test`: 244 passed, 1 skipped, 0 failed.

@@ -240,7 +240,7 @@ public struct EditTally: Equatable, Sendable {
 /// because no watermark applies to it. A question does not stop being a
 /// question by having been looked at.
 public struct EditSummary: Equatable, Sendable {
-    /// Since the person last opened the list. What the dark strip counts.
+    /// Since the person last opened the list. What the note on the everyday screen counts.
     public var unseen = EditTally()
     /// Since the start of today, in the archive's own zone.
     public var today = EditTally()

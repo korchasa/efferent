@@ -62,7 +62,7 @@ struct EditsView: View {
         }
         .task {
             reload()
-            // Opening the list is what makes a run old news: the dark strip on
+            // Opening the list is what makes a run old news: the note at the top of
             // the everyday screen counts what has landed since this moment.
             services.markEditsSeen()
         }

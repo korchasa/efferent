@@ -24,7 +24,7 @@ requirement says what must be true. How it is arranged is [`design.md`](design.m
   costs time rather than the edit.
 - **Pass** — the wider run delivery belongs to: edits first, then the days those edits changed.
 - **Notice** — the local notification this app puts on the lock screen.
-- **Strip** — the dark panel at the top of the everyday screen that counts what an agent changed.
+- **Strip** — the note at the top of the everyday screen that counts what an agent changed.
 - **Write** — one of the app's two operations against Health: a record stands there afterwards.
 - **Remove** — the other: the record is out of Health afterwards.
 - **Journal** — the phone's own account of every item an agent applied, and of every one the person

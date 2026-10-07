@@ -219,66 +219,71 @@ struct HomeView: View {
     /// What an agent has just done, across the top of the screen, until it has
     /// been looked at.
     ///
-    /// The one dark surface in the app, and the only thing allowed above the
-    /// dial: a run that has just landed is news, and news has a shelf life.
-    /// Opening the list is what ends it — the same run tomorrow is history, and
-    /// history belongs in the list.
+    /// The only thing allowed above the dial: a run that has just landed is
+    /// news, and news has a shelf life. Opening the list is what ends it — the
+    /// same run tomorrow is history, and history belongs in the list.
+    ///
+    /// Printed on the shell as a note with a lamp, the way the walkthrough
+    /// prints what the device has to say. It was a slab of ink, the one dark
+    /// surface on a pale instrument, and it read as something from another app
+    /// (owner, 2026-10-07). Its two ways on are words under a rule rather than
+    /// keys: the note itself is something to read, not to press.
     @ViewBuilder private var agentNotice: some View {
         if services.edits.unseen.total == 0, let held = services.stats?.editsHeldByLock, held > 0 {
             // Listed at the service, not yet in Health, because the screen was
             // locked when this phone looked. Said plainly rather than left as
             // an empty screen: the person is about to unlock the phone anyway,
             // and this is the sentence that makes the wait legible.
-            DarkPanel(padding: 0) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Legend("agent edits · on the way", size: 9, colour: Palette.darkLegend)
-                    Text(EditWords.onTheWay(held))
-                        .font(.system(size: 15))
-                        .foregroundStyle(.white)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            Panel {
+                noticeText(legend: "agent edits · on the way", sentence: EditWords.onTheWay(held))
             }
             .padding(.top, 12)
             .transition(.arriving(reduced: reduceMotion))
         } else if services.edits.unseen.total > 0 {
-            DarkPanel(padding: 0) {
-                Button { readingEdits = true } label: {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Legend("agent edits · just now", size: 9, colour: Palette.darkLegend)
-                        Text(EditWords.summary(services.edits.unseen))
-                            .font(.system(size: 15))
-                            .foregroundStyle(.white)
-                            .multilineTextAlignment(.leading)
-                            .fixedSize(horizontal: false, vertical: true)
+            Panel {
+                noticeText(legend: "agent edits · just now", sentence: EditWords.summary(services.edits.unseen))
+                RowDivider()
+                HStack(spacing: 0) {
+                    Button("see what changed") { readingEdits = true }
+                        .buttonStyle(QuietButton(colour: Palette.ink))
+                    if services.edits.unseen.written > 0 {
+                        Palette.hairline.frame(width: 1, height: 22)
+                        // The one key that cannot be named by an operation: a
+                        // run may hold both, so pressing this removes some
+                        // records and writes others back. It names the intent
+                        // instead, and each record's own page names the
+                        // operation.
+                        Button("take it all back") {
+                            Task { await services.actOnRecentRun() }
+                        }
+                        .buttonStyle(QuietButton(colour: Palette.accent))
                     }
-                    .padding(16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(PressableKey())
-
-                if services.edits.unseen.written > 0 {
-                    Palette.body.frame(height: 1)
-                    Button {
-                        Task { await services.actOnRecentRun() }
-                    } label: {
-                        // The one key that cannot be named by an operation: a run
-                        // may hold both, so pressing this removes some records
-                        // and writes others back. It names the intent instead,
-                        // and each record's own page names the operation.
-                        Legend("take it all back", size: 11, colour: Palette.accent)
-                            .frame(maxWidth: .infinity, minHeight: 46)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(PressableKey())
                 }
             }
             .padding(.top, 12)
             .transition(.arriving(reduced: reduceMotion))
         }
+    }
+
+    /// The lamp, the legend that says what kind of news it is, and the
+    /// sentence.
+    private func noticeText(legend: String, sentence: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Circle()
+                .fill(Palette.accent)
+                .frame(width: 6, height: 6)
+                .padding(.top, 3)
+            VStack(alignment: .leading, spacing: 8) {
+                Legend(legend, size: 9)
+                Text(sentence)
+                    .font(.system(size: 15))
+                    .foregroundStyle(Palette.ink)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(16)
     }
 
     /// Which strip is across the top, if any, so its arrival can be animated
@@ -907,18 +912,21 @@ struct ConnectContent: View {
     /// What the phone hands over is one prompt, exactly as the app composes it.
     /// Split into fields on screen, it invites pasting a part of it — and a
     /// part of it opens nothing.
+    ///
+    /// Printed on a white panel, as the log prints its own lines: it was ink,
+    /// and a dark block in a pale app read as a screen from somewhere else.
     private var handoffPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Legend("prompt for your agent", size: 9, colour: Palette.darkLegend)
-            Text(services.connectionHandoff?.text ?? "—")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.white)
-                .lineSpacing(4)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
+        Panel(padding: 16) {
+            VStack(alignment: .leading, spacing: 12) {
+                Legend("prompt for your agent", size: 9)
+                Text(services.connectionHandoff?.text ?? "—")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Palette.ink)
+                    .lineSpacing(4)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Palette.ink, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
     }
 }

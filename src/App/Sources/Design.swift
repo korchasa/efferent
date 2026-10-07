@@ -30,9 +30,6 @@ enum Palette {
     static let accent = Color(red: 1.000, green: 0.294, blue: 0.071)
     /// #C0392B — a stopped scale, and the one row that destroys something.
     static let alarm = Color(red: 0.753, green: 0.224, blue: 0.169)
-    /// #828282 — a legend printed on ink, where the ordinary legend colour
-    /// sinks into the panel it is standing on.
-    static let darkLegend = Color(white: 0.51)
 }
 
 /// The small monospaced capitals printed next to a control.
@@ -301,14 +298,17 @@ struct ConnectButton: ButtonStyle {
 }
 
 /// The way out of a screen that is not the way forward: the same typography,
-/// printed rather than lit.
+/// printed rather than lit. A word on the shell, never a key, the way a text
+/// button is in Apple's own apps.
 struct QuietButton: ButtonStyle {
+    var colour: Color = Palette.legend
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 11, weight: .medium, design: .monospaced))
             .textCase(.uppercase)
             .kerning(1.8)
-            .foregroundStyle(Palette.legend)
+            .foregroundStyle(colour)
             .frame(maxWidth: .infinity, minHeight: 46)
             .pressed(configuration.isPressed, dimmed: 0.6)
     }
@@ -406,23 +406,6 @@ struct Panel<Content: View>: View {
     }
 }
 
-/// A block printed in ink rather than on it.
-///
-/// The app has one dark surface and it is used for one kind of thing: what has
-/// just happened, or what is being handed over. Everything a person reads at
-/// leisure is printed on the shell.
-struct DarkPanel<Content: View>: View {
-    var padding: CGFloat = 16
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) { content }
-            .padding(padding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Palette.ink, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
-    }
-}
-
 /// The one row that destroys something.
 ///
 /// The same geometry as the way forward, because on the screen it appears on it
@@ -469,13 +452,23 @@ enum KeyLight {
     /// #F04711 — the lower edge of the orange key.
     static let accentLow = Color(red: 0.941, green: 0.278, blue: 0.067)
 
+    /// #EFEDE9 — the top of a white key sitting in the shell, in the shade
+    /// of the rim above it.
+    static let panelSunk = Color(red: 0.937, green: 0.929, blue: 0.914)
+
     /// The face of a key: a touch lighter at the top, where the light lands.
-    /// The only tint is the way forward, so its two shades are fixed here
-    /// rather than mixed (mixing colours needs iOS 18).
-    static func face(_ tint: Color?) -> LinearGradient {
-        let colours = tint == nil
-            ? [Palette.panel, Palette.panel, panelLow]
-            : [accentHigh, Palette.accent, accentLow]
+    /// A key that is down sits below the light, so its face turns the other
+    /// way, shaded at the top — which is what tells a latched key from the
+    /// ones standing beside it, more than the point and a half it dropped.
+    /// The only tint is the way forward, so its shades are fixed here rather
+    /// than mixed (mixing colours needs iOS 18).
+    static func face(_ tint: Color?, down: Bool = false) -> LinearGradient {
+        let colours: [Color] = switch (tint == nil, down) {
+        case (true, false): [Palette.panel, Palette.panel, panelLow]
+        case (true, true): [panelSunk, panelLow, panelLow]
+        case (false, false): [accentHigh, Palette.accent, accentLow]
+        case (false, true): [accentLow, Palette.accent, Palette.accent]
+        }
         return LinearGradient(colors: colours, startPoint: .top, endPoint: .bottom)
     }
 }
@@ -510,19 +503,25 @@ private struct KeyCap<S: InsettableShape>: ViewModifier {
     let shape: S
 
     @Environment(\.keyIsDown) private var down
+    @Environment(\.isEnabled) private var enabled
+
+    /// A key that cannot be pressed does not stand up to be pressed: it lies
+    /// flat on the shell and fades, so it never reads as one that is broken.
+    private var raised: Bool { enabled && !down }
 
     func body(content: Content) -> some View {
         content
             .background {
-                shape.fill(KeyLight.face(tint))
-                    .shadow(color: KeyLight.contact, radius: down ? 0.5 : 1, y: down ? 0.5 : 1)
+                shape.fill(KeyLight.face(tint, down: down && enabled))
+                    .shadow(color: KeyLight.contact.opacity(enabled ? 1 : 0), radius: raised ? 1 : 0.5, y: raised ? 1 : 0.5)
                     .shadow(
-                        color: KeyLight.ambient.opacity(down ? 0.5 : 1),
-                        radius: down ? 3 : KeyLight.ambientRadius,
-                        y: down ? 1 : KeyLight.ambientDrop
+                        color: KeyLight.ambient.opacity(raised ? 1 : enabled ? 0.5 : 0),
+                        radius: raised ? KeyLight.ambientRadius : 3,
+                        y: raised ? KeyLight.ambientDrop : 1
                     )
             }
-            .offset(y: down ? KeyLight.travel : 0)
+            .opacity(enabled ? 1 : 0.45)
+            .offset(y: down && enabled ? KeyLight.travel : 0)
             .animation(Motion.snappy, value: down)
     }
 }
@@ -532,6 +531,18 @@ struct RaisedKey: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .keyDown(configuration.isPressed)
+    }
+}
+
+/// A key that stays down once it is chosen, the way the range keys on an old
+/// instrument latch: the chosen one sits in the shell, the others stand up. It
+/// taps nothing itself — the list it belongs to says when the choice moves.
+struct LatchedKey: ButtonStyle {
+    let latched: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .environment(\.keyIsDown, latched || configuration.isPressed)
     }
 }
 

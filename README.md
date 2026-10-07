@@ -350,7 +350,7 @@ been, edits wait rather than fail.
 Everything an agent changes is written down on the phone, because nowhere else keeps it: the service
 is told counts and codes on purpose, and Health keeps a record without keeping who asked for it. An
 app that writes into Health silently is an app nobody should trust with Health, so the everyday
-screen shows a dark strip whenever a run has landed that nobody has looked at — how many records
+screen shows a note at the top whenever a run has landed that nobody has looked at — how many records
 changed, and one way to take the whole run back out. While anything is waiting for a decision the
 same strip asks for it instead, and leads to one screen that shows everything waiting and carries
 two actions: allow them all, or turn them all down. There is no per-record answer, because the
