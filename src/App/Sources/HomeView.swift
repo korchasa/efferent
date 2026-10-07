@@ -57,7 +57,17 @@ struct HomeView: View {
             // gained a line moved the figure on the face. Only something longer
             // than the reserve moves it now, and moving the dial is better than
             // writing over the lines below.
-            VStack(spacing: 22) {
+            //
+            // The reserve sits under the dial, so centring the dial and its
+            // words as one block put the dial itself 28 pt above the middle of
+            // its room — the owner saw it high on the phone, 2026-10-07. The
+            // same height is kept empty above the dial, so the block is even
+            // around the dial's centre. It gives way before the spacers do:
+            // on a short phone the dial rises a little rather than pushing the
+            // words into the footer.
+            Color.clear.frame(maxHeight: Self.captionRoom + Self.captionGap)
+
+            VStack(spacing: Self.captionGap) {
                 instrument
                 caption.frame(minHeight: Self.captionRoom, alignment: .top)
             }
@@ -427,6 +437,9 @@ struct HomeView: View {
     /// and enough that none of them moves the dial: a figure that shifts when
     /// the words below it change reads as the figure changing.
     private static let captionRoom: CGFloat = 34
+
+    /// Between the dial and the words under it.
+    private static let captionGap: CGFloat = 22
 
     private var caption: some View {
         VStack(spacing: 8) {

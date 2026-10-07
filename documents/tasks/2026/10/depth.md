@@ -114,6 +114,15 @@ a hairline or a rule.
   read as one more raised key), alerts, swipe actions, the share sheet, the
   Health sheet and lock-screen notices — are drawn by iOS and keep its look.
 
+### The dial sat high
+
+On the phone the owner saw the dial above the middle. Not a depth change: the
+dial and the room reserved for its words (22 + 34 pt) were centred as one
+block, so the dial itself sat 28 pt above the middle of the space between the
+brand row and the footer. The same height is now kept empty above the dial, as
+a frame that gives way before the spacers do, so a short phone still never
+pushes the words into the footer.
+
 ## Definition of Done
 
 - [x] First attempt rolled back, kept on `depth-attempt-1`.
@@ -149,3 +158,6 @@ a hairline or a rule.
   aimed at the "reach back" key landed on the sheet's own "Reach back to here"
   button, which sits at the same spot. Left alone for 20 s the sheet stays. The disabled key was
   not seen on screen. `deno task test`: 244 passed, 1 skipped, 0 failed.
+- Dial position, offscreen render of the everyday screen (1290×2796 px): the
+  dial's centre within 2 px of the middle of the room between the notice and
+  the footer. `deno task test`: 244 passed, 1 skipped, 0 failed.
