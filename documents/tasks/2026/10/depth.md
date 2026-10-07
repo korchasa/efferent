@@ -49,6 +49,18 @@ interactions in real time" when made `interactive()`. So:
 - **Before iOS 26** the keys keep their old look exactly: white panel with a
   hairline, or the orange fill, and the shared press feedback.
 
+### Owner's verdict on the second attempt
+
+Tried on the phone the same day and called unnatural again: a white outline
+around every key. Confirmed in the simulator capture — across the dial's edge
+the shell reads 235, the glass rim 249–253, the face 247. The cause is where
+the glass sits, not how it is tuned: Liquid Glass shows itself by bending what
+is under it, and these keys sit on a flat, pale, motionless shell, so there is
+nothing to bend and the only visible trait left is the rim highlight. Apple
+puts glass over content that moves under it (bars over scrolling lists,
+sheets over a screen); Efferent's sheets already get that from the system. The
+material has no API to soften the rim. Next step waits on the owner's choice.
+
 ## Definition of Done
 
 - [x] First attempt rolled back, kept on `depth-attempt-1`.
