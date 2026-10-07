@@ -5,9 +5,9 @@ Built on its own branch (`feat/depth`), on top of `feat/motion`.
 
 ## Goal
 
-The shell has depth the way an iOS 26 app has depth: the controls float over
-the content on Apple's own material, which catches light and answers the
-finger by itself, and nothing on screen fakes either of those.
+The keys on the shell read as physical keys: they stand off it on a still,
+soft shadow, go down under the finger with a light tap, and nothing moves
+when the phone does. Content stays printed flat.
 
 ## Overview
 
@@ -59,28 +59,53 @@ is under it, and these keys sit on a flat, pale, motionless shell, so there is
 nothing to bend and the only visible trait left is the rim highlight. Apple
 puts glass over content that moves under it (bars over scrolling lists,
 sheets over a screen); Efferent's sheets already get that from the system. The
-material has no API to soften the rim. Next step waits on the owner's choice.
+material has no API to soften the rim.
+
+### Third attempt: raised keys on a still shadow
+
+The owner asked how Apple and leading apps do it, and chose the tactile path.
+Apple keeps in-content buttons flat (`bordered`, `borderedProminent`) and puts
+glass on floating layers; apps built on a physical-key feel — (Not Boring),
+and the five Max Rudberg reviews in "Sometimes a button just wants to look
+like a button" (2025-10-30) — lift a key with a diffuse shadow, a slight
+gradient and a clear press with a haptic. So (`keyCap` in `Design.swift`):
+
+- Light from straight above, fixed: a tight contact shadow (black 14 %,
+  radius 1) and a soft one under it (black 8 %, radius 10, 5 pt down). No
+  hairline on a raised key — the shadow is its edge; with the hairline as
+  well it read as an outline again, and its own shadow fell inside the key.
+- Face: white to #FAF9F7 top to bottom; the way forward runs #FF6331 →
+  accent → #F04711. Fixed shades, because `Color.mix` needs iOS 18.
+- Press: the cap drops 1.5 pt and both shadows close up (`Motion.snappy`);
+  the legend under a bottom key stays put. The key's style passes the press
+  down through the environment (`keyIsDown`), so the cap goes down even when
+  it is only part of the button's label.
+- Haptic: a light impact as the key lands (`keyDown`). The dial has none of
+  its own — the screen already taps once when sending starts or stops.
+- Same on every iOS version; no glass, no motion sensor.
 
 ## Definition of Done
 
 - [x] First attempt rolled back, kept on `depth-attempt-1`.
-- [x] Way forward, dial face, journal key and bottom keys are interactive
-      Liquid Glass on iOS 26; unchanged before it.
-- [x] Content (panels, strip, rows, walkthrough dial) carries no glass.
-- [x] No custom shadow or motion code remains.
+- [x] Second attempt (Liquid Glass keys) replaced: no glass anywhere.
+- [x] Way forward, dial face, journal key and bottom keys are raised on a
+      still shadow, drop on press, and tap once as they land.
+- [x] Content (panels, strip, rows, walkthrough dial) stays flat.
+- [x] No motion-sensor code.
 - [x] `deno task check` and `deno task test` pass.
 - [x] Simulator walk (iOS 26.5): welcome and everyday screens, the dial still
       toggles the pause.
 - [ ] The owner's look on the phone (dev copy).
-- [ ] Store screenshots regenerated from this branch once it is merged — and
-      by a simulator capture, since the offscreen `ImageRenderer` path may not
-      draw glass.
+- [ ] Store screenshots regenerated from this branch once it is merged (the
+      offscreen render draws these shadows, so `deno task screenshots`
+      serves).
 
 ## Verification
 
 - `deno task check` green; `deno task test` green, 244 Swift tests passed and
   1 skipped, as before the first edit.
-- Simulator, iPhone 17 Pro Max, iOS 26.5, Release build: the keys and the
-  dial's face read as glass lifted off the shell with the system's soft
-  shadow and bright rim; "Begin setup" is orange glass with white type; a held
-  press on the dial and its release toggled the pause.
+- Simulator, iPhone 17 Pro Max, iOS 26.5, Release build, third attempt:
+  offscreen renders of the welcome, everyday and connect screens show the
+  keys and the dial's face lifted on a soft shadow with no outline; a live
+  held press on "Reach back" dropped the cap with a tighter shadow while its
+  legend stayed in place. `deno task test`: 244 passed, 1 skipped, 0 failed.

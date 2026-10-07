@@ -212,7 +212,6 @@ struct HomeView: View {
             }
             .padding(.top, 14)
         }
-        .glassLayer()
     }
 
     // MARK: - What the agent changed

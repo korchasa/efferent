@@ -4,9 +4,9 @@ import SwiftUI
 ///
 /// The app is dressed as an instrument: an off-white shell, white panels, hard
 /// 3-point corners, and one orange that only the scale and the way forward may
-/// use. On iOS 26 and later the keys are Liquid Glass (`keyGlass`), the
-/// system's own layer for controls over content, which is where all of the
-/// app's depth comes from. The palette is committed rather than adaptive, and it has one failure
+/// use. The keys stand off the shell on a still shadow and go down under the
+/// finger (`keyCap`); everything else is printed flat. The palette is
+/// committed rather than adaptive, and it has one failure
 /// mode worth naming — in dark mode the system turns its own text white and
 /// leaves it on a light background, which is a blank screen with invisible
 /// words on it. That is why every colour here is literal, and why the root view
@@ -204,10 +204,10 @@ private struct FaceRing: View {
 
 /// The dial's face as the key it is on the everyday screen: start and stop.
 ///
-/// The biggest control on the shell, so on iOS 26 it is a disc of Liquid Glass
-/// over the scale, answering the finger the way every glass control does.
-/// Before that it is the white disc with a hairline the dial used to print,
-/// sunk a little under the finger.
+/// The biggest control on the shell, so it is a raised disc over the scale and
+/// goes down under the thumb like every other key. No tap of its own: the
+/// screen already taps once when sending starts or stops, and that is the tap
+/// that says the press took.
 struct DialKey: ButtonStyle {
     let side: CGFloat
 
@@ -215,8 +215,8 @@ struct DialKey: ButtonStyle {
         configuration.label
             .frame(width: side * 0.723, height: side * 0.723)
             .background { FaceRing(side: side) }
-            .keyGlass(in: Circle())
-            .keyPressed(configuration.isPressed)
+            .keyCap(in: Circle())
+            .environment(\.keyIsDown, configuration.isPressed)
     }
 }
 
@@ -276,8 +276,8 @@ struct ProminentButton: ButtonStyle {
             .kerning(2)
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity, minHeight: 54)
-            .keyGlass(tint: Palette.accent, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
-            .keyPressed(configuration.isPressed)
+            .keyCap(tint: Palette.accent, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
+            .keyDown(configuration.isPressed)
     }
 }
 
@@ -295,8 +295,8 @@ struct ConnectButton: ButtonStyle {
             .kerning(2)
             .foregroundStyle(Color.white)
             .frame(maxWidth: .infinity, minHeight: 54)
-            .keyGlass(tint: Palette.accent, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
-            .keyPressed(configuration.isPressed)
+            .keyCap(tint: Palette.accent, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
+            .keyDown(configuration.isPressed)
     }
 }
 
@@ -354,10 +354,10 @@ struct WideKeyButton: View {
             }
             .padding(.horizontal, 14)
             .frame(maxWidth: .infinity, minHeight: 52)
-            .keyGlass(in: RoundedRectangle(cornerRadius: 3, style: .continuous))
+            .keyCap(in: RoundedRectangle(cornerRadius: 3, style: .continuous))
             .contentShape(Rectangle())
         }
-        .buttonStyle(GlassKey())
+        .buttonStyle(RaisedKey())
         .accessibilityLabel(label)
     }
 }
@@ -380,11 +380,11 @@ struct KeyButton: View {
                     .font(.system(size: 16, weight: .regular))
                     .foregroundStyle(Palette.ink)
                     .frame(maxWidth: .infinity, minHeight: 52)
-                    .keyGlass(in: RoundedRectangle(cornerRadius: 3, style: .continuous))
+                    .keyCap(in: RoundedRectangle(cornerRadius: 3, style: .continuous))
                 Legend(label, size: 8)
             }
         }
-        .buttonStyle(GlassKey())
+        .buttonStyle(RaisedKey())
         .accessibilityLabel(label)
     }
 }
@@ -440,65 +440,98 @@ struct DangerButton: ButtonStyle {
     }
 }
 
-// MARK: - Liquid Glass
+// MARK: - Raised keys
 
-extension View {
-    /// The body of a key.
-    ///
-    /// On iOS 26 and later it is Liquid Glass, interactive: the system's
-    /// material for the functional layer that floats over content. It bends
-    /// and blurs what is under it, catches the light along its edge and
-    /// answers a finger by itself, so nothing here draws a shadow, a highlight
-    /// or a press of its own — a hand-drawn version of the same thing was tried
-    /// and read as fake, its shadow stepping between fixed positions
-    /// (owner, 2026-10-07). A tint is for the way forward only, as the orange
-    /// fill was. Apple keeps glass off the content layer, so panels, rows and
-    /// the walkthrough's dial stay printed on the shell.
-    ///
-    /// Before iOS 26 the keys keep the look they had: a white panel with a
-    /// hairline, or the orange fill.
-    @ViewBuilder
-    func keyGlass(tint: Color? = nil, in shape: some InsettableShape) -> some View {
-        if #available(iOS 26.0, *) {
-            glassEffect(tint.map { Glass.regular.tint($0).interactive() } ?? .regular.interactive(), in: shape)
-        } else if let tint {
-            background(tint, in: shape)
-        } else {
-            background(Palette.panel, in: shape)
-                .overlay(shape.strokeBorder(Palette.hairline, lineWidth: 1))
-        }
-    }
+/// What a key looks like standing on the shell and pressed into it.
+///
+/// Light comes from straight above and never moves, so every key casts the same
+/// shadow: a tight dark line where it meets the shell and a wide soft one under
+/// it. Pressed, the key drops by a point and a half and both shadows close up
+/// under it, the way a real key's shadow does. Two earlier tries are why it is
+/// this plain (owner, 2026-10-07): shadows that followed the phone's tilt read
+/// as fake because they stepped between fixed positions, and Liquid Glass on a
+/// flat, still shell had nothing under it to bend and read as a white outline.
+enum KeyLight {
+    /// The line where the key meets the shell, which is all that marks its
+    /// edge.
+    static let contact = Color.black.opacity(0.14)
+    /// The soft shadow the key stands on.
+    static let ambient = Color.black.opacity(0.08)
+    static let ambientRadius: CGFloat = 10
+    static let ambientDrop: CGFloat = 5
+    /// How far a key goes down while held.
+    static let travel: CGFloat = 1.5
 
-    /// The press feedback of a key: the glass's own on iOS 26, the shared sink
-    /// and dim before it. Never both, or a key would answer twice.
-    @ViewBuilder
-    func keyPressed(_ isPressed: Bool) -> some View {
-        if #available(iOS 26.0, *) {
-            self
-        } else {
-            pressed(isPressed)
-        }
-    }
+    /// #FAF9F7 — the lower edge of a white key, turning away from the light.
+    static let panelLow = Color(red: 0.979, green: 0.976, blue: 0.970)
+    /// #FF6331 — the top of the orange key, where the light lands.
+    static let accentHigh = Color(red: 1.000, green: 0.388, blue: 0.192)
+    /// #F04711 — the lower edge of the orange key.
+    static let accentLow = Color(red: 0.941, green: 0.278, blue: 0.067)
 
-    /// Several glass keys drawn as one layer, which is how the system renders
-    /// them efficiently and lets neighbouring keys catch the same light. The
-    /// spacing is under the gap between the keys, so they never run together
-    /// at rest.
-    @ViewBuilder
-    func glassLayer(spacing: CGFloat = 4) -> some View {
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: spacing) { self }
-        } else {
-            self
-        }
+    /// The face of a key: a touch lighter at the top, where the light lands.
+    /// The only tint is the way forward, so its two shades are fixed here
+    /// rather than mixed (mixing colours needs iOS 18).
+    static func face(_ tint: Color?) -> LinearGradient {
+        let colours = tint == nil
+            ? [Palette.panel, Palette.panel, panelLow]
+            : [accentHigh, Palette.accent, accentLow]
+        return LinearGradient(colors: colours, startPoint: .top, endPoint: .bottom)
     }
 }
 
-/// A key drawn by its own view, whose body is `keyGlass`.
-struct GlassKey: ButtonStyle {
+extension EnvironmentValues {
+    /// Whether the key this view is the body of is held down. Set by the
+    /// key's button style, read by `keyCap`, so a key whose body is only part
+    /// of its label — the row along the bottom, with its name printed under
+    /// it — still goes down as one.
+    @Entry var keyIsDown = false
+}
+
+extension View {
+    /// The body of a key: its face and its shadow, raised off the shell and
+    /// pressed into it while held. No hairline: the shadow is the key's edge,
+    /// and a line drawn round it as well read as an outline again. A tint is
+    /// for the way forward only.
+    func keyCap(tint: Color? = nil, in shape: some InsettableShape) -> some View {
+        modifier(KeyCap(tint: tint, shape: shape))
+    }
+
+    /// The press of a key whose style draws its own body: down, and one light
+    /// tap under the finger as it lands.
+    func keyDown(_ isPressed: Bool) -> some View {
+        environment(\.keyIsDown, isPressed)
+            .sensoryFeedback(.impact(weight: .light), trigger: isPressed) { _, down in down }
+    }
+}
+
+private struct KeyCap<S: InsettableShape>: ViewModifier {
+    let tint: Color?
+    let shape: S
+
+    @Environment(\.keyIsDown) private var down
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                shape.fill(KeyLight.face(tint))
+                    .shadow(color: KeyLight.contact, radius: down ? 0.5 : 1, y: down ? 0.5 : 1)
+                    .shadow(
+                        color: KeyLight.ambient.opacity(down ? 0.5 : 1),
+                        radius: down ? 3 : KeyLight.ambientRadius,
+                        y: down ? 1 : KeyLight.ambientDrop
+                    )
+            }
+            .offset(y: down ? KeyLight.travel : 0)
+            .animation(Motion.snappy, value: down)
+    }
+}
+
+/// A key drawn by its own view, whose body is `keyCap`.
+struct RaisedKey: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .keyPressed(configuration.isPressed)
+            .keyDown(configuration.isPressed)
     }
 }
 
