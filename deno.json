@@ -5,13 +5,15 @@
   "tasks": {
     "check": "deno run -A scripts/check.ts",
     "test": "deno run -A scripts/test.ts",
-    "mcp": "deno run -A scripts/reader-run.ts efferent.mcp",
+    "mcp": "deno run -A scripts/reader-run.ts node mcp",
     "dist": "deno run -A scripts/dist.ts",
     "fmt": "deno run -A scripts/fmt.ts",
     "secrets": "deno run -A scripts/secrets.ts",
     "generate": "deno run -A scripts/generate.ts",
-    "efferent": "deno run -A scripts/reader-run.ts efferent",
+    "efferent": "deno run -A scripts/reader-run.ts node",
+    "phone": "deno run -A scripts/reader-run.ts python efferent",
     "interop": "deno run -A scripts/interop.ts",
+    "skill": "deno run -A scripts/skill.ts",
     "reader:setup": "deno run -A scripts/reader.ts",
     "test:reader": "deno run -A scripts/test-reader.ts",
     "icons": "deno run -A scripts/icons.ts",
@@ -20,13 +22,17 @@
   "fmt": {
     "include": [
       "scripts/",
+      "reader/efferent.mjs",
+      "reader/tests/node/",
       "deno.json"
     ],
     "lineWidth": 100
   },
   "lint": {
     "include": [
-      "scripts/"
+      "scripts/",
+      "reader/efferent.mjs",
+      "reader/tests/node/"
     ]
   }
 }

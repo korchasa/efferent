@@ -3,9 +3,9 @@
 ## Scope
 
 This document says what the app must do. It is written one subsystem at a time, as each is worked
-through; today it covers three of them — how an edit an agent asked for reaches the phone and how the
-person learns that it did, what the walkthrough must have asked before the first export leaves, and
-who may read the archive and how its history comes back.
+through; today it covers four of them — how an edit an agent asked for reaches the phone and how the
+person learns that it did, what the walkthrough must have asked before the first export leaves,
+who may read the archive and how its history comes back, and the client an agent reads it with.
 The rest of the app is described in `README.md` and governed by `AGENTS.md`. A subsystem missing
 from this document has not been written down yet; that is not a claim that it has no requirements.
 
@@ -197,6 +197,35 @@ phone. Readers sign every read anyway, so a phone registering its key asks nothi
 
 **READ-5 — An agent learns which items of an edit failed, in the phone's words.** The reader reads
 the outcome the way the service now writes it, and still reads one stored under the older word.
+
+## The reading client
+
+**READER-1 — One file reads and writes the archive on an agent's machine, and needs Node and
+nothing else.** `reader/efferent.mjs` uses Node's own modules only, runs on Node 22 or newer, and is
+at once a command line, the local MCP server (`node efferent.mjs mcp`) and the file an agent skill
+carries. It answers the same nine `phone_data_*` tools with the same names, schemas and answer
+shapes the Python server answered with, every correction under "Answering on behalf of a reader"
+included, and it agrees with the phone on the wire: it opens the days Swift packed, verifies the read
+Swift signed, and seals an edit the phone opens.
+
+*Why.* A skill is what makes the archive reachable from every session rather than the one the
+handoff was pasted into, and a skill can count on what the popular ones count on: Node. None of
+them assumes a Python of a given version, and the system `python3` on a Mac is 3.9, below the
+reader's floor.
+
+*Checked by* `deno task test:reader` (the Node suite, its RFC 9180 and read-key vectors, the
+contract against the tool list) and `deno task interop` (the phone against the client).
+
+**READER-2 — A profile the Python reader made is the Node client's profile too.** The reading key,
+the editor key, the mirror, the day files, the edit record and the kept metric record are read
+without a migration, and what the client writes keeps the directory at 0700 and every file at 0600,
+written through a rename so nothing is left half written.
+
+*Why.* A person who connected with the Python reader keeps their mirror and their key; switching
+the program must not mean handing the archive over again.
+
+*Checked by* `deno task test:reader` (a profile made by the Python `keygen`, and a day's fingerprint
+equal to the one Python computes for the same file).
 
 ## Notices
 

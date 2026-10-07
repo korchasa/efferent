@@ -1,0 +1,289 @@
+{
+  "tools": [
+    {
+      "name": "phone_data_overview",
+      "title": "What the archive holds",
+      "description": "Start here. Reports what this Health archive contains before anything is asked of it:\nthe range of days, how many there are, and for every metric its kind, unit, first and\nlast day, and how many days carry it.\n\nThe first day of a metric is the day the device that measures it arrived, so a question\nabout heart rate before that day is not a gap in the data — nothing was measuring.\nTakes no arguments.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "phone_data_daily",
+      "title": "Daily totals",
+      "description": "One row per day with the day's totals: steps, distance, flights, active and basal\nenergy, exercise and stand minutes, and — once something has written them — dietary\nenergy, protein, carbohydrates, fat and water. This is the table to answer 'how active\nwas I' and 'what did I eat'.\n\nReads the daily buckets only, so it can never double-count against the hourly ones.\nA null means the day carries no total for that metric, which is not the same as a zero.\nRefuses ranges over 400 days — use phone_data_statistics for anything longer.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "metrics": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "steps",
+                "distanceWalkingRunning",
+                "flightsClimbed",
+                "activeEnergy",
+                "basalEnergy",
+                "exerciseTime",
+                "standTime",
+                "dietaryEnergy",
+                "dietaryProtein",
+                "dietaryCarbohydrates",
+                "dietaryFat",
+                "dietaryWater"
+              ]
+            },
+            "description": "Which totals to include. Defaults to all of: steps, distanceWalkingRunning, flightsClimbed, activeEnergy, basalEnergy, exerciseTime, standTime, dietaryEnergy, dietaryProtein, dietaryCarbohydrates, dietaryFat, dietaryWater."
+          },
+          "since": {
+            "type": "string",
+            "description": "First day, YYYY-MM-DD, inclusive. Defaults to 90 days before today."
+          },
+          "until": {
+            "type": "string",
+            "description": "Last day, YYYY-MM-DD, inclusive. Defaults to today."
+          }
+        }
+      }
+    },
+    {
+      "name": "phone_data_statistics",
+      "title": "Distribution of a metric over time",
+      "description": "How one metric is distributed, grouped by day, week, month or year: count, min, p10,\nmedian, mean, p90, max and sum per group. This is the tool for trends and for any\nquestion spanning years — it never returns the underlying readings.\n\nFor a total, the numbers are over that metric's daily totals, one per day.\nFor a record (heart rate, HRV, respiratory rate, blood oxygen), they are over the\nindividual readings, of which there can be hundreds in a day.\nBlood oxygen arrives as a fraction: 0.97 means 97%.",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "metric"
+        ],
+        "properties": {
+          "metric": {
+            "type": "string",
+            "enum": [
+              "steps",
+              "distanceWalkingRunning",
+              "flightsClimbed",
+              "activeEnergy",
+              "basalEnergy",
+              "exerciseTime",
+              "standTime",
+              "dietaryEnergy",
+              "dietaryProtein",
+              "dietaryCarbohydrates",
+              "dietaryFat",
+              "dietaryWater",
+              "heartRate",
+              "restingHeartRate",
+              "heartRateVariability",
+              "respiratoryRate",
+              "oxygenSaturation",
+              "bodyMass"
+            ],
+            "description": "The metric to describe. Sleep and workouts have their own tools."
+          },
+          "since": {
+            "type": "string",
+            "description": "First day, YYYY-MM-DD, inclusive. Defaults to 90 days before today."
+          },
+          "until": {
+            "type": "string",
+            "description": "Last day, YYYY-MM-DD, inclusive. Defaults to today."
+          },
+          "group_by": {
+            "type": "string",
+            "enum": [
+              "day",
+              "week",
+              "month",
+              "year"
+            ],
+            "description": "How to group the days. Defaults to month."
+          }
+        }
+      }
+    },
+    {
+      "name": "phone_data_sleep",
+      "title": "Nights of sleep",
+      "description": "One row per night: hours asleep, hours in bed, the breakdown by stage, and when it\nstarted and ended.\n\nTwo things are decided here that a reader of the raw events would get wrong. Overlapping\nstretches are merged rather than added, because more than one source can describe the\nsame minutes and adding them invents hours of sleep. A night runs noon to noon and is\nnamed by the evening it began in, so a night is one row rather than two halves.\nA missing night means nothing was recorded — the watch was off, not that nobody slept.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "since": {
+            "type": "string",
+            "description": "First day, YYYY-MM-DD, inclusive. Defaults to 90 days before today."
+          },
+          "until": {
+            "type": "string",
+            "description": "Last day, YYYY-MM-DD, inclusive. Defaults to today."
+          }
+        }
+      }
+    },
+    {
+      "name": "phone_data_workouts",
+      "title": "Recorded workouts",
+      "description": "Every workout in a range — activity, when it started, how long it lasted — plus a count\nand total minutes per activity.\n\nThe workouts come as a table: `columns` names what each row holds, in order, and\n`sameOnEveryRow` holds the fields every workout agrees on, said once. The counts in\n`byActivity` are over every workout found, not only the rows shown.\n\nThe phone sends Apple's activity number and this translates it, so an activity comes\nback as 'walking' rather than as 52. A workout is what was deliberately recorded; it is\nnot the same as the day's movement, which lives in phone_data_daily.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "since": {
+            "type": "string",
+            "description": "First day, YYYY-MM-DD, inclusive. Defaults to 90 days before today."
+          },
+          "until": {
+            "type": "string",
+            "description": "Last day, YYYY-MM-DD, inclusive. Defaults to today."
+          },
+          "activity": {
+            "type": "string",
+            "description": "Keep only this activity, e.g. walking, cycling, swimming."
+          }
+        }
+      }
+    },
+    {
+      "name": "phone_data_samples",
+      "title": "Raw readings",
+      "description": "The individual readings for one metric. The escape hatch for questions the other tools\ndo not shape — the time of day something happened, what a single reading was, which\ndevice recorded it.\n\nAs a table: `columns` names what each row holds, in order, and `sameOnEveryRow` holds\nthe fields every reading agrees on, said once instead of on every row. A null in a\ncolumn means that reading carried nothing there, which is not the same as a zero.\n\nThe identifier is not carried. It was only ever derived from the metric and the instant\na reading began, and both are here. Two readings can begin in the same second — one\nheartbeat seen by two watches, two sleep stages starting together — and then they are\ntwo rows that may differ in nothing at all. That is the data, not a duplicate to remove.\n\nCapped, and deliberately so: a decade of heart rate is eight hundred thousand readings.\nFor anything about a trend or an average, phone_data_statistics is both cheaper and harder\nto misread.",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "metric"
+        ],
+        "properties": {
+          "metric": {
+            "type": "string",
+            "description": "Which metric's readings to return."
+          },
+          "since": {
+            "type": "string",
+            "description": "First day, YYYY-MM-DD, inclusive. Defaults to 90 days before today."
+          },
+          "until": {
+            "type": "string",
+            "description": "Last day, YYYY-MM-DD, inclusive. Defaults to today."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "How many readings at most. Defaults to 500, maximum 5000."
+          }
+        }
+      }
+    },
+    {
+      "name": "phone_data_write",
+      "title": "Write into Health",
+      "description": "Put entries into Apple Health through the phone: meals as dietary energy, protein,\ncarbohydrates, fat and water; sleep by stage; body mass. The edit is sealed to the\nphone's key and signed here, the service stores it unopened, and the phone applies it\nthe next time it is opened or wakes to send — minutes to hours, never at once.\nphone_data_edits says when it has, and the days it touched are re-uploaded so the\nother tools show the result.\n\nEach item is a `put` or a `delete`. The `id` is your handle for one entry: a second\n`put` under the same id replaces the entry, a `delete` removes it, so pick ids you can\nrebuild — `agent:meal:2026-09-07:lunch` — and reuse them for a correction. Only entries\nwritten this way can be replaced or removed; what the watch, the phone or another app\nrecorded is Health's and stays as it is.\n\n`start` and `end` are whole seconds since 1970 and both must be in the past — Health\nrefuses an entry that ends in the future. A quantity needs `value` and the metric's\nexact unit (dietaryEnergy in kcal, dietaryProtein in g, dietaryCarbohydrates in g, dietaryFat in g, dietaryWater in mL, bodyMass in kg); sleep needs `stage` and no value.\nA meal is a short interval; a night of sleep is one item per stage, or one\nasleepUnspecified stretch when the stages are not known. Anything wrong with an item\nis refused here, before anything is sealed, with the field named.",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "description": "The entries to write, up to 500 in one edit.",
+            "items": {
+              "type": "object",
+              "required": [
+                "op",
+                "id"
+              ],
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "put",
+                    "delete"
+                  ],
+                  "description": "put adds or replaces the entry under this id; delete removes it."
+                },
+                "id": {
+                  "type": "string",
+                  "description": "Your handle for the entry: 1 to 120 characters of letters, digits, . _ : -"
+                },
+                "metric": {
+                  "type": "string",
+                  "enum": [
+                    "sleep",
+                    "dietaryEnergy",
+                    "dietaryProtein",
+                    "dietaryCarbohydrates",
+                    "dietaryFat",
+                    "dietaryWater",
+                    "bodyMass"
+                  ],
+                  "description": "What the entry is. put only."
+                },
+                "start": {
+                  "type": "integer",
+                  "description": "Whole seconds since 1970. put only."
+                },
+                "end": {
+                  "type": "integer",
+                  "description": "Whole seconds since 1970, not before start, in the past. put only."
+                },
+                "value": {
+                  "type": "number",
+                  "description": "For a quantity: the amount, zero or more, in the metric's unit."
+                },
+                "unit": {
+                  "type": "string",
+                  "description": "For a quantity: the metric's own unit, exactly."
+                },
+                "stage": {
+                  "type": "string",
+                  "enum": [
+                    "inBed",
+                    "awake",
+                    "asleepUnspecified",
+                    "asleepCore",
+                    "asleepDeep",
+                    "asleepREM"
+                  ],
+                  "description": "For sleep: which stage this stretch was."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "phone_data_edits",
+      "title": "What became of the edits",
+      "description": "The edits sent to the phone and what it did with each: `pending` until the phone has\nlooked, then `applied`; `failed` if the phone could not do it, and `partial` when some\nof it landed. `awaiting` and `declined` come from a phone that used to ask before\nchanging anything; no phone does now, and those only appear on old edits.\nFor anything refused, the\nphone's word for why is listed per item — badRange for an end in the future, badUnit\nfor a unit the metric does not take, unauthorized when Health access to that type was\ndeclined on the phone, notFound for a delete of an id never written, healthRefused when\nHealth itself said no, replayed when the phone had already answered that very edit and\nwrote nothing the second time. Edits this machine submitted also show the ids they carried.\n\nEvery item lands, including one that changes or removes a record already in Health —\nwhich can only ever be a record this app itself wrote for you. The phone keeps what\neach change pushed out and shows its owner what you did, so anything unwanted is put\nback by them, not prevented beforehand. An outcome is told once and never revised.\n\nAn edit stays pending until the phone is opened or wakes to send, which can be hours.\nNewest last; follow `next` for more.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "all"
+            ],
+            "description": "pending lists only what the phone has not applied yet. Defaults to all."
+          },
+          "after": {
+            "type": "string",
+            "description": "Continue after this edit name, as the previous answer's `next` gave it."
+          }
+        }
+      }
+    },
+    {
+      "name": "phone_data_sync",
+      "title": "Copy the archive down",
+      "description": "Bring the local copy of the archive up to date. The other tools refresh what they need\non their own, so this is only worth calling to make the whole history readable at once —\nphone_data_overview says when that is not already true.\n\nSafe to interrupt and safe to repeat: a day is either the version the archive holds or\nan older one, and this replaces the older ones.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  ],
+  "instructions": "This is one person's Apple Health history, day by day, from an end-to-end encrypted archive. Call phone_data_overview first: it says what the data covers, when each metric starts, and the few ways this data misleads a reader who treats it as a plain table. phone_data_write puts meals, sleep and weight into Health through the phone."
+}

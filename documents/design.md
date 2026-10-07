@@ -17,7 +17,8 @@ after the agent wrote it. See "What a wake is allowed" below.
 
 How the app is arranged to meet [`requirements.md`](requirements.md). Written one subsystem at a
 time; today it covers the delivery of an agent's edits, the notices about them, the one question
-the walkthrough puts to Health, how a read of the archive is proved, and how history comes back.
+the walkthrough puts to Health, how a read of the archive is proved, how history comes back, and
+the client an agent reads it with.
 Everything above this — what the app collects and the wire format — is `README.md`, and the
 boundary with the service is [`connection.md`](connection.md).
 
@@ -394,6 +395,52 @@ and `--to` in one process.
 first and last day answer to the bucket id, because `archive_status` is what an agent calls before
 it has run anything locally. A legacy connection stays open by its id for good, and an archive is
 open until its phone has run a build that registers the key.
+
+The Node client does the same grouping (`spans` and `Archive.several` in `reader/efferent.mjs`):
+the same 7-day gap, the same 92-day ceiling, 4 ranges in the air, and the days handed on in the
+order they were asked for whichever range answers first.
+
+## The reading client
+
+Meets READER-1 and READER-2.
+
+**One file in six sections, each depending only on the ones above it.** `reader/efferent.mjs` is the
+wire (HPKE by hand over `node:crypto`, the legacy AES-GCM envelope, the handoff, the read key, the
+frame, both day layouts, edits), the profile on disk, the service (`Archive`), the analysis, the
+`Reader` with its freshness rules and the nine tools, and the command line. It imports nothing but
+`node:` modules, so an agent can save it as one file and run it, and a skill carries it beside its
+`SKILL.md`. The functions are exported, which is how the tests reach them; run as a program, the
+file dispatches on its first argument, and `mcp` turns it into the stdio server.
+
+**The analysis is a port, and the arithmetic is Python's on purpose.** Every answer the Python server
+gave was a contract somebody may already lean on, so the port keeps its numbers as well as its
+shapes. Two places would drift without care. Python's `round()` sends an exact tie to the even
+digit and JavaScript's `toFixed` sends it away from zero, so `roundTo` uses `toFixed` and corrects
+the tie it detects through `toFixed(20)`; it keeps a negative zero, as Python does. Python 3.12
+adds floats with compensation, so `fsum` does Neumaier summation. A test feeds 1 600 values through
+both languages and compares, and a run over a copy of a real decade-long mirror answered 63 tool
+calls out of 63 identically to the Python server, key order included.
+
+**The profile is the Python one.** Keys are bare base64 PKCS8 with the raw public half beside them,
+the day files are NDJSON, and a day's fingerprint is `<size>:<mtime in ms>`, which is what Python
+computes from `os.stat` for the same file. A profile either side made is the other side's profile.
+
+**The tests run the client against a service in the same process.** `reader/tests/node/` holds a
+fake archive built on `node:http`, a port of the Python one with its faults (a page that fails, a
+day that fails, a day the listing names and the range leaves out), and the phone-side packer the
+days are made with. A test that runs the client as a program starts it asynchronously: a blocking
+spawn would stop the fake archive from answering. `tools.json` is the tool list the Python server
+published, and the server test holds the client to it. `reference.test.mjs` has the client open and
+verify an edit the Python reference sealed, so that the second sealer is held to the phone through
+the client the phone already agrees with.
+
+**The phone is held to the client by `deno task interop`.** The client makes the edit fixture the
+phone opens, then checks what Swift printed — the frame, both days, the ids, the date binding and the
+read Swift signed — and the Python reference checks the same output after it.
+
+**The skill is assembled, not committed twice.** `skill/efferent/SKILL.md` is the only file in the
+skill folder in this repository; `deno task skill` copies it and the client into
+`build/skill/efferent/` and runs the copy's self-test, so the client exists in one place.
 
 ## An edit lands once
 

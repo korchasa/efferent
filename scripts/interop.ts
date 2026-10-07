@@ -9,28 +9,31 @@
  * the reader verifies a read the phone signed. Drift between the two shows up
  * here rather than on a phone.
  *
- * This half runs the Swift test. Everything that touches a key is in
- * `reader/efferent/interop.py`, which is also where the reading side lives: a
- * check written against a third implementation would prove only that the third
- * one is consistent.
+ * This half runs the Swift test. Everything that touches a key is in the two
+ * readers' own checks: `reader/tests/node/interop.mjs` for the client agents
+ * run, and `reader/efferent/interop.py` for the Python reference. The edit the
+ * phone opens is sealed by the Node client, because that is what an agent
+ * sends; the Python reference's own sealing is held to the Node client's by the
+ * Node tests. A check written against a third implementation would prove only
+ * that the third one is consistent.
  */
 
 import { fail, run, section } from "./lib.ts";
 import { SCHEME, systemToolPath, WORKSPACE } from "./config.ts";
 import { generate } from "./generate.ts";
-import { PYTHON, requireReader } from "./reader.ts";
+import { NODE, PYTHON, requireNode, requireReader } from "./reader.ts";
 
 const STATE = "reader/.interop.json";
 
+await requireNode();
 await requireReader();
 await generate();
 
 section("Sealing and signing an edit for the phone to open");
-// Writing goes the other way round from a day, so the reader seals and the
+// Writing goes the other way round from a day, so the client seals and the
 // phone opens. The keys are made for this run and never leave the process.
-const { stdout: fixture } = await run(PYTHON, {
-  args: ["-m", "efferent.interop", "fixture", STATE],
-  env: { PYTHONPATH: "reader" },
+const { stdout: fixture } = await run(NODE, {
+  args: ["reader/tests/node/interop.mjs", "fixture", STATE],
   capture: true,
 });
 
@@ -81,6 +84,18 @@ await Deno.writeTextFile(
   STATE,
   JSON.stringify({ ...JSON.parse(await Deno.readTextFile(STATE)), emitted }),
 );
+// The fixed reading key the Swift test seals its days to lives in one file,
+// the one the secret scanner excuses for it; the Node check is handed it.
+const { stdout: fixedKey } = await run(PYTHON, {
+  args: ["-c", "from efferent.interop import READING_PRIVATE; print(READING_PRIVATE)"],
+  env: { PYTHONPATH: "reader" },
+  capture: true,
+});
+await run(NODE, {
+  args: ["reader/tests/node/interop.mjs", "check", STATE],
+  env: { EFFERENT_INTEROP_READING_PRIVATE: fixedKey.trim() },
+});
+// Last, because it removes the state file once both sides have agreed.
 await run(PYTHON, {
   args: ["-m", "efferent.interop", "check", STATE, ...(postTo ? [postTo] : [])],
   env: { PYTHONPATH: "reader" },

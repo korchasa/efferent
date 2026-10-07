@@ -1,26 +1,39 @@
 /**
- * `deno task mcp` and `deno task efferent` — the Python reader, run as a task.
+ * `deno task mcp`, `deno task efferent` and `deno task phone` — the reading
+ * side, run as a task.
  *
- * Every command in this repository is a `deno task`, and the reading side is
- * Python. This is the one line between the two: it finds the interpreter the
- * way every other task does and hands over stdin, stdout and the exit code
- * unchanged, so an MCP client speaking JSON-RPC down a pipe notices nothing.
+ * Every command in this repository is a `deno task`. This is the one line
+ * between a task and the program behind it: `node` runs the reading client
+ * (`reader/efferent.mjs`), `python` runs a module of the Python reference — the
+ * stand-in phone that `send` and `keygen` belong to. Stdin, stdout and the exit
+ * code pass through unchanged, so an MCP client speaking JSON-RPC down a pipe
+ * notices nothing.
  */
 
 import { fail } from "./lib.ts";
-import { PYTHON, requireReader } from "./reader.ts";
+import { CLIENT, NODE, PYTHON, requireNode, requireReader } from "./reader.ts";
 
-const [module, ...rest] = Deno.args;
-if (!module) fail("usage: deno run -A scripts/reader-run.ts <python module> [arguments]");
+const [runtime, ...rest] = Deno.args;
+let command: Deno.Command;
+if (runtime === "node") {
+  await requireNode();
+  command = new Deno.Command(NODE, {
+    args: [CLIENT, ...rest],
+    stdin: "inherit",
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+} else if (runtime === "python" && rest.length) {
+  await requireReader();
+  command = new Deno.Command(PYTHON, {
+    args: ["-m", ...rest],
+    env: { PYTHONPATH: "reader" },
+    stdin: "inherit",
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+} else {
+  fail("usage: deno run -A scripts/reader-run.ts node [arguments] | python <module> [arguments]");
+}
 
-await requireReader();
-
-const child = new Deno.Command(PYTHON, {
-  args: ["-m", module, ...rest],
-  env: { PYTHONPATH: "reader" },
-  stdin: "inherit",
-  stdout: "inherit",
-  stderr: "inherit",
-}).spawn();
-
-Deno.exit((await child.status).code);
+Deno.exit((await command.spawn().status).code);

@@ -10,7 +10,7 @@ import { checkReader } from "./test-reader.ts";
 await scanForSecrets();
 await checkTooling();
 
-section("Checking and testing the Python reader");
+section("Checking and testing the reading side");
 await checkReader();
 await generate();
 

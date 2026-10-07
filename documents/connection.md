@@ -209,6 +209,13 @@ The phone claims an empty archive with a signed `PUT /b/<bucket-id>` before any 
   to the reading key, signs them with the editor key and posts ciphertext; `--edits` says what the
   phone did with each. Neither key leaves the machine.
 
+An agent with the Efferent skill installed does the same with the Node client the skill carries,
+and keeps the profile in a private directory outside any project, so every later session reads
+from it without the handoff being pasted again: `connect --handoff <file>` once, then `overview`,
+`daily`, `sleep` and the other commands, each answering in the shape of the matching MCP tool, and
+`write --items <file>` and `edits` to write. `node efferent.mjs mcp` serves the same tools to a
+client that registers local MCP servers.
+
 An agent that cannot execute code locally cannot read an Efferent archive under this security model.
 That is a capability boundary, not a reason to give the key to Cloudflare.
 
@@ -232,14 +239,21 @@ implements the suite itself on top of the PyCA `cryptography` library, its only 
 used PyHPKE until 2026-09-19: a package of one author with no independent audit, which an agent
 handed the guide was being told to install and trust with the reading key.
 
-There are two implementations and they are tested against each other by `deno task interop`, which
-has Swift seal and sign a real request for the Python reader to open and verify. A TypeScript reader
-was a third until 2026-09-19; it did the same job as the guide's script on top of `hpke-js`, and a
-protocol change had to be made in three places instead of two, so it is gone.
+`reader/efferent.mjs` implements the same suite over Node's own `node:crypto` and nothing else:
+X25519, ChaCha20-Poly1305, Ed25519 and HMAC are all built in, and its `self-test` runs the same
+A.2.1 vectors. It is the local reading client — the command line, the local MCP server and the file
+an agent skill carries — and the Python package in `reader/` stays as the reference the phone is
+held to. `deno task interop` holds all three together: Swift seals and signs a real request, and
+both the Node client and the Python reader open and verify it; the phone opens and verifies an edit
+the Node client sealed, and the Node client opens one the Python reference sealed. A TypeScript
+reader was a separate implementation until 2026-09-19, on top of `hpke-js`, and drifted, so it is
+gone; the Node client is not built on the service's TypeScript either, because an agent has to be
+able to save it as one file.
 
 The guide's script opens version 2 alone and fails clearly on a legacy day rather than silently
-attempting another construction. The installed reader in `reader/` dispatches on the first byte and
-opens both, because the archive it reads is replaced a day at a time. Every new seal is version 2.
+attempting another construction. The Node client and the installed Python reader dispatch on the
+first byte and open both, because the archive they read is replaced a day at a time. Every new seal
+is version 2.
 
 ## Migration state
 

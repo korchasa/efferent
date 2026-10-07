@@ -286,11 +286,14 @@ bucket, fetches only ciphertext, signs every read with the read key it makes fro
 and emits local NDJSON. The agent then analyses those records with local code and never sends
 plaintext or the reading key to a remote tool.
 
-That script is not the only copy of itself. `reader/` holds the same reading side as an installable
-Python package — the command line tool, the MCP server, and the analysis behind both — and the
-`setup_guide` script is the part of it an agent needs to fetch and open a day. There is one reading
-implementation and it is this one; a second in another language would be a second place for a
-protocol change to be half-made.
+The reading side an agent keeps is `reader/efferent.mjs`: one file that needs Node 22 and nothing
+else, and is at once the command line, the local MCP server (`node efferent.mjs mcp`) and the
+program an agent skill carries. A skill is what makes the archive reachable from every session
+rather than the one the handoff was pasted into, and the popular skills count on Node, not on a
+Python of a given version. `skill/efferent/SKILL.md` is that skill; `deno task skill` puts it and
+the client together in `build/skill/efferent/`. The Python package in `reader/` stays as the
+reference the phone is checked against, and the `setup_guide` script is still its part that fetches
+and opens a day.
 
 ## Letting an agent write
 
@@ -369,15 +372,15 @@ system anything, so a phone that walked past it is asked once more — the first
 writes something.
 
 ```bash
-deno task efferent edits --all               # what became of each, by name
+deno task efferent edits                     # every edit and what became of it, by name
+deno task efferent write --items meal.json   # put entries into Health through the phone
 ```
 
 Writing is the MCP server's: `phone_data_write` takes the items and `phone_data_edits` says what
-became of each, and the overview names what may be written and in which unit. The Python reference
-returned by `setup_guide` writes too — `--write <items.json>` and `--edits` — so the public
-connection path needs nothing from this repository in either direction. The reader on the command
-line does not write at all: a third way to seal the same edit is a third place for the rules about
-ids and units to drift.
+became of each, and the overview names what may be written and in which unit. The command line
+writes through the same tool, and the Python reference returned by `setup_guide` writes too —
+`--write <items.json>` and `--edits` — so the public connection path needs nothing from this
+repository in either direction.
 
 ## Who can read it
 
@@ -419,9 +422,10 @@ A day on the wire is the raw-deflate-compressed columnar object above, inside an
 base-mode HPKE envelope —
 `[version 2][32-byte encapsulated key][ciphertext and tag]` — with the bucket name and the date bound
 into the authenticated data. The suite is DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 and
-ChaCha20-Poly1305. CryptoKit seals on the phone and the Python reader opens, implementing HPKE
-itself so that PyCA `cryptography` is its only dependency — a reader an agent is told to install
-must name nothing nobody has audited. It retains the custom X25519/HKDF/AES-GCM version 1 decoder
+ChaCha20-Poly1305. CryptoKit seals on the phone, and the Node client and the Python reader open,
+each implementing HPKE itself — the Node client over Node's own modules, the Python reader with
+PyCA `cryptography` as its only dependency — because a reader an agent is told to install must
+name nothing nobody has audited. Both retain the custom X25519/HKDF/AES-GCM version 1 decoder
 while stored days are replaced; new writes never use it.
 
 Days travel a month at a time, because the request is what costs rather than what is in it: a day is
@@ -441,9 +445,10 @@ bound to the bucket whose writes its fingerprints describe: activating another p
 invalidates those claims and queues every known day again, while a legacy destination is adopted
 without a reset.
 
-`src/Core` describes these bytes in Swift and the Python reader describes them again, so
-`deno task interop` exists to prove the two still agree: a Swift test packs, seals and signs a real
-request of two days, and the reader unpacks it, opens each day and checks the signature. Two days
+`src/Core` describes these bytes in Swift and the Node client and the Python reader describe them
+again, so `deno task interop` exists to prove the three still agree: a Swift test packs, seals and
+signs a real request of two days, and both readers unpack it, open each day and check the
+signature. Two days
 rather than one, because a batch of one would never cross the boundary where a framing disagreement
 would live. The read key is checked the same way: both sides make it from one reading key, and the
 reader verifies a read the phone signed. With `--post <url>` it also puts that request through a running service and reads both
@@ -475,8 +480,8 @@ purpose.
 deno task check
 ```
 
-- `check` — the secret scan, lint and types on the scripts, the Python reader's own format, lint
-  and tests, then a simulator build.
+- `check` — the secret scan, lint and types on the scripts, the reading side's format, lint and
+  tests (the Node client and the Python reference), then a simulator build.
 - `test` — unit tests on any available iPhone simulator.
 - `dist` — unsigned App Store archive at `build/Efferent.xcarchive`.
 - `fmt` — format task scripts, and Swift if swiftformat is installed.
@@ -486,19 +491,25 @@ deno task check
 - `icons` — re-render the app icons from `documents/icon.svg`.
 - `screenshots <directory>` — the six store screenshots at 1290 × 2796, drawn offscreen by the app itself
   (`--snapshot <directory>`) from made-up figures and a key invented on the spot. No phone, no Health, no network.
-- `interop` — check that Swift and Python agree on request bytes, HPKE, the day's own layout, the
-  phone handoff key and the read key, and that the phone opens and verifies an edit the reader
+- `interop` — check that Swift, the Node client and the Python reference agree on request bytes, HPKE, the day's own layout, the
+  phone handoff key and the read key, and that the phone opens and verifies an edit the Node client
   sealed and signed.
   It runs the RFC 9180 self-test first, on the exact source `setup_guide` returns.
 - `reader:setup` — make `reader/.venv` from Python 3.13 and install the one run-time dependency and
-  the formatter. Every task that runs the reader needs it; `EFFERENT_PYTHON` points at another
-  interpreter instead.
-- `test:reader` — the Python reader's own format check, lint and tests, without the Swift half.
-- `efferent` — the local reading side: `connect --handoff <file>`, `ask`, `sync`, `status`,
-  `query` and `edits`, plus `keygen`, `send` and `read` for protocol development. It does not
-  write; that is `phone_data_write` on the MCP server. `connect --handoff -` reads the handoff
-  from standard input without putting the key in a process argument.
+  the formatter. The Python reference and the checks that use it need it; `EFFERENT_PYTHON` points
+  at another interpreter instead.
+- `test:reader` — the reading side's format check, lint and tests, without the Swift half: the Node
+  client's own self-test and suite on Node 22 or newer (`EFFERENT_NODE` points at another `node`),
+  then the Python reference's.
+- `efferent` — the Node client: `connect --handoff <file>`, the tool commands `overview`, `daily`,
+  `statistics`, `sleep`, `workouts`, `samples`, `write` and `edits`, each answering in the shape of
+  the matching MCP tool, `tools` and `call`, and `sync`, `status`, `query`, `ask` and `read` over
+  raw events. `connect --handoff -` reads the handoff from standard input without putting the key
+  in a process argument. An option the command does not read is refused.
+- `phone` — the Python reference's command line: `keygen` and `send`, which stand in for a phone
+  during protocol development.
 - `mcp` — the same archive as an MCP server on stdio, for an agent to read and write.
+- `skill` — assemble the agent skill in `build/skill/efferent/` and run its client's self-test.
 
 `EFFERENT_HOME` is not optional in practice. Unset, the reading side falls back to `.efferent`
 relative to the working directory, so a stale profile left in a checkout answers as if it were the
@@ -508,7 +519,7 @@ directory on every run, and keep retired profiles under a name the fallback cann
 Trying the phone-first path without a phone needs a development copy of the service running
 somewhere you can reach. Create an archive in the app, share its four-field handoff into a private file, then set a fresh
 `EFFERENT_HOME` and run `deno task efferent connect --handoff <file>`. Delete the temporary file
-after import. `send` still stands in for a phone during protocol development and writes as many days
+after import. `deno task phone send` still stands in for a phone during protocol development and writes as many days
 in one request as are named.
 
 One thing to watch when writing into a service that keeps its data: the first writer owns a bucket
@@ -532,12 +543,17 @@ certificate, and the archive path above is the whole of the agreement with whate
 - `documents/requirements.md` — what the app must do, subsystem by subsystem, with an
   identifier per requirement.
 - `documents/design.md` — how it is arranged to meet them.
+- `reader/efferent.mjs` — the reading client: the wire, the profile, the service, the analysis, the
+  nine tools, the local MCP server and the command line, in one file on Node's own modules.
+- `reader/tests/node/` — its tests, the fake archive they run against, and its half of
+  `deno task interop`.
+- `skill/efferent/SKILL.md` — the agent skill that carries the client.
 - `reader/efferent_hpke.py` — the source `setup_guide` hands an agent: HPKE, the day layouts and
   enough of the archive to fetch and open one. Every other reading module builds on it.
 - `reader/efferent/archive.py` — where days come from and where edits go: the keys, the service, the
   mirror.
 - `reader/efferent/analysis.py` — days turned into answers, and every correction that turning needs.
-- `reader/efferent/cli.py` — the reading side as a command line tool.
-- `reader/efferent/mcp.py` — the reading side as an MCP server.
+- `reader/efferent/cli.py` — the Python reference as a command line tool.
+- `reader/efferent/mcp.py` — the Python reference as an MCP server.
 - `reader/efferent/interop.py` — the reading half of `deno task interop`, and the fixture the Swift
   half opens.
