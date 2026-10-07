@@ -4,7 +4,9 @@ import SwiftUI
 ///
 /// The app is dressed as an instrument: an off-white shell, white panels, hard
 /// 3-point corners, and one orange that only the scale and the way forward may
-/// use. The palette is committed rather than adaptive, and it has one failure
+/// use. On iOS 26 and later the keys are Liquid Glass (`keyGlass`), the
+/// system's own layer for controls over content, which is where all of the
+/// app's depth comes from. The palette is committed rather than adaptive, and it has one failure
 /// mode worth naming — in dark mode the system turns its own text white and
 /// leaves it on a light background, which is a blank screen with invisible
 /// words on it. That is why every colour here is literal, and why the root view
@@ -83,6 +85,10 @@ struct Dial: View {
     /// Waiting on something the scale cannot measure yet: the lit arc walks
     /// round the dial instead of standing at a figure it does not have.
     var waiting = false
+    /// Whether the dial prints its own face. The everyday dial leaves it to
+    /// the key laid over it (`DialKey`); the walkthrough's dial, which is not
+    /// a key, prints it here.
+    var drawsFace = true
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -123,13 +129,13 @@ struct Dial: View {
                     .offset(y: -(side * 0.404))
                     .rotationEffect(.degrees(Double(index) * 30))
             }
-            Circle()
-                .fill(Palette.panel)
-                .overlay(Circle().strokeBorder(Palette.hairline, lineWidth: 1))
-                .frame(width: side * 0.723)
-            Circle()
-                .strokeBorder(Palette.tick, style: StrokeStyle(lineWidth: 1, dash: [1, 5]))
-                .frame(width: side * 0.662)
+            if drawsFace {
+                Circle()
+                    .fill(Palette.panel)
+                    .overlay(Circle().strokeBorder(Palette.hairline, lineWidth: 1))
+                    .frame(width: side * 0.723)
+                FaceRing(side: side)
+            }
         }
         .frame(width: side, height: side)
         .animation(Motion.smoothLong, value: progress)
@@ -182,6 +188,35 @@ struct Dial: View {
         case .resting: return Palette.legend
         case .stopped: return Palette.alarm
         }
+    }
+}
+
+/// The dotted ring printed on the dial's face.
+private struct FaceRing: View {
+    let side: CGFloat
+
+    var body: some View {
+        Circle()
+            .strokeBorder(Palette.tick, style: StrokeStyle(lineWidth: 1, dash: [1, 5]))
+            .frame(width: side * 0.662, height: side * 0.662)
+    }
+}
+
+/// The dial's face as the key it is on the everyday screen: start and stop.
+///
+/// The biggest control on the shell, so on iOS 26 it is a disc of Liquid Glass
+/// over the scale, answering the finger the way every glass control does.
+/// Before that it is the white disc with a hairline the dial used to print,
+/// sunk a little under the finger.
+struct DialKey: ButtonStyle {
+    let side: CGFloat
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .frame(width: side * 0.723, height: side * 0.723)
+            .background { FaceRing(side: side) }
+            .keyGlass(in: Circle())
+            .keyPressed(configuration.isPressed)
     }
 }
 
@@ -241,8 +276,8 @@ struct ProminentButton: ButtonStyle {
             .kerning(2)
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity, minHeight: 54)
-            .background(Palette.accent, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
-            .pressed(configuration.isPressed)
+            .keyGlass(tint: Palette.accent, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
+            .keyPressed(configuration.isPressed)
     }
 }
 
@@ -260,8 +295,8 @@ struct ConnectButton: ButtonStyle {
             .kerning(2)
             .foregroundStyle(Color.white)
             .frame(maxWidth: .infinity, minHeight: 54)
-            .background(Palette.accent, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
-            .pressed(configuration.isPressed)
+            .keyGlass(tint: Palette.accent, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
+            .keyPressed(configuration.isPressed)
     }
 }
 
@@ -319,14 +354,10 @@ struct WideKeyButton: View {
             }
             .padding(.horizontal, 14)
             .frame(maxWidth: .infinity, minHeight: 52)
-            .background(Palette.panel, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .strokeBorder(Palette.hairline, lineWidth: 1)
-            )
+            .keyGlass(in: RoundedRectangle(cornerRadius: 3, style: .continuous))
             .contentShape(Rectangle())
         }
-        .buttonStyle(PressableKey())
+        .buttonStyle(GlassKey())
         .accessibilityLabel(label)
     }
 }
@@ -349,15 +380,11 @@ struct KeyButton: View {
                     .font(.system(size: 16, weight: .regular))
                     .foregroundStyle(Palette.ink)
                     .frame(maxWidth: .infinity, minHeight: 52)
-                    .background(Palette.panel, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 3, style: .continuous)
-                            .strokeBorder(Palette.hairline, lineWidth: 1)
-                    )
+                    .keyGlass(in: RoundedRectangle(cornerRadius: 3, style: .continuous))
                 Legend(label, size: 8)
             }
         }
-        .buttonStyle(PressableKey())
+        .buttonStyle(GlassKey())
         .accessibilityLabel(label)
     }
 }
@@ -410,6 +437,68 @@ struct DangerButton: ButtonStyle {
             .foregroundStyle(Palette.alarm)
             .frame(maxWidth: .infinity, minHeight: 54)
             .pressed(configuration.isPressed, dimmed: 0.6)
+    }
+}
+
+// MARK: - Liquid Glass
+
+extension View {
+    /// The body of a key.
+    ///
+    /// On iOS 26 and later it is Liquid Glass, interactive: the system's
+    /// material for the functional layer that floats over content. It bends
+    /// and blurs what is under it, catches the light along its edge and
+    /// answers a finger by itself, so nothing here draws a shadow, a highlight
+    /// or a press of its own — a hand-drawn version of the same thing was tried
+    /// and read as fake, its shadow stepping between fixed positions
+    /// (owner, 2026-10-07). A tint is for the way forward only, as the orange
+    /// fill was. Apple keeps glass off the content layer, so panels, rows and
+    /// the walkthrough's dial stay printed on the shell.
+    ///
+    /// Before iOS 26 the keys keep the look they had: a white panel with a
+    /// hairline, or the orange fill.
+    @ViewBuilder
+    func keyGlass(tint: Color? = nil, in shape: some InsettableShape) -> some View {
+        if #available(iOS 26.0, *) {
+            glassEffect(tint.map { Glass.regular.tint($0).interactive() } ?? .regular.interactive(), in: shape)
+        } else if let tint {
+            background(tint, in: shape)
+        } else {
+            background(Palette.panel, in: shape)
+                .overlay(shape.strokeBorder(Palette.hairline, lineWidth: 1))
+        }
+    }
+
+    /// The press feedback of a key: the glass's own on iOS 26, the shared sink
+    /// and dim before it. Never both, or a key would answer twice.
+    @ViewBuilder
+    func keyPressed(_ isPressed: Bool) -> some View {
+        if #available(iOS 26.0, *) {
+            self
+        } else {
+            pressed(isPressed)
+        }
+    }
+
+    /// Several glass keys drawn as one layer, which is how the system renders
+    /// them efficiently and lets neighbouring keys catch the same light. The
+    /// spacing is under the gap between the keys, so they never run together
+    /// at rest.
+    @ViewBuilder
+    func glassLayer(spacing: CGFloat = 4) -> some View {
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer(spacing: spacing) { self }
+        } else {
+            self
+        }
+    }
+}
+
+/// A key drawn by its own view, whose body is `keyGlass`.
+struct GlassKey: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .keyPressed(configuration.isPressed)
     }
 }
 

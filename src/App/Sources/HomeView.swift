@@ -212,6 +212,7 @@ struct HomeView: View {
             }
             .padding(.top, 14)
         }
+        .glassLayer()
     }
 
     // MARK: - What the agent changed
@@ -352,13 +353,19 @@ struct HomeView: View {
         ZStack {
             // Reading Health again has no figure yet, so the arc walks round
             // until the count comes back.
-            Dial(progress: state.progress, mood: state.mood, side: 264, waiting: state.rereading)
+            Dial(
+                progress: state.progress,
+                mood: state.mood,
+                side: 264,
+                waiting: state.rereading,
+                drawsFace: false
+            )
             Button {
                 services.setPaused(!services.paused)
             } label: {
                 face
             }
-            .buttonStyle(PressableKey())
+            .buttonStyle(DialKey(side: 264))
             // Starting and stopping is the one thing a person does here daily,
             // and a light tap under the thumb says it took.
             .sensoryFeedback(.impact(weight: .light), trigger: services.paused)
